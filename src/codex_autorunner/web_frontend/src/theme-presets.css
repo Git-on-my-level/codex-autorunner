@@ -22,6 +22,7 @@
   --color-accent-hover: #1f74b5;
   --color-accent-soft: rgb(38 139 210 / 0.14);
   --color-accent-ring: rgb(38 139 210 / 0.28);
+  --color-on-accent: #ffffff;
   --color-success: #859900;
   --color-success-soft: rgb(133 153 0 / 0.14);
   --color-warning: #b58900;
@@ -31,6 +32,7 @@
   --color-idle: #93a1a1;
   --shadow-1: 0 1px 2px rgb(88 110 117 / 0.07), 0 1px 1px rgb(88 110 117 / 0.04);
   --shadow-2: 0 12px 32px -8px rgb(88 110 117 / 0.14), 0 4px 12px -4px rgb(88 110 117 / 0.08);
+  --shadow-card-hover: 0 8px 24px -16px rgb(88 110 117 / 0.2), 0 2px 6px -3px rgb(88 110 117 / 0.08);
   --shadow-focus: 0 0 0 3px var(--color-accent-ring);
   --color-panel-tint: #f5edd6;
   --color-scrim: rgb(0 43 54 / 0.28);
@@ -59,6 +61,7 @@
   --color-accent-hover: #4a9ade;
   --color-accent-soft: rgb(38 139 210 / 0.18);
   --color-accent-ring: rgb(38 139 210 / 0.32);
+  --color-on-accent: #ffffff;
   --color-success: #859900;
   --color-success-soft: rgb(133 153 0 / 0.16);
   --color-warning: #b58900;
@@ -68,6 +71,7 @@
   --color-idle: #7d959c;
   --shadow-1: 0 1px 2px rgb(0 0 0 / 0.35), 0 1px 1px rgb(0 0 0 / 0.22);
   --shadow-2: 0 16px 40px -12px rgb(0 0 0 / 0.5), 0 8px 16px -8px rgb(0 0 0 / 0.38);
+  --shadow-card-hover: 0 8px 24px -16px rgb(0 0 0 / 0.5), 0 2px 6px -3px rgb(0 0 0 / 0.32);
   --shadow-focus: 0 0 0 3px var(--color-accent-ring);
   --color-panel-tint: #063542;
   --color-scrim: rgb(0 0 0 / 0.5);
@@ -96,6 +100,7 @@
   --color-accent-hover: #cba5ff;
   --color-accent-soft: rgb(189 147 249 / 0.16);
   --color-accent-ring: rgb(189 147 249 / 0.3);
+  --color-on-accent: #282a36;
   --color-success: #50fa7b;
   --color-success-soft: rgb(80 250 123 / 0.14);
   --color-warning: #ffb86c;
@@ -105,6 +110,7 @@
   --color-idle: #a0a2b8;
   --shadow-1: 0 1px 2px rgb(0 0 0 / 0.4), 0 1px 1px rgb(0 0 0 / 0.28);
   --shadow-2: 0 16px 40px -12px rgb(0 0 0 / 0.55), 0 8px 16px -8px rgb(0 0 0 / 0.42);
+  --shadow-card-hover: 0 8px 24px -16px rgb(0 0 0 / 0.55), 0 2px 6px -3px rgb(0 0 0 / 0.36);
   --shadow-focus: 0 0 0 3px var(--color-accent-ring);
   --color-panel-tint: #303241;
   --color-scrim: rgb(0 0 0 / 0.55);
@@ -133,6 +139,7 @@
   --color-accent-hover: #9cd0de;
   --color-accent-soft: rgb(136 192 208 / 0.18);
   --color-accent-ring: rgb(136 192 208 / 0.32);
+  --color-on-accent: #2e3440;
   --color-success: #a3be8c;
   --color-success-soft: rgb(163 190 140 / 0.16);
   --color-warning: #ebcb8b;
@@ -142,6 +149,7 @@
   --color-idle: #9aa8bc;
   --shadow-1: 0 1px 2px rgb(0 0 0 / 0.32), 0 1px 1px rgb(0 0 0 / 0.2);
   --shadow-2: 0 16px 40px -12px rgb(0 0 0 / 0.48), 0 8px 16px -8px rgb(0 0 0 / 0.36);
+  --shadow-card-hover: 0 8px 24px -16px rgb(0 0 0 / 0.48), 0 2px 6px -3px rgb(0 0 0 / 0.3);
   --shadow-focus: 0 0 0 3px var(--color-accent-ring);
   --color-panel-tint: #363d4d;
   --color-scrim: rgb(0 0 0 / 0.52);
@@ -169,6 +177,7 @@
   --color-accent-hover: #7bb7f0;
   --color-accent-soft: rgb(97 175 239 / 0.16);
   --color-accent-ring: rgb(97 175 239 / 0.3);
+  --color-on-accent: #282c34;
   --color-success: #98c379;
   --color-success-soft: rgb(152 195 121 / 0.14);
   --color-warning: #e5c07b;
@@ -178,6 +187,7 @@
   --color-idle: #9299a6;
   --shadow-1: 0 1px 2px rgb(0 0 0 / 0.38), 0 1px 1px rgb(0 0 0 / 0.24);
   --shadow-2: 0 16px 40px -12px rgb(0 0 0 / 0.52), 0 8px 16px -8px rgb(0 0 0 / 0.4);
+  --shadow-card-hover: 0 8px 24px -16px rgb(0 0 0 / 0.52), 0 2px 6px -3px rgb(0 0 0 / 0.34);
   --shadow-focus: 0 0 0 3px var(--color-accent-ring);
   --color-panel-tint: #2a2f38;
   --color-scrim: rgb(0 0 0 / 0.54);
@@ -205,6 +215,7 @@
   --color-accent-hover: #0550ae;
   --color-accent-soft: rgb(9 105 218 / 0.1);
   --color-accent-ring: rgb(9 105 218 / 0.22);
+  --color-on-accent: #ffffff;
   --color-success: #1a7f37;
   --color-success-soft: rgb(26 127 55 / 0.1);
   --color-warning: #9a6700;
@@ -214,6 +225,7 @@
   --color-idle: #656d76;
   --shadow-1: 0 1px 2px rgb(31 35 40 / 0.04), 0 1px 1px rgb(31 35 40 / 0.02);
   --shadow-2: 0 12px 32px -8px rgb(31 35 40 / 0.12), 0 4px 12px -4px rgb(31 35 40 / 0.06);
+  --shadow-card-hover: 0 8px 24px -16px rgb(31 35 40 / 0.18), 0 2px 6px -3px rgb(31 35 40 / 0.06);
   --shadow-focus: 0 0 0 3px var(--color-accent-ring);
   --color-panel-tint: #f6f8fa;
   --color-scrim: rgb(31 35 40 / 0.32);
@@ -241,6 +253,7 @@
   --color-accent-hover: #79b8ff;
   --color-accent-soft: rgb(88 166 255 / 0.14);
   --color-accent-ring: rgb(88 166 255 / 0.28);
+  --color-on-accent: #0d1117;
   --color-success: #3fb950;
   --color-success-soft: rgb(63 185 80 / 0.14);
   --color-warning: #d29922;
@@ -250,6 +263,7 @@
   --color-idle: #9aa4ae;
   --shadow-1: 0 1px 2px rgb(0 0 0 / 0.38), 0 1px 1px rgb(0 0 0 / 0.24);
   --shadow-2: 0 16px 40px -12px rgb(0 0 0 / 0.55), 0 8px 16px -8px rgb(0 0 0 / 0.42);
+  --shadow-card-hover: 0 8px 24px -16px rgb(0 0 0 / 0.55), 0 2px 6px -3px rgb(0 0 0 / 0.36);
   --shadow-focus: 0 0 0 3px var(--color-accent-ring);
   --color-panel-tint: #161b22;
   --color-scrim: rgb(0 0 0 / 0.55);

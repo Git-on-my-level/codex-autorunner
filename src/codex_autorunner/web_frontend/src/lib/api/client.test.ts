@@ -1019,4 +1019,79 @@ describe('API client error handling', () => {
       });
     }
   });
+
+  it('maps system update targets, status, and start responses', async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === '/system/update/targets') {
+        return Response.json({
+          targets: [
+            {
+              value: 'all',
+              label: 'all',
+              description: 'Web + Telegram + Discord',
+              includes_web: true,
+              restart_notice: 'The web UI, Telegram, and Discord will restart.'
+            }
+          ],
+          default_target: 'all'
+        });
+      }
+      if (path === '/system/update/status') {
+        return Response.json({
+          status: 'running',
+          message: 'Updating',
+          phase: 'pull',
+          update_target: 'all'
+        });
+      }
+      if (path === '/system/update' && init?.method === 'POST') {
+        return Response.json({
+          status: 'warning',
+          message: 'Active terminal sessions will be interrupted.',
+          target: 'all',
+          requires_confirmation: true
+        });
+      }
+      return Response.json({ detail: 'unexpected route' }, { status: 404 });
+    }) as unknown as typeof fetch;
+    const client = new WebApiClient(fetcher);
+
+    await expect(client.system.getUpdateTargets()).resolves.toMatchObject({
+      ok: true,
+      data: {
+        defaultTarget: 'all',
+        targets: [
+          {
+            value: 'all',
+            includesWeb: true,
+            restartNotice: 'The web UI, Telegram, and Discord will restart.'
+          }
+        ]
+      }
+    });
+    await expect(client.system.getUpdateStatus()).resolves.toMatchObject({
+      ok: true,
+      data: {
+        status: 'running',
+        phase: 'pull',
+        updateTarget: 'all'
+      }
+    });
+    await expect(client.system.startUpdate({ target: 'all' })).resolves.toMatchObject({
+      ok: true,
+      data: {
+        status: 'warning',
+        requiresConfirmation: true,
+        target: 'all'
+      }
+    });
+    expect(fetcher).toHaveBeenCalledWith(
+      '/system/update',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ target: 'all', force: false })
+      })
+    );
+  });
 });

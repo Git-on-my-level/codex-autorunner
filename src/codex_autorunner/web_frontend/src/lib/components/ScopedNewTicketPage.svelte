@@ -227,9 +227,9 @@
     line-height: 1.35;
   }
   .kbd-on-primary {
-    color: rgba(255, 255, 255, 0.85);
-    background: rgba(255, 255, 255, 0.12);
-    border-color: rgba(255, 255, 255, 0.2);
+    color: color-mix(in srgb, var(--color-on-accent) 85%, transparent);
+    background: color-mix(in srgb, var(--color-on-accent) 12%, transparent);
+    border-color: color-mix(in srgb, var(--color-on-accent) 20%, transparent);
     margin-left: var(--space-2);
   }
 </style>

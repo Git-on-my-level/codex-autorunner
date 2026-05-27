@@ -216,6 +216,7 @@ def create_hub_app(
     @app.get("/automations", include_in_schema=False)
     @app.get("/automations/{rest:path}", include_in_schema=False)
     @app.get("/settings", include_in_schema=False)
+    @app.get("/settings/{rest:path}", include_in_schema=False)
     @app.get("/hub", include_in_schema=False)
     def web_hub_index(rest: Optional[str] = None):
         return _web_index_response()

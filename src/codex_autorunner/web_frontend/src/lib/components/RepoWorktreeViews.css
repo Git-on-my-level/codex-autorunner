@@ -101,14 +101,14 @@
     border: 1px solid var(--color-border-subtle);
     border-radius: 12px;
     background: var(--color-surface);
-    box-shadow: 0 1px 0 rgb(15 15 20 / 0.02);
+    box-shadow: var(--shadow-1);
     overflow: hidden;
     transition: border-color var(--transition-base), box-shadow var(--transition-base), transform var(--transition-base);
   }
 
   .repo-item:hover {
     border-color: var(--color-border-strong);
-    box-shadow: 0 8px 24px -16px rgb(15 15 20 / 0.18), 0 2px 6px -3px rgb(15 15 20 / 0.06);
+    box-shadow: var(--shadow-card-hover);
   }
 
   .repo-head {

@@ -231,6 +231,24 @@ const STRUCTURED_ROUTES: StructuredRoute[] = [
     }
   },
   {
+    description: 'Settings section detail',
+    pattern: /^\/settings\/([^/]+)$/,
+    toCrumbs: (m) => {
+      const sectionId = decodeURIComponent(m[1]);
+      const labels: Record<string, string> = {
+        memory: 'PMA memory',
+        general: 'General',
+        integrations: 'Integrations',
+        agents: 'Agents & Runner'
+      };
+      const label = labels[sectionId] ?? sectionId;
+      return [
+        { label: 'Settings', href: '/settings' },
+        { label, href: null }
+      ];
+    }
+  },
+  {
     description: 'Chat detail',
     pattern: /^\/chats\/([^/]+)$/,
     toCrumbs: (m) => {

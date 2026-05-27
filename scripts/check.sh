@@ -176,6 +176,9 @@ _run_guardrails() {
   echo "Checking staged .codex-autorunner paths..."
   "$PYTHON_BIN" scripts/check_no_codex_autorunner_staged.py
 
+  echo "Checking Web Hub theme token usage..."
+  "$PYTHON_BIN" scripts/check_theme_tokens.py
+
   paths=(src)
   if [ -d tests ]; then
     paths+=(tests)

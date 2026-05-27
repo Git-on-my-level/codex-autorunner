@@ -59,9 +59,11 @@ export default defineConfig(() => {
         '/hub': hubProxy(hubTarget, { ws: true }),
         '/api': hubProxy(hubTarget),
         '/health': hubProxy(hubTarget),
+        '/system': hubProxy(hubTarget),
         [`${hubBasePath}/hub`]: hubProxy(hubTarget, { ws: true }),
         [`${hubBasePath}/api`]: hubProxy(hubTarget),
         [`${hubBasePath}/health`]: hubProxy(hubTarget),
+        [`${hubBasePath}/system`]: hubProxy(hubTarget),
         '/repos': hubProxy(hubTarget, {
           bypass(req) {
             const path = req.url?.split('?')[0] ?? '';

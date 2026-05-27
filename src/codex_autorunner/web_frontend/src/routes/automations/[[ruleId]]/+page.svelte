@@ -1717,7 +1717,7 @@
 
   .automation-card:hover {
     border-color: var(--color-border-strong);
-    box-shadow: 0 8px 24px -16px rgb(15 15 20 / 0.18), 0 2px 6px -3px rgb(15 15 20 / 0.06);
+    box-shadow: var(--shadow-card-hover);
   }
 
   .automation-card.selected {

@@ -1,107 +1,87 @@
 <script lang="ts">
   import type {
-    SettingsAgentStatus,
     SettingsSessionState,
     SettingsStatusItem,
     SettingsViewModel
   } from '$lib/viewModels/settings';
-  import PageHero from './PageHero.svelte';
-  import AutoDismissNotice from './AutoDismissNotice.svelte';
-  import type { DropdownSelectGroup, DropdownSelectOption } from './DropdownSelect';
-  import DropdownSelect from './DropdownSelect.svelte';
+  import type { SystemUpdateStatus, SystemUpdateTargetOption } from '$lib/api/client';
+  import type { MemoryViewModel } from '$lib/viewModels/memory';
+  import { untrack } from 'svelte';
+  import MasterDetail from './MasterDetail.svelte';
+  import MemoryView from './MemoryView.svelte';
+  import GeneralSection from './settings/GeneralSection.svelte';
+  import IntegrationsSection from './settings/IntegrationsSection.svelte';
+  import AgentsRunnerSection from './settings/AgentsRunnerSection.svelte';
+  import SystemSection from './settings/SystemSection.svelte';
   import {
-    applyThemePreference,
-    isThemePreference,
-    readStoredThemePreference,
-    type ThemePreference
-  } from '$lib/theme';
-  import { onMount, untrack } from 'svelte';
+    SETTINGS_SECTIONS,
+    settingsSectionLabel,
+    type SettingsSectionId
+  } from './settings/sections';
+
+  type SetupPromptKind = 'telegram' | 'discord' | 'notifications' | 'github' | 'voice';
 
   let {
     state: viewState,
     view = null,
+    sectionId = null,
     sessionBaselineEpoch = 0,
     errorMessage = null,
     saveError = null,
     saving = false,
+    updateTargets = [],
+    selectedUpdateTarget = '',
+    updateStatus = null,
+    updateLoading = false,
+    updateStarting = false,
+    updateMessage = null,
+    updateError = null,
+    pendingUpdateConfirmation = false,
+    memoryState = 'loading',
+    memoryVm = null,
+    memoryError = null,
     onSessionChange,
     onSavePreferences,
-    onOpenPmaMemory,
-    onOpenSetupChat
+    onSelectUpdateTarget,
+    onRefreshUpdateStatus,
+    onStartUpdate,
+    onConfirmUpdate,
+    onOpenSetupChat,
+    onNavigateSection,
+    onNavigateList,
+    onSaveMemoryDoc
   }: {
     state: 'loading' | 'error' | 'ready';
     view?: SettingsViewModel | null;
+    sectionId?: SettingsSectionId | null;
     errorMessage?: string | null;
     saveError?: string | null;
     saving?: boolean;
+    updateTargets?: SystemUpdateTargetOption[];
+    selectedUpdateTarget?: string;
+    updateStatus?: SystemUpdateStatus | null;
+    updateLoading?: boolean;
+    updateStarting?: boolean;
+    updateMessage?: string | null;
+    updateError?: string | null;
+    pendingUpdateConfirmation?: boolean;
+    memoryState?: 'loading' | 'error' | 'ready';
+    memoryVm?: MemoryViewModel | null;
+    memoryError?: string | null;
     onSessionChange?: (session: SettingsSessionState) => void;
     onSavePreferences?: () => void;
-    onOpenPmaMemory?: () => void;
+    onSelectUpdateTarget?: (target: string) => void;
+    onRefreshUpdateStatus?: () => void;
+    onStartUpdate?: () => void;
+    onConfirmUpdate?: () => void;
     onOpenSetupChat?: (kind: SetupPromptKind) => void;
+    onNavigateSection?: (sectionId: SettingsSectionId) => void;
+    onNavigateList?: () => void;
+    onSaveMemoryDoc?: (docId: string, content: string) => Promise<boolean> | boolean;
     sessionBaselineEpoch?: number;
   } = $props();
 
-  type SetupPromptKind = 'telegram' | 'discord' | 'notifications' | 'github' | 'voice';
-
   let savedSession: SettingsSessionState | null = $state(null);
-  let themePreference = $state<ThemePreference>('system');
-
-  onMount(() => {
-    themePreference = readStoredThemePreference();
-  });
-
-  function pickThemePreference(pref: ThemePreference): void {
-    themePreference = pref;
-    applyThemePreference(pref);
-  }
-
-  const themeGroups: DropdownSelectGroup[] = [
-    {
-      label: 'PMA Hub default',
-      options: [
-        { value: 'system', label: 'System (match OS)' },
-        { value: 'light', label: 'Light' },
-        { value: 'dark', label: 'Dark' }
-      ]
-    },
-    {
-      label: 'Solarized',
-      options: [
-        { value: 'solarized-light', label: 'Solarized Light' },
-        { value: 'solarized-dark', label: 'Solarized Dark' }
-      ]
-    },
-    {
-      label: 'IDE-style',
-      options: [
-        { value: 'dracula', label: 'Dracula' },
-        { value: 'nord', label: 'Nord' },
-        { value: 'one-dark', label: 'One Dark' },
-        { value: 'github-light', label: 'GitHub Light' },
-        { value: 'github-dark', label: 'GitHub Dark' }
-      ]
-    }
-  ];
-  const approvalPolicyOptions: DropdownSelectOption[] = [
-    { value: '', label: 'Use server default' },
-    { value: 'never', label: 'never' },
-    { value: 'unlessTrusted', label: 'unlessTrusted' }
-  ];
-  const sandboxModeOptions: DropdownSelectOption[] = [
-    { value: '', label: 'Use server default' },
-    { value: 'dangerFullAccess', label: 'dangerFullAccess' },
-    { value: 'workspaceWrite', label: 'workspaceWrite' }
-  ];
-  const workspaceWriteNetworkOptions: DropdownSelectOption[] = [
-    { value: '', label: 'Use server default' },
-    { value: 'true', label: 'Enabled' },
-    { value: 'false', label: 'Disabled' }
-  ];
-
-  function onThemeSelectChange(value: string): void {
-    if (!isThemePreference(value)) return;
-    pickThemePreference(value);
-  }
 
   $effect(() => {
     sessionBaselineEpoch;
@@ -123,444 +103,186 @@
     );
   });
 
-  // Surface only the *interesting* hub rows: a degraded runtime API. The
-  // canonical-default rows (Hub mode = local, Settings changes = direct save)
-  // communicate "nothing is happening" and are suppressed per DESIGN.md.
   const degradedHub = $derived.by<SettingsStatusItem[]>(() => {
     if (!view) return [];
     return view.hub.filter((item) => item.tone === 'warning');
   });
 
-  function patchSession(key: keyof SettingsSessionState, value: SettingsSessionState[keyof SettingsSessionState]): void {
-    if (!view) return;
-    onSessionChange?.({ ...view.session, [key]: value });
-  }
+  const masterDetailMode = $derived<'list' | 'detail'>(sectionId ? 'detail' : 'list');
 
-  function patchAgentModel(agentId: string, value: string): void {
-    if (!view) return;
-    const agent = agentId.trim().toLowerCase();
-    const next = { ...view.session.modelOverrides };
-    const model = value.trim();
-    if (model) {
-      next[agent] = model;
-    } else {
-      delete next[agent];
-    }
-    onSessionChange?.({ ...view.session, modelOverrides: next });
-  }
-
-  function selectedAgentModel(agent: SettingsAgentStatus, session: SettingsSessionState): string {
-    const selected = session.modelOverrides[agent.id] ?? '';
-    return agent.modelOptions.some((model) => model.id === selected) ? selected : '';
-  }
-
-  function agentModelOptions(agent: SettingsAgentStatus): DropdownSelectOption[] {
-    return [
-      { value: '', label: 'Use built-in default' },
-      ...agent.modelOptions.map((model) => ({ value: model.id, label: model.label }))
-    ];
-  }
-
-  function patchNetwork(value: string): void {
-    patchSession('workspaceWriteNetwork', value === '' ? null : value === 'true');
+  function selectSection(id: SettingsSectionId): void {
+    onNavigateSection?.(id);
   }
 </script>
 
-<section class="page-stack settings-page">
-  <PageHero title="Settings" subtitle="Hub, agents, and CAR session preferences.">
-    {#snippet stats()}
-      {#if sessionDirty}
-        <dl class="hero-stats" aria-label="Settings status">
-          <div class="waiting">
-            <dd>Unsaved</dd>
-            <dt>Preferences</dt>
-          </div>
-        </dl>
-      {/if}
-    {/snippet}
-  </PageHero>
-
-  {#if viewState === 'loading'}
-    <div class="state-panel loading-state">Loading settings…</div>
-  {:else if viewState === 'error'}
-    <div class="state-panel error">Could not load settings. {errorMessage}</div>
-  {:else if view}
-    {#if degradedHub.length > 0}
-      <div class="state-panel error" role="status">
-        {#each degradedHub as item}
-          <div><strong>{item.label}:</strong> {item.value}</div>
-        {/each}
-      </div>
-    {/if}
-
-    <button type="button" class="memory-card" onclick={() => onOpenPmaMemory?.()}>
-      <span class="memory-card-glyph" aria-hidden="true">M</span>
-      <span class="memory-card-copy">
-        <strong>PMA memory</strong>
-        <span>Hub-wide notes the agent reads at the start of every chat — instructions, conventions, and durable context.</span>
-      </span>
-      <span class="memory-card-chevron" aria-hidden="true">›</span>
-    </button>
-
-    <section class="settings-section">
-      <h2 class="settings-section-title">Appearance</h2>
-      <DropdownSelect
-        value={themePreference}
-        groups={themeGroups}
-        labelText="Theme"
-        ariaLabel="Color theme"
-        rowClass="theme-select-field"
-        searchable={true}
-        searchPlaceholder="Search themes"
-        onchange={onThemeSelectChange}
-      />
-    </section>
-
-    <section class="settings-section">
-      <h2 class="settings-section-title">Setup with PMA</h2>
-      <div class="settings-action-grid">
-        <button type="button" class="setup-action" onclick={() => onOpenSetupChat?.('telegram')}>
-          <strong>Telegram</strong>
-          <span>Interactive mobile chat, topics, allowlists</span>
-        </button>
-        <button type="button" class="setup-action" onclick={() => onOpenSetupChat?.('discord')}>
-          <strong>Discord</strong>
-          <span>Slash commands, PMA mode, voice, channels</span>
-        </button>
-        <button type="button" class="setup-action" onclick={() => onOpenSetupChat?.('notifications')}>
-          <strong>Notifications</strong>
-          <span>Run finished, run error, idle alerts</span>
-        </button>
-        <button type="button" class="setup-action" onclick={() => onOpenSetupChat?.('github')}>
-          <strong>GitHub automation</strong>
-          <span>Webhooks, PR bindings, review workflows</span>
-        </button>
-      </div>
-    </section>
-
-    <section class="settings-section">
-      <div class="settings-section-head">
-        <h2 class="settings-section-title">Runner overrides</h2>
-        <button
-          type="button"
-          class="ghost-button"
-          class:dirty={sessionDirty}
-          disabled={!sessionDirty || saving}
-          onclick={() => onSavePreferences?.()}
-        >
-          {saving ? 'Saving…' : sessionDirty ? 'Save preferences' : 'Saved'}
-        </button>
-      </div>
-      <div class="settings-form-grid">
-        <label>
-          <span>Reasoning override</span>
-          <input
-            value={view.session.effortOverride}
-            placeholder="Use agent default"
-            oninput={(event) => patchSession('effortOverride', event.currentTarget.value)}
-          />
-        </label>
-        <label>
-          <span>Stop after runs</span>
-          <input
-            inputmode="numeric"
-            value={view.session.stopAfterRuns}
-            placeholder="No limit"
-            oninput={(event) => patchSession('stopAfterRuns', event.currentTarget.value)}
-          />
-        </label>
-        <DropdownSelect
-          value={view.session.approvalPolicy}
-          options={approvalPolicyOptions}
-          labelText="Approval policy"
-          ariaLabel="Approval policy"
-          onchange={(value) => patchSession('approvalPolicy', value)}
-        />
-        <DropdownSelect
-          value={view.session.sandboxMode}
-          options={sandboxModeOptions}
-          labelText="Sandbox mode"
-          ariaLabel="Sandbox mode"
-          onchange={(value) => patchSession('sandboxMode', value)}
-        />
-        <DropdownSelect
-          value={view.session.workspaceWriteNetwork === null ? '' : String(view.session.workspaceWriteNetwork)}
-          options={workspaceWriteNetworkOptions}
-          labelText="Workspace-write network"
-          ariaLabel="Workspace-write network"
-          onchange={patchNetwork}
-        />
-        <label class="checkbox-field">
-          <input
-            type="checkbox"
-            checked={view.session.ticketFlowRequireCommit}
-            onchange={(event) => patchSession('ticketFlowRequireCommit', event.currentTarget.checked)}
-          />
-          <span>
-            <strong>Ticket flow commits</strong>
-            <small>Require a git commit before advancing after a completed ticket</small>
-          </span>
-        </label>
-      </div>
-      <AutoDismissNotice message={saveError} tone="danger" />
-    </section>
-
-    <section class="settings-section">
-      <h2 class="settings-section-title">Agents</h2>
-      {@render agentList(view.agents, view.session, 'No agents are visible from the server.')}
-    </section>
-
-    <section class="settings-section">
-      <div class="settings-section-head">
-        <h2 class="settings-section-title">Voice transcription</h2>
-        <div class="settings-section-actions">
-          {#if view.voice.enabled}
-            <span class="status-pill done">enabled</span>
-          {:else}
-            <span class="status-pill waiting">disabled</span>
-            <button type="button" class="ghost-button" onclick={() => onOpenSetupChat?.('voice')}>
-              Enable with PMA
+<MasterDetail
+  label="Settings"
+  selected={sectionId !== null}
+  mode={masterDetailMode}
+  listLabel="Settings"
+  detailLabel={sectionId ? settingsSectionLabel(sectionId) : 'Detail'}
+  showSwitch={false}
+  hideDetail={sectionId === null}
+  onModeChange={(mode) => {
+    if (mode === 'list') onNavigateList?.();
+  }}
+>
+  {#snippet list()}
+    <aside class="settings-rail" aria-label="Settings categories">
+      {#if viewState === 'loading'}
+        <div class="state-panel loading-state">Loading settings…</div>
+      {:else if viewState === 'error'}
+        <div class="state-panel error">Could not load settings. {errorMessage}</div>
+      {:else}
+        <nav class="settings-nav" aria-label="Settings sections">
+          {#each SETTINGS_SECTIONS as section (section.id)}
+            <button
+              type="button"
+              class="settings-nav-item"
+              class:active={section.id === sectionId}
+              onclick={() => selectSection(section.id)}
+            >
+              <span class="settings-nav-label">{section.label}</span>
+              <span class="settings-nav-chevron" aria-hidden="true">›</span>
             </button>
-          {/if}
-        </div>
-      </div>
-      {@render statusList(view.voice.rows)}
-      {#if view.voice.hint}
-        <p class="voice-hint">{view.voice.hint}</p>
+          {/each}
+        </nav>
       {/if}
-      {#if !view.voice.enabled && view.voice.apiKeyEnv}
-        <p class="voice-hint voice-hint-cmd">
-          Set the env var, then restart the hub:
-          <code>export {view.voice.apiKeyEnv}=…</code>
-        </p>
+    </aside>
+  {/snippet}
+
+  {#snippet detail()}
+    <section class="settings-detail" aria-label="Settings detail">
+      {#if viewState === 'ready' && view && sectionId}
+        {#if sectionId === 'memory'}
+          <MemoryView
+            state={memoryState}
+            vm={memoryVm}
+            errorMessage={memoryError}
+            onSaveDoc={onSaveMemoryDoc}
+          />
+        {:else if sectionId === 'general'}
+          <GeneralSection />
+          <SystemSection
+            {degradedHub}
+            {updateTargets}
+            {selectedUpdateTarget}
+            {updateStatus}
+            {updateLoading}
+            {updateStarting}
+            {updateMessage}
+            {updateError}
+            {pendingUpdateConfirmation}
+            {onSelectUpdateTarget}
+            {onRefreshUpdateStatus}
+            {onStartUpdate}
+            {onConfirmUpdate}
+          />
+        {:else if sectionId === 'integrations'}
+          <IntegrationsSection voice={view.voice} {onOpenSetupChat} />
+        {:else if sectionId === 'agents'}
+          <AgentsRunnerSection
+            session={view.session}
+            agents={view.agents}
+            {sessionDirty}
+            {saving}
+            {saveError}
+            {onSessionChange}
+            {onSavePreferences}
+          />
+        {/if}
+      {:else if viewState === 'loading'}
+        <div class="state-panel loading-state">Loading settings…</div>
+      {:else if viewState === 'error'}
+        <div class="state-panel error">Could not load settings. {errorMessage}</div>
       {/if}
     </section>
-  {/if}
-</section>
-
-{#snippet statusList(items: SettingsStatusItem[])}
-  <dl class="settings-status-list">
-    {#each items as item}
-      <div class={item.tone}>
-        <dt>{item.label}</dt>
-        <dd>{item.value}</dd>
-      </div>
-    {/each}
-  </dl>
-{/snippet}
-
-{#snippet agentList(agents: SettingsAgentStatus[], session: SettingsSessionState, emptyText: string)}
-  {#if agents.length === 0}
-    <div class="state-panel empty-state compact-empty">
-      <strong>No agents visible</strong>
-      <p>{emptyText}</p>
-    </div>
-  {:else}
-    <div class="agent-status-list">
-      {#each agents as agent}
-        <article class="agent-status-row">
-          <div class="agent-status-id">
-            <strong>{agent.name}</strong>
-          </div>
-          {#if agent.modelStatus === 'available'}
-            <div class="agent-model-control">
-              <DropdownSelect
-                value={selectedAgentModel(agent, session)}
-                options={agentModelOptions(agent)}
-                labelText="Default model"
-                ariaLabel={`${agent.name} default model`}
-                searchable={agent.modelOptions.length > 8}
-                searchPlaceholder="Search models"
-                onchange={(value) => patchAgentModel(agent.id, value)}
-              />
-            </div>
-          {:else if agent.modelStatus === 'unavailable'}
-            <span class="agent-model-muted">Models unavailable</span>
-          {:else}
-            <span class="agent-model-muted">Model selection unavailable</span>
-          {/if}
-        </article>
-      {/each}
-    </div>
-  {/if}
-{/snippet}
+  {/snippet}
+</MasterDetail>
 
 <style>
-  .memory-card {
-    display: grid;
-    grid-template-columns: auto 1fr auto;
-    align-items: center;
+  .settings-rail {
+    display: flex;
+    flex-direction: column;
     gap: var(--space-3);
-    width: 100%;
-    padding: var(--space-3) var(--space-4);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: 12px;
-    background: var(--color-surface);
-    color: var(--color-ink);
-    text-align: left;
-    cursor: pointer;
-    transition:
-      border-color var(--transition-fast) var(--ease-out),
-      box-shadow var(--transition-fast) var(--ease-out);
+    min-height: 0;
+    overflow: auto;
+    padding-block: var(--space-1);
   }
 
-  .memory-card:hover {
-    border-color: var(--color-border-strong);
-    box-shadow:
-      0 8px 24px -16px rgb(15 15 20 / 0.18),
-      0 2px 6px -3px rgb(15 15 20 / 0.06);
-  }
-
-  .memory-card:hover .memory-card-chevron {
-    color: var(--color-ink-soft);
-    transform: translateX(2px);
-  }
-
-  .memory-card:focus-visible {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 2px;
-  }
-
-  .memory-card-glyph {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 36px;
-    height: 36px;
-    border-radius: 8px;
-    background: var(--color-accent-soft, var(--color-surface-muted));
-    color: var(--color-accent);
-    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-weight: 700;
-    font-size: var(--font-size-2);
-  }
-
-  .memory-card-copy {
-    display: grid;
-    gap: 2px;
+  .settings-detail {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
     min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    padding-block: var(--space-1);
   }
 
-  .memory-card-copy strong {
-    font-size: var(--font-size-1);
-    font-weight: 650;
-  }
-
-  .memory-card-copy span {
-    color: var(--color-ink-muted);
-    font-size: var(--font-size-0);
-    line-height: 1.4;
-  }
-
-  .memory-card-chevron {
-    color: var(--color-ink-faint);
-    font-size: var(--font-size-3);
-    line-height: 1;
-    transition:
-      color var(--transition-fast) var(--ease-out),
-      transform var(--transition-base) var(--ease-out);
-  }
-
-  .agent-status-id strong {
-    font-size: var(--font-size-1);
-    font-weight: 600;
-  }
-
-  .settings-action-grid {
-    display: grid;
-    /* Tight min so 4 cards fit one row at wide widths, then reflow to 2x2,
-       then 1-col. Avoids the 3+1 stranded-card layout. */
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
-    gap: var(--space-3);
-  }
-
-  @media (max-width: 760px) {
-    .settings-action-grid {
-      grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+  @media (max-width: 1020px) {
+    .settings-detail {
+      padding-inline: var(--space-1);
     }
   }
 
-  .setup-action {
-    display: grid;
-    gap: var(--space-1);
-    min-width: 0;
-    padding: var(--space-3) var(--space-4);
+  .settings-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: var(--space-1);
     border: 1px solid var(--color-border-subtle);
     border-radius: 10px;
     background: var(--color-surface);
+  }
+
+  .settings-nav-item {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    min-height: 32px;
+    padding: var(--space-1) var(--space-2);
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
     color: var(--color-ink);
     text-align: left;
     cursor: pointer;
-    transition:
-      border-color var(--transition-fast) var(--ease-out),
-      background var(--transition-fast) var(--ease-out);
+    transition: background var(--transition-fast) var(--ease-out);
   }
 
-  .setup-action:hover {
-    border-color: var(--color-border-strong);
+  .settings-nav-item:hover {
     background: var(--color-surface-muted);
   }
 
-  .setup-action:focus-visible {
+  .settings-nav-item:focus-visible {
     outline: 2px solid var(--color-accent);
-    outline-offset: 2px;
+    outline-offset: -2px;
   }
 
-  .setup-action strong {
-    font-size: var(--font-size-1);
-    font-weight: 650;
-  }
-
-  .setup-action span {
-    color: var(--color-ink-muted);
-    font-size: var(--font-size-0);
-    line-height: 1.35;
-  }
-
-  .voice-hint {
-    margin: 0;
-    color: var(--color-ink-muted);
-    font-size: var(--font-size-0);
-    line-height: 1.5;
-  }
-
-  .voice-hint-cmd code {
-    display: inline-block;
-    margin-top: 4px;
-    padding: 2px 8px;
-    border-radius: 6px;
+  .settings-nav-item.active {
     background: var(--color-surface-muted);
-    color: var(--color-ink);
-    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: var(--font-size-0);
+    box-shadow: inset 0 0 0 1px var(--color-border-subtle);
   }
 
-  .checkbox-field {
-    grid-template-columns: auto 1fr;
-    align-items: start;
-    gap: var(--space-2);
-  }
-
-  .checkbox-field input {
-    width: 18px;
-    height: 18px;
-    margin-top: 2px;
-    accent-color: var(--color-accent);
-  }
-
-  .checkbox-field span {
-    gap: 2px;
-  }
-
-  .checkbox-field strong {
-    color: var(--color-ink);
-    font-size: var(--font-size-0);
+  .settings-nav-item.active .settings-nav-label {
     font-weight: 600;
   }
 
-  .checkbox-field small {
+  .settings-nav-label {
+    font-size: var(--font-size-1);
+    font-weight: 500;
+  }
+
+  .settings-nav-chevron {
+    color: var(--color-ink-faint);
+    font-size: var(--font-size-2);
+    line-height: 1;
+  }
+
+  .settings-nav-item.active .settings-nav-chevron {
     color: var(--color-ink-muted);
-    font-size: var(--font-size-0);
-    line-height: 1.35;
   }
 </style>

@@ -213,7 +213,7 @@
     background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: 8px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+    box-shadow: var(--shadow-2);
   }
 
   .filter-dropdown-menu :global(.chip) {

@@ -120,19 +120,17 @@
     color: var(--color-ink);
     padding: 0;
     max-width: min(420px, calc(100vw - var(--space-6)));
-    box-shadow: 0 0 0 1px var(--color-accent-soft),
-      0 24px 60px -20px rgb(0 0 0 / 0.55);
+    box-shadow: 0 0 0 1px var(--color-accent-soft), var(--shadow-2);
     font-family: var(--font-mono);
   }
 
   .confirm-dialog.danger {
     border-color: var(--color-danger);
-    box-shadow: 0 0 0 1px var(--color-danger-soft),
-      0 24px 60px -20px rgb(0 0 0 / 0.55);
+    box-shadow: 0 0 0 1px var(--color-danger-soft), var(--shadow-2);
   }
 
   .confirm-dialog::backdrop {
-    background: rgb(0 0 0 / 0.55);
+    background: var(--color-scrim);
     backdrop-filter: blur(2px);
   }
 

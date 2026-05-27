@@ -133,6 +133,43 @@ export type HubState = {
   title: string;
 };
 
+export type SystemUpdateTargetOption = {
+  value: string;
+  label: string;
+  description: string | null;
+  includesWeb: boolean;
+  restartNotice: string | null;
+};
+
+export type SystemUpdateTargets = {
+  targets: SystemUpdateTargetOption[];
+  defaultTarget: string;
+};
+
+export type SystemUpdateRequest = {
+  target?: string | null;
+  force?: boolean;
+};
+
+export type SystemUpdateResponse = {
+  status: string;
+  message: string;
+  target: string;
+  requiresConfirmation: boolean;
+};
+
+export type SystemUpdateStatus = {
+  status: string;
+  message: string;
+  at: number | null;
+  phase: string | null;
+  errorType: string | null;
+  exitCode: number | null;
+  updateRunId: string | null;
+  updateTarget: string | null;
+  raw: JsonRecord;
+};
+
 export type AutomationScheduleSummary = {
   scheduleId: string;
   scheduleKind: string;
@@ -1043,6 +1080,24 @@ export class WebApiClient {
       this.requestJson<JsonRecord>('/api/session/settings', { method: 'POST', body })
   };
 
+  system = {
+    getUpdateTargets: async (): Promise<ApiResult<SystemUpdateTargets>> =>
+      mapResult(await this.getJson<JsonRecord>('/system/update/targets'), mapSystemUpdateTargets),
+    getUpdateStatus: async (): Promise<ApiResult<SystemUpdateStatus>> =>
+      mapResult(await this.getJson<JsonRecord>('/system/update/status'), mapSystemUpdateStatus),
+    startUpdate: async (request: SystemUpdateRequest): Promise<ApiResult<SystemUpdateResponse>> =>
+      mapResult(
+        await this.requestJson<JsonRecord>('/system/update', {
+          method: 'POST',
+          body: {
+            target: request.target ?? null,
+            force: request.force ?? false
+          }
+        }),
+        mapSystemUpdateResponse
+      )
+  };
+
   voice = {
     getConfig: async (): Promise<ApiResult<JsonRecord>> => this.getJson<JsonRecord>('/api/voice/config'),
     transcribe: async (audio: Blob, filename = 'voice.webm'): Promise<ApiResult<JsonRecord>> => {
@@ -1052,6 +1107,45 @@ export class WebApiClient {
     }
   };
 
+}
+
+function mapSystemUpdateTargets(raw: JsonRecord): SystemUpdateTargets {
+  return {
+    targets: asArray(raw.targets).map((target) => {
+      const record = asRecord(target);
+      return {
+        value: stringValue(record.value, ''),
+        label: stringValue(record.label, stringValue(record.value, 'update')),
+        description: nullableString(record.description),
+        includesWeb: Boolean(record.includes_web ?? record.includesWeb),
+        restartNotice: nullableString(record.restart_notice ?? record.restartNotice)
+      };
+    }),
+    defaultTarget: stringValue(raw.default_target ?? raw.defaultTarget, 'all')
+  };
+}
+
+function mapSystemUpdateResponse(raw: JsonRecord): SystemUpdateResponse {
+  return {
+    status: stringValue(raw.status, 'unknown'),
+    message: stringValue(raw.message, 'Update request returned without a message.'),
+    target: stringValue(raw.target, ''),
+    requiresConfirmation: Boolean(raw.requires_confirmation ?? raw.requiresConfirmation)
+  };
+}
+
+function mapSystemUpdateStatus(raw: JsonRecord): SystemUpdateStatus {
+  return {
+    status: stringValue(raw.status, 'unknown'),
+    message: stringValue(raw.message, 'No update status recorded.'),
+    at: nullableNumber(raw.at),
+    phase: nullableString(raw.phase),
+    errorType: nullableString(raw.error_type ?? raw.errorType),
+    exitCode: nullableNumber(raw.exit_code ?? raw.exitCode),
+    updateRunId: nullableString(raw.update_run_id ?? raw.updateRunId),
+    updateTarget: nullableString(raw.update_target ?? raw.updateTarget),
+    raw
+  };
 }
 
 export function mapResult<T, U>(result: ApiResult<T>, mapper: (data: T) => U): ApiResult<U> {
@@ -1345,6 +1439,11 @@ function nullableString(value: unknown): string | null {
 function numberValue(value: unknown, fallback: number): number {
   const parsed = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function nullableNumber(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function isWorktreeItem(item: JsonRecord): boolean {

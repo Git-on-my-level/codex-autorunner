@@ -19,6 +19,7 @@
   --color-accent-hover: #0f6f5c;
   --color-accent-soft: rgb(19 138 114 / 0.12);
   --color-accent-ring: rgb(19 138 114 / 0.22);
+  --color-on-accent: #ffffff;
   --color-success: #117a4d;
   --color-success-soft: #e8f5ee;
   --color-warning: #9a5b00;
@@ -40,6 +41,7 @@
   --radius-4: 8px;
   --shadow-1: 0 1px 2px rgb(15 15 20 / 0.04), 0 1px 1px rgb(15 15 20 / 0.02);
   --shadow-2: 0 12px 32px -8px rgb(15 15 20 / 0.16), 0 4px 12px -4px rgb(15 15 20 / 0.08);
+  --shadow-card-hover: 0 8px 24px -16px rgb(15 15 20 / 0.18), 0 2px 6px -3px rgb(15 15 20 / 0.06);
   --shadow-focus: 0 0 0 3px var(--color-accent-ring);
   --font-size-0: 10px;
   --font-size-1: 12px;
@@ -77,6 +79,7 @@
   --color-accent-hover: #8df9e3;
   --color-accent-soft: rgb(108 245 216 / 0.12);
   --color-accent-ring: rgb(108 245 216 / 0.28);
+  --color-on-accent: #0a0c12;
   --color-success: #58d68d;
   --color-success-soft: rgb(88 214 141 / 0.14);
   --color-warning: #ffd166;
@@ -86,6 +89,7 @@
   --color-idle: #7a8ba8;
   --shadow-1: 0 1px 2px rgb(0 0 0 / 0.35), 0 1px 1px rgb(0 0 0 / 0.22);
   --shadow-2: 0 16px 40px -12px rgb(0 0 0 / 0.55), 0 8px 16px -8px rgb(0 0 0 / 0.4);
+  --shadow-card-hover: 0 8px 24px -16px rgb(0 0 0 / 0.55), 0 2px 6px -3px rgb(0 0 0 / 0.35);
   --shadow-focus: 0 0 0 3px var(--color-accent-ring);
   --color-panel-tint: #161c24;
   --color-scrim: rgb(0 0 0 / 0.55);
@@ -1208,7 +1212,7 @@ a.scope-chip-label:hover {
 .send-button {
   border-color: var(--color-accent);
   background: var(--color-accent);
-  color: var(--color-bg);
+  color: var(--color-on-accent);
   font-weight: 600;
   box-shadow: 0 0 0 3px var(--color-accent-soft);
 }
@@ -3810,26 +3814,6 @@ textarea:hover {
   gap: var(--space-2);
 }
 
-.detail-actions a,
-.detail-actions button {
-  min-height: 32px;
-  padding: var(--space-1) var(--space-3);
-  border: 1px solid transparent;
-  border-radius: var(--radius-2);
-  background: var(--color-accent);
-  color: white;
-  cursor: pointer;
-  font-weight: 550;
-  font-size: var(--font-size-1);
-  box-shadow: 0 1px 2px rgb(91 95 199 / 0.2);
-}
-
-.detail-actions a:hover,
-.detail-actions button:hover {
-  background: var(--color-accent-hover);
-  box-shadow: 0 2px 6px rgb(91 95 199 / 0.28);
-}
-
 .identity-panel {
   padding-block: var(--space-4);
 }
@@ -6276,7 +6260,7 @@ textarea:disabled {
   border: 1px solid var(--color-accent);
   border-radius: var(--radius-2);
   background: var(--color-accent);
-  color: var(--color-bg);
+  color: var(--color-on-accent);
   cursor: pointer;
   font-weight: 600;
   font-size: var(--font-size-1);

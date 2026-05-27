@@ -123,7 +123,7 @@
     font-size: 0.85rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: var(--color-fg-muted, #6b6657);
+    color: var(--color-ink-muted);
     margin: 0;
   }
   textarea {
