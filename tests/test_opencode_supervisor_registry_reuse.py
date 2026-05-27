@@ -737,6 +737,9 @@ async def test_ensure_started_reaps_unhealthy_registry_record_then_spawns(
         supervisor, "_pid_is_running", lambda _pid: pid_state["running"]
     )
     monkeypatch.setattr(
+        supervisor, "_pgid_is_running", lambda _pgid: pid_state["running"]
+    )
+    monkeypatch.setattr(
         supervisor_module, "process_command_matches", lambda *_a, **_k: True
     )
     monkeypatch.setattr(supervisor, "_attach_to_base_url", _fake_attach)

@@ -3039,9 +3039,7 @@ textarea:hover {
   width: 100%;
   max-width: none;
   border-radius: 8px;
-  background: color-mix(in srgb, var(--color-surface-sunken) 70%, transparent);
-  backdrop-filter: blur(10px) saturate(140%);
-  -webkit-backdrop-filter: blur(10px) saturate(140%);
+  background: var(--color-surface-sunken);
   container-type: inline-size;
   container-name: status-bar;
 }
