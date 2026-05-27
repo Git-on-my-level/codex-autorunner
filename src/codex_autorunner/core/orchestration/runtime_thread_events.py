@@ -153,10 +153,19 @@ class RuntimeEventDriver:
                 }:
                     self.timeline_assistant_chunks.append(event.content)
                     if event.delta_type == RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM:
+                        preserve_word_boundaries = bool(
+                            event.data.get("preserve_word_boundaries")
+                        )
                         if event.stream_mode == RUN_EVENT_STREAM_MODE_SNAPSHOT:
-                            self.assistant_output.note_stream_snapshot(event.content)
+                            self.assistant_output.note_stream_snapshot(
+                                event.content,
+                                preserve_word_boundaries=preserve_word_boundaries,
+                            )
                         else:
-                            self.assistant_output.note_stream_delta(event.content)
+                            self.assistant_output.note_stream_delta(
+                                event.content,
+                                preserve_word_boundaries=preserve_word_boundaries,
+                            )
                     else:
                         self.assistant_output.note_final_message(event.content)
                     continue

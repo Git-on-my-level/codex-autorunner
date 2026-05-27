@@ -1116,6 +1116,45 @@ async def test_opencode_text_part_updates_preserve_readable_word_boundaries() ->
     )
 
 
+@pytest.mark.anyio
+async def test_runtime_event_driver_preserves_opencode_delta_only_word_boundaries() -> (
+    None
+):
+    driver = RuntimeEventDriver()
+
+    await driver.consume_raw_events(
+        [
+            format_sse(
+                "app-server",
+                {
+                    "message": {
+                        "method": "message.part.updated",
+                        "params": {
+                            "properties": {
+                                "part": {"type": "text"},
+                                "delta": text,
+                            }
+                        },
+                    }
+                },
+            )
+            for text in (
+                "Currently",
+                "on",
+                "branch",
+                "fix/automations-pma-turn-",
+                "migration",
+                ".",
+            )
+        ]
+    )
+
+    assert (
+        driver.best_assistant_text()
+        == "Currently on branch fix/automations-pma-turn-migration."
+    )
+
+
 async def test_normalize_runtime_thread_raw_event_maps_opencode_reasoning_parts_to_thinking() -> (
     None
 ):
