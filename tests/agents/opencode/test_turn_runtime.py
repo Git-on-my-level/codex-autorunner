@@ -185,6 +185,7 @@ async def test_turn_runtime_collector_handles_question_tool_part() -> None:
                             "type": "tool",
                             "tool": "question",
                             "state": {
+                                "id": "que-q1",
                                 "status": "pending",
                                 "input": {
                                     "questions": [
@@ -215,7 +216,7 @@ async def test_turn_runtime_collector_handles_question_tool_part() -> None:
     )
 
     assert output.error is None
-    assert question_answers == [("part-q1", [["Yes"]])]
+    assert question_answers == [("que-q1", [["Yes"]])]
 
 
 @pytest.mark.asyncio

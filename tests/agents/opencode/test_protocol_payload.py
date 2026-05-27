@@ -509,6 +509,7 @@ class TestExtractQuestionToolRequest:
                 "type": "tool",
                 "tool": "question",
                 "state": {
+                    "id": "que_q1",
                     "status": "error",
                     "input": {
                         "questions": [
@@ -523,11 +524,29 @@ class TestExtractQuestionToolRequest:
             }
         )
 
-        assert request_id == "part-q1"
+        assert request_id == "que_q1"
         assert props["source"] == "tool_part"
         assert props["questions"][0]["question"] == "Continue?"
         assert status == "error"
         assert error == "The user dismissed this question"
+
+    def test_does_not_use_tool_part_id_as_request_id(self) -> None:
+        request_id, props, status, error = extract_question_tool_request(
+            {
+                "id": "prt_q1",
+                "type": "tool",
+                "tool": "question",
+                "state": {
+                    "status": "pending",
+                    "input": {"questions": [{"question": "Continue?"}]},
+                },
+            }
+        )
+
+        assert request_id is None
+        assert props["questions"][0]["question"] == "Continue?"
+        assert status == "pending"
+        assert error is None
 
     def test_ignores_non_question_tools(self) -> None:
         request_id, props, status, error = extract_question_tool_request(

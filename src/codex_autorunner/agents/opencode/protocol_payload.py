@@ -557,7 +557,7 @@ def extract_question_tool_request(
         input_payload = {}
 
     request_id = None
-    for container in (state_payload, input_payload, part):
+    for container in (state_payload, input_payload):
         if not isinstance(container, dict):
             continue
         for key in ("id", "requestID", "requestId"):
