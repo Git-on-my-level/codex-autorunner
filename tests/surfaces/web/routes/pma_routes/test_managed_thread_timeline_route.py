@@ -10,7 +10,6 @@ from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import SQLiteChatSurfaceEventJournal
 from codex_autorunner.core.orchestration.cold_trace_store import ColdTraceWriter
 from codex_autorunner.core.orchestration.managed_thread_transcript import (
-    _merge_transcript_rows,
     build_managed_thread_transcript,
 )
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
@@ -23,7 +22,6 @@ from codex_autorunner.core.ports.run_event import Completed, OutputDelta, RunNot
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.pma_routes.tail_stream import (
     _successful_terminal_turn_id,
-    _transcript_append_frames,
     _transcript_has_assistant_row,
 )
 
@@ -75,83 +73,7 @@ def test_transcript_stream_terminal_snapshot_gate_requires_assistant_row() -> No
     )
 
 
-def test_transcript_append_frames_chunk_without_advancing_cursor_early() -> None:
-    rows = [
-        {
-            "kind": "intermediate",
-            "id": f"row-{index}",
-            "order_key": f"{index:04d}",
-        }
-        for index in range(85)
-    ]
-
-    frames = list(_transcript_append_frames(rows, append_event_id=123, chunk_limit=80))
-
-    assert len(frames) == 2
-    assert "\nid: 123\n" not in frames[0]
-    assert "\nid: 123\n" in frames[1]
-    first_payload = json.loads(frames[0].split("data: ", 1)[1])
-    second_payload = json.loads(frames[1].split("data: ", 1)[1])
-    assert [row["id"] for row in first_payload["rows"]] == [
-        f"row-{index}" for index in range(80)
-    ]
-    assert [row["id"] for row in second_payload["rows"]] == [
-        f"row-{index}" for index in range(80, 85)
-    ]
-
-
-def test_managed_thread_transcript_live_rows_replace_stale_durable_rows() -> None:
-    durable_rows = [
-        {
-            "kind": "intermediate",
-            "id": "turn:1:intermediate:event-1",
-            "order_key": "001",
-            "text": "stale",
-        }
-    ]
-    live_rows = [
-        {
-            "kind": "intermediate",
-            "id": "turn:1:intermediate:event-1",
-            "order_key": "001",
-            "text": "fresh",
-        }
-    ]
-
-    merged = _merge_transcript_rows(durable_rows, live_rows)
-
-    assert merged == [live_rows[0]]
-
-
-def test_managed_thread_transcript_live_rows_stay_after_turn_user_row() -> None:
-    durable_rows = [
-        {
-            "kind": "message",
-            "id": "turn:turn-1:user",
-            "turn_id": "turn-1",
-            "order_key": "00000005|2026-05-12T10:00:00Z|turn:turn-1:user",
-            "message": {"role": "user", "text": "hello"},
-        }
-    ]
-    live_rows = [
-        {
-            "kind": "intermediate",
-            "id": "turn:turn-1:intermediate:0001",
-            "turn_id": "turn-1",
-            "order_key": "00000001|2026-05-12T09:59:59Z|progress",
-            "text": "thinking",
-        }
-    ]
-
-    merged = _merge_transcript_rows(durable_rows, live_rows)
-
-    assert [row["id"] for row in merged] == [
-        "turn:turn-1:user",
-        "turn:turn-1:intermediate:0001",
-    ]
-
-
-def test_managed_thread_transcript_running_first_turn_orders_live_progress_after_user(
+def test_managed_thread_transcript_running_first_turn_keeps_progress_out_of_rows(
     hub_env,
 ) -> None:
     store = ManagedThreadStore(hub_env.hub_root)
@@ -191,11 +113,10 @@ def test_managed_thread_transcript_running_first_turn_orders_live_progress_after
     )
 
     rows = transcript["rows"]
-    assert [row["kind"] for row in rows] == ["message", "intermediate"]
+    assert [row["kind"] for row in rows] == ["message"]
     assert rows[0]["id"] == f"turn:{turn_id}:user"
     assert rows[0]["message"]["role"] == "user"
-    assert rows[1]["id"] == f"turn:{turn_id}:intermediate:0001"
-    assert rows[1]["turn_id"] == turn_id
+    assert transcript["status"]["events"][0]["summary"] == "Planning next step"
 
 
 def test_managed_thread_timeline_endpoint_returns_canonical_items(hub_env) -> None:

@@ -377,7 +377,7 @@ describe('read model entity store', () => {
     expect(selectChatTranscript(store.snapshot(), 'chat-1')).toBe(selectedBefore);
   });
 
-  it('selects compacted transcript cards from a stable memoized projection boundary', () => {
+  it('selects backend-owned transcript rows without semantic compaction', () => {
     const store = new ReadModelEntityStore();
     store.replaceChatTranscript('chat-1', [
       pmaMessageCard('chat-1', 'turn:1:user', 'Investigate'),
@@ -386,27 +386,19 @@ describe('read model entity store', () => {
     ]);
 
     const selectedBefore = selectChatTranscript(store.snapshot(), 'chat-1');
-    const summary = selectedBefore.find((card): card is Extract<ChatTranscriptCard, { kind: 'turn_summary' }> => card.kind === 'turn_summary');
 
-    expect(selectedBefore).toHaveLength(2);
-    if (!summary) throw new Error('expected compacted turn summary');
-    expect(summary).toMatchObject({
-      kind: 'turn_summary',
-      title: '1 reasoning step'
-    });
-    expect(summary.cards[0]).toMatchObject({
-      kind: 'intermediate',
-      id: 'thinking-1',
-      text: 'Need to inspect',
-      eventIds: ['evt-1', 'evt-2']
-    });
+    expect(selectedBefore.map((card) => card.id)).toEqual([
+      'thinking-1',
+      'thinking-2',
+      'turn:1:user'
+    ]);
 
     store.setPmaProgress('chat-1', progress('chat-1', 1));
 
     expect(selectChatTranscript(store.snapshot(), 'chat-1')).toBe(selectedBefore);
   });
 
-  it('keeps large append-heavy transcript compaction behind selector invalidation', () => {
+  it('keeps append-heavy transcript selection memoized without compacting rows', () => {
     const store = new ReadModelEntityStore();
     const baseCards = Array.from({ length: 1_000 }, (_, index) =>
       pmaTraceCard(`thinking-${index}`, `token-${index}`, [`evt-${index}`], index)
@@ -414,8 +406,8 @@ describe('read model entity store', () => {
     store.replaceChatTranscript('chat-1', baseCards);
     const selectedBefore = selectChatTranscript(store.snapshot(), 'chat-1');
 
-    expect(selectedBefore).toHaveLength(1);
-    expect(selectedBefore[0]).toMatchObject({ kind: 'turn_summary', title: '1 reasoning step' });
+    expect(selectedBefore).toHaveLength(1_000);
+    expect(selectedBefore[0]).toMatchObject({ kind: 'intermediate', id: 'thinking-0' });
     expect(selectChatTranscript(store.snapshot(), 'chat-1')).toBe(selectedBefore);
 
     store.upsertChatTranscriptCards('chat-1', [
@@ -424,13 +416,8 @@ describe('read model entity store', () => {
     const selectedAfter = selectChatTranscript(store.snapshot(), 'chat-1');
 
     expect(selectedAfter).not.toBe(selectedBefore);
-    expect(selectedAfter).toHaveLength(1);
-    const summary = selectedAfter[0];
-    if (summary.kind !== 'turn_summary') throw new Error('expected compacted turn summary');
-    const trace = summary.cards[0];
-    if (trace.kind !== 'intermediate') throw new Error('expected compacted intermediate trace');
-    expect(trace.eventIds).toHaveLength(200);
-    expect(trace.text.length).toBeLessThanOrEqual(4000);
+    expect(selectedAfter).toHaveLength(1_001);
+    expect(selectedAfter.at(-1)).toMatchObject({ kind: 'intermediate', id: 'thinking-1000' });
   });
 
   it('does not clone untouched cached details when another detail patches', () => {

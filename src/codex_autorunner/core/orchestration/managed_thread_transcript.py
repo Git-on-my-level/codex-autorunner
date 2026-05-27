@@ -9,7 +9,6 @@ from .managed_thread_timeline import (
     build_managed_thread_timeline,
     timeline_item_from_tail_event,
 )
-from .run_notice_visibility import is_internal_run_notice_kind
 
 TRANSCRIPT_CONTRACT_VERSION = "managed_thread_transcript.v2"
 
@@ -24,10 +23,10 @@ def build_managed_thread_transcript(
 ) -> dict[str, Any]:
     """Build the backend-owned chat transcript projection consumed by Web Hub.
 
-    This is the ownership boundary for chat rendering. Runtime timeline rows and
-    live tail/progress state can still be noisy below this layer, but the browser
-    should receive one ordered transcript shape and render it without composing a
-    parallel transcript from `/timeline` plus `/tail`.
+    This is the ownership boundary for durable chat transcript rendering.
+    Runtime progress is intentionally projected separately: noisy intermediate,
+    tool, approval, and live tail rows must not be converted into transcript
+    cards here.
     """
 
     clamped_limit = min(max(1, int(limit or 1)), MAX_MANAGED_THREAD_TIMELINE_LIMIT)
@@ -47,20 +46,6 @@ def build_managed_thread_transcript(
     rows = transcript_rows_from_timeline_items(timeline_items)
 
     status = dict(progress_snapshot or {})
-    live_rows: list[dict[str, Any]] = []
-    for event in status.get("events") or []:
-        if not isinstance(event, Mapping):
-            continue
-        item = timeline_item_from_tail_event(
-            managed_thread_id=managed_thread_id,
-            managed_turn_id=str(status.get("managed_turn_id") or ""),
-            tail_event=dict(event),
-        )
-        if item is None:
-            continue
-        live_rows.extend(transcript_rows_from_timeline_items([item]))
-
-    rows = _merge_transcript_rows(rows, live_rows)
     rows = _retain_transcript_window(rows, clamped_limit)
     return {
         "contract_version": TRANSCRIPT_CONTRACT_VERSION,
@@ -188,58 +173,13 @@ def _timeline_item_to_transcript_rows(item: Mapping[str, Any]) -> list[dict[str,
         ]
 
     if kind == "intermediate":
-        text = _optional_text(payload.get("text")) or ""
-        if not text.strip() or _is_hidden_intermediate(payload):
-            return []
-        # `detail` is never rendered as a raw view for intermediate cards — the
-        # web component only mines it for a headline label. Emitting raw event
-        # JSON here leaked `{ "event_id": ... }` into the card headline, so the
-        # row carries no detail and the UI derives a clean label from `text`.
-        return [
-            {
-                "kind": "intermediate",
-                "id": item_id,
-                "title": _intermediate_title(payload),
-                "text": text,
-                "event_ids": _source_event_ids(item),
-                "progress_source_ids": [],
-                "detail": None,
-                "turn_id": managed_turn_id,
-                "order_key": order_key,
-                "timestamp": timestamp,
-            }
-        ]
+        return []
 
     if kind == "tool_group":
-        return [
-            {
-                "kind": "tool_group",
-                "id": item_id,
-                "tools": [_tool_card_from_item(item, payload)],
-                "turn_id": managed_turn_id,
-                "order_key": order_key,
-                "timestamp": timestamp,
-            }
-        ]
+        return []
 
     if kind == "approval":
-        summary = (
-            _optional_text(payload.get("description"))
-            or _optional_text(payload.get("summary"))
-            or "Approval requested"
-        )
-        return [
-            {
-                "kind": "approval",
-                "id": item_id,
-                "title": "Approval requested",
-                "summary": summary,
-                "detail": _json_detail(payload.get("event") or payload),
-                "turn_id": managed_turn_id,
-                "order_key": order_key,
-                "timestamp": timestamp,
-            }
-        ]
+        return []
 
     if kind == "lifecycle":
         title = _optional_text(payload.get("title")) or "Chat compacted"
@@ -308,60 +248,6 @@ def _message_context_fields(
     if visible_context:
         return normalized_visible or visible_text, visible_context
     return normalized_visible or visible_text, raw_context
-
-
-def _tool_card_from_item(
-    item: Mapping[str, Any], payload: Mapping[str, Any]
-) -> dict[str, Any]:
-    result = _mapping(payload.get("result"))
-    call = _mapping(payload.get("call"))
-    raw_state = str(result.get("status") or item.get("status") or "").lower()
-    if "fail" in raw_state or raw_state == "error":
-        state = "failed"
-    elif result:
-        state = "completed"
-    else:
-        state = "started"
-    return {
-        "id": str(item.get("item_id") or item.get("id") or "tool"),
-        "title": _optional_text(payload.get("tool_name"))
-        or _optional_text(call.get("tool_name"))
-        or "Tool call",
-        "summary": _optional_text(result.get("summary"))
-        or _optional_text(call.get("summary")),
-        "detail": _json_detail(payload.get("result") or payload.get("call") or payload),
-        "state": state,
-        "event_ids": _source_event_ids(item),
-    }
-
-
-def _merge_transcript_rows(
-    durable_rows: list[dict[str, Any]], live_rows: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    if not live_rows:
-        return _sort_transcript_rows(durable_rows)
-    merged_by_id: dict[str, dict[str, Any]] = {}
-    merged: list[dict[str, Any]] = []
-    for row in durable_rows:
-        row_id = str(row.get("id") or "")
-        if row_id:
-            merged_by_id[row_id] = row
-        merged.append(row)
-    for row in live_rows:
-        row_id = str(row.get("id") or "")
-        if row_id and row_id in merged_by_id:
-            replacement_index = next(
-                index
-                for index, current in enumerate(merged)
-                if str(current.get("id") or "") == row_id
-            )
-            merged[replacement_index] = row
-            merged_by_id[row_id] = row
-            continue
-        if row_id:
-            merged_by_id[row_id] = row
-        merged.append(row)
-    return _sort_transcript_rows(merged)
 
 
 def _retain_transcript_window(
@@ -442,14 +328,6 @@ def _message_role(row: Mapping[str, Any]) -> Optional[str]:
     return str(role) if role is not None else None
 
 
-def _source_event_ids(item: Mapping[str, Any]) -> list[str]:
-    provenance = _mapping(item.get("provenance"))
-    values = provenance.get("source_event_ids")
-    if not isinstance(values, list):
-        return []
-    return [str(value) for value in values]
-
-
 def _artifact_list(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
@@ -507,43 +385,6 @@ def _json_detail(value: Any) -> Optional[str]:
         return json.dumps(dict(value), indent=2, sort_keys=True)
     except (TypeError, ValueError):
         return None
-
-
-def _is_hidden_intermediate(payload: Mapping[str, Any]) -> bool:
-    if payload.get("hidden") is True:
-        return True
-    progress_item = _mapping(payload.get("progress_item"))
-    if progress_item.get("hidden") is True:
-        return True
-    intermediate_kind = str(payload.get("intermediate_kind") or "").lower()
-    event_type = str(payload.get("event_type") or "").lower()
-    event = _mapping(payload.get("event"))
-    if any(
-        is_internal_run_notice_kind(candidate)
-        for candidate in (
-            intermediate_kind,
-            payload.get("title"),
-            event.get("kind"),
-            event.get("title"),
-            progress_item.get("kind"),
-            progress_item.get("title"),
-        )
-    ):
-        return True
-    return event_type == "output_delta" and intermediate_kind in {
-        "assistant_stream",
-        "assistant_message",
-        "log_line",
-    }
-
-
-def _intermediate_title(payload: Mapping[str, Any]) -> str:
-    title = _optional_text(payload.get("title")) or _optional_text(
-        payload.get("intermediate_kind")
-    )
-    if not title:
-        return "Update"
-    return title.replace("_", " ").replace(".", " ").strip().title()
 
 
 __all__ = [
