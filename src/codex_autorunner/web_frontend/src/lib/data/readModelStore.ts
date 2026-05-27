@@ -133,6 +133,7 @@ export type RepoWorktreeIndexWindow = {
 };
 
 export type ReadModelEntityState = {
+  activeChatId: string | null;
   cursors: Record<string, ProjectionCursor>;
   chatIndexCursor: ProjectionCursor | null;
   chats: Record<string, ChatIndexRow>;
@@ -218,6 +219,7 @@ export const PMA_LIVE_PROGRESS_EVENT_LIMIT = 80;
 
 export function createInitialReadModelState(): ReadModelEntityState {
   return {
+    activeChatId: null,
     cursors: {},
     chatIndexCursor: null,
     chats: {},
@@ -281,6 +283,11 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
 
   reset(): void {
     this.commit(createInitialReadModelState());
+  }
+
+  setActiveChatId(chatId: string | null): void {
+    if (this.state.activeChatId === chatId) return;
+    this.commit({ ...this.state, activeChatId: chatId });
   }
 
   applyChatIndexSnapshot(snapshot: {

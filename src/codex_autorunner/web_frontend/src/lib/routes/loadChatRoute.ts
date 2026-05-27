@@ -1,26 +1,22 @@
 import {
   CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST,
-  ensureChatDetailLoaded,
   ensureChatIndexLoaded,
   type ReadModelLoaderResult
 } from '$lib/data';
-import { requestedChatDetailFromUrl } from '$lib/application/chatDetailSession';
 import { readModelLoaderOptions, type LoadReadModelRouteOptions } from './loadReadModelRoute';
 
 export type ChatRouteLoadData = {
   chatId: string | null;
   chatIndex: ReadModelLoaderResult;
-  activeDetail: ReadModelLoaderResult | null;
+  activeDetail: null;
 };
 
-const CHAT_DETAIL_TIMELINE_LIMIT = 50;
 const CHAT_INDEX_WINDOW_LIMIT = 50;
 
 /** Testable helper; must not live in `+page.ts` (SvelteKit allows only reserved route exports there). */
 export async function loadChatRoute(
-  options: LoadReadModelRouteOptions & { chatId?: string; searchParams?: Pick<URLSearchParams, 'get'> }
+  options: LoadReadModelRouteOptions
 ): Promise<ChatRouteLoadData> {
-  const chatId = requestedChatDetailFromUrl(options.chatId, options.searchParams);
   const chatIndexPromise = ensureChatIndexLoaded(
     { limit: CHAT_INDEX_WINDOW_LIMIT },
     {
@@ -35,20 +31,11 @@ export async function loadChatRoute(
       refresh: true
     }
   );
-  if (!chatId) {
-    const [chatIndex] = await Promise.all([chatIndexPromise, ticketRunGroupsPromise]);
-    return { chatId: null, chatIndex, activeDetail: null };
-  }
-
-  const activeDetailPromise = ensureChatDetailLoaded(chatId, {
-    ...readModelLoaderOptions(options),
-    timelineLimit: CHAT_DETAIL_TIMELINE_LIMIT
-  });
-  const [chatIndex, activeDetail] = await Promise.all([chatIndexPromise, activeDetailPromise, ticketRunGroupsPromise]);
+  const [chatIndex] = await Promise.all([chatIndexPromise, ticketRunGroupsPromise]);
 
   return {
-    chatId,
+    chatId: null,
     chatIndex,
-    activeDetail
+    activeDetail: null
   };
 }

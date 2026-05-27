@@ -282,6 +282,16 @@ class ManagedThreadGenesisRequest(Payload):
 class ManagedThreadCreateRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
+    managed_thread_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "managed_thread_id",
+            "managedThreadId",
+            "chat_id",
+            "chatId",
+            "id",
+        ),
+    )
     agent: Optional[str] = None
     profile: Optional[str] = None
     chat_kind: Optional[Literal["pma", "coding_agent"]] = Field(

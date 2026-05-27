@@ -185,6 +185,7 @@ class _ThreadRuntimeAdapter:
         agent_id: str,
         workspace_root: Path,
         *,
+        thread_target_id: Optional[str] = None,
         repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
@@ -204,6 +205,7 @@ class _ThreadRuntimeAdapter:
         return self.thread_store.create_thread_target(
             agent_id,
             workspace_root,
+            thread_target_id=thread_target_id,
             scope=scope,
             repo_id=repo_id,
             resource_kind=resource_kind,
@@ -631,6 +633,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         agent_id: str,
         workspace_root: Path,
         *,
+        thread_target_id: Optional[str] = None,
         repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
@@ -643,6 +646,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         return self._runtime_adapter.create_thread_target(
             agent_id,
             workspace_root,
+            thread_target_id=thread_target_id,
             scope=scope,
             repo_id=repo_id,
             resource_kind=resource_kind,

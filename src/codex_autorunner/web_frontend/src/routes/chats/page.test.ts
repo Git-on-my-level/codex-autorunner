@@ -8,7 +8,7 @@ import {
   type ProjectionCursor
 } from '$lib/api/readModelContracts';
 import { readModelEntityStore } from '$lib/data/readModelStore';
-import Page from './[[chatId]]/+page.svelte';
+import Page from './+page.svelte';
 
 describe('/chats page', () => {
   afterEach(() => {
@@ -17,7 +17,7 @@ describe('/chats page', () => {
 
   function chatDetailPageSource(): string {
     return readFileSync(
-      fileURLToPath(new URL('./[[chatId]]/+page.svelte', import.meta.url)),
+      fileURLToPath(new URL('./+page.svelte', import.meta.url)),
       'utf8'
     );
   }
@@ -87,17 +87,16 @@ describe('/chats page', () => {
     expect(pageSource).not.toContain('read-active:');
   });
 
-  it('clears the committed chat URL guard when committed detail navigation fails', () => {
+  it('projects committed chat URLs without SvelteKit navigation', () => {
     const source = chatDetailPageSource();
     const syncCommittedBody = source.match(
       /async function syncCommittedDetailUrl[\s\S]*?\n  async function refreshActive/
     )?.[0];
 
-    expect(syncCommittedBody).toContain('catch (error)');
-    expect(syncCommittedBody).toContain('pendingCommittedDetailUrlChatId = null;');
-    expect(syncCommittedBody).toContain('pageController.setRoute(currentRouteSnapshot());');
-    expect(syncCommittedBody).toContain('throw error;');
-    expect(syncCommittedBody).not.toContain('finally');
+    expect(syncCommittedBody).toContain('await replaceDetailUrl(detailId);');
+    expect(source).toContain("history.replaceState(history.state, '', href(target));");
+    expect(syncCommittedBody).not.toContain('goto(');
+    expect(syncCommittedBody).not.toContain('pendingCommittedDetailUrlChatId');
   });
 
   it('keeps migrated PMA transcript, stream, queue, send, and normalization calls out of the page', () => {

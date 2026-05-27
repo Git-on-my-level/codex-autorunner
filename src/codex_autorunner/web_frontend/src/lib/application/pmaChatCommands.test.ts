@@ -58,7 +58,7 @@ describe('PMA chat command plans', () => {
 
   it('plans draft first sends as a single start-and-send command', () => {
     expect(
-      planStartAndSendChat(localPmaChatScopeOption(), 'hermes', 'planning', '', 'Hello', {
+      planStartAndSendChat('chat-new', localPmaChatScopeOption(), 'hermes', 'planning', '', 'Hello', {
         reasoning: 'high',
         clientTurnId: 'client-1'
       })
@@ -89,7 +89,7 @@ describe('PMA chat command plans', () => {
       scopeUrn: 'repo:repo-1'
     };
     expect(
-      planStartAndSendChat(repoScope, 'codex', '', '', 'Route chat', {
+      planStartAndSendChat('chat-new', repoScope, 'codex', '', '', 'Route chat', {
         scopeSource: 'route_explicit'
       }).body
     ).toMatchObject({
@@ -98,7 +98,7 @@ describe('PMA chat command plans', () => {
       scope_source: 'route_explicit'
     });
     expect(
-      planStartAndSendChat(repoScope, 'codex', '', '', 'Picker chat', {
+      planStartAndSendChat('chat-new', repoScope, 'codex', '', '', 'Picker chat', {
         scopeSource: 'picker_explicit'
       }).body
     ).toMatchObject({
@@ -121,7 +121,7 @@ describe('PMA chat command plans', () => {
     };
 
     expect(
-      planStartAndSendChat(
+      planStartAndSendChat('chat-new',
         localPmaChatScopeOption(),
         'codex',
         '',
@@ -134,7 +134,7 @@ describe('PMA chat command plans', () => {
       scope_source: 'default_hub'
     });
     expect(
-      planStartAndSendChat(ambientWorktreeScope, 'codex', '', '', 'Explicit route chat', {
+      planStartAndSendChat('chat-new', ambientWorktreeScope, 'codex', '', '', 'Explicit route chat', {
         scopeSource: 'route_explicit'
       }).body
     ).toMatchObject({
@@ -212,7 +212,7 @@ describe('PMA chat command execution', () => {
 
     const result = await executePmaChatCommandPlan(
       client,
-      planStartAndSendChat(localPmaChatScopeOption(), 'hermes', '', '', 'Hello')
+      planStartAndSendChat('chat-new', localPmaChatScopeOption(), 'hermes', '', '', 'Hello')
     );
 
     expect(result.ok).toBe(true);
