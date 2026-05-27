@@ -87,24 +87,27 @@ describe('chat send controller', () => {
     expect(harness.state.composeError?.code).toBe('upload_failed');
   });
 
-  it('commits the first local draft send to the backend chat id and moves the optimistic card once', async () => {
-    const draftChat = chatSummary('draft:pma:1', { lifecycleStatus: 'draft', title: 'Draft' });
+  it('starts the first local draft send with the client-stable chat id', async () => {
+    const draftChat = chatSummary('pma:11111111-1111-4111-8111-111111111111', { lifecycleStatus: 'draft', title: 'Draft' });
     const harness = createHarness({
       activeChatId: draftChat.id,
       activeChat: draftChat,
       localDraftChat: draftChat,
       draft: 'first message'
     });
-    harness.api.pma.startChatWithMessage.mockResolvedValue(ok({ chatId: 'chat-new', id: 'turn-1', text: 'first message' }));
+    harness.api.pma.startChatWithMessage.mockResolvedValue(ok({ chatId: draftChat.id, id: 'turn-1', text: 'first message' }));
 
     await harness.controller.sendMessage();
 
     expect(harness.api.pma.startChatWithMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ message: 'first message', client_turn_id: 'optimistic:user:1778932800000:turn' })
+      expect.objectContaining({
+        managed_thread_id: draftChat.id,
+        message: 'first message',
+        client_turn_id: 'optimistic:user:1778932800000:turn'
+      })
     );
-    expect(harness.state.session.activeChatId).toBe('chat-new');
-    expect(harness.transcriptIds(draftChat.id)).toEqual([]);
-    expect(harness.transcriptIds('chat-new')).toEqual(['optimistic:user:1778932800000:turn']);
+    expect(harness.state.session.activeChatId).toBe(draftChat.id);
+    expect(harness.transcriptIds(draftChat.id)).toEqual(['optimistic:user:1778932800000:turn']);
   });
 
   it('cancels a queued turn and refreshes the queue', async () => {
@@ -221,8 +224,7 @@ function createHarness(options: {
       state.activeChatId = next.activeChatId ?? state.activeChatId;
     },
     getLocalDraftChat: () => state.localDraftChat,
-    syncDetailUrl: vi.fn(async () => {}),
-    invalidateChatMutation: vi.fn(async () => {}),
+        invalidateChatMutation: vi.fn(async () => {}),
     refreshActive,
     setSending: (value) => {
       state.sending = value;

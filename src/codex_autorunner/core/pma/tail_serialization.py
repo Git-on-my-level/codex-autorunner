@@ -621,10 +621,8 @@ def _merge_activity_events(
     merged["progress_event_ids"] = list(
         dict.fromkeys([*_event_source_ids(previous), *_event_source_ids(current)])
     )
-    merged["coalesced_event_count"] = int(
-        previous.get("coalesced_event_count") or len(_event_source_ids(previous)) or 1
-    ) + int(
-        current.get("coalesced_event_count") or len(_event_source_ids(current)) or 1
+    merged["coalesced_event_count"] = (
+        int(previous.get("coalesced_event_count") or 1) + 1
     )
     return merged
 
@@ -667,9 +665,7 @@ def build_live_activity_projection(
             coalesced_events[-1] = _merge_activity_events(coalesced_events[-1], event)
             continue
         copied = dict(event)
-        copied["coalesced_event_count"] = int(
-            copied.get("coalesced_event_count") or len(_event_source_ids(copied)) or 1
-        )
+        copied["coalesced_event_count"] = 1
         coalesced_events.append(copied)
 
     bounded_events = coalesced_events[-max(1, int(event_window)) :]

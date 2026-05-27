@@ -630,6 +630,7 @@ class HubSharedStateService:
         created = self._thread_store.create_thread(
             agent=request.agent_id,
             workspace_root=Path(request.workspace_root),
+            managed_thread_id=request.thread_target_id,
             repo_id=request.repo_id,
             resource_kind=request.resource_kind,
             resource_id=request.resource_id,

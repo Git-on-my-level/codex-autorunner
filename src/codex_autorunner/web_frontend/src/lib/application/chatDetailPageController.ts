@@ -12,14 +12,13 @@ import {
   type ReadModelLoaderResult
 } from '$lib/data';
 import {
-  activateChatDetailFromUrl,
+  activateChatDetail,
   activateRequestedChatFromRows,
   archivedFilterForSelectedChat,
   clearCommittedDraftPlaceholderIfPersisted,
   initialChatDetailSessionState,
   loadPinnedChats,
   replacementForArchivedActiveChat,
-  requestedChatDetailFromUrl,
   selectChatDetail,
   type ChatDetailSelectionCommand,
   type ChatDetailSessionState,
@@ -90,7 +89,7 @@ type ControllerTimers = {
 };
 
 export type ChatDetailPageControllerDeps = {
-  readModelStore: ReadModelEntityStore;
+  readModelStore: ReadModelEntityStore & { setActiveChatId: (chatId: string | null) => void };
   chatIndexSession: ChatDetailPageIndexSession;
   liveProjection: ChatDetailPageLiveProjection;
   supportApi: ChatDetailPageSupportApi;
@@ -161,11 +160,10 @@ export class ChatDetailPageController {
 
   setRoute(route: ChatDetailPageRoute): void {
     this.route = route;
-    const command = activateChatDetailFromUrl(this.readSession(), {
+    const command = activateChatDetail(this.readSession(), {
       detailId: this.requestedDetailFromUrl(),
       chats: this.requestedDetailFromUrl() ? this.currentChats() : [],
-      hasCachedDetail: (chatId) => this.hasCachedDetail(chatId),
-      activeDetailLoadResult: (chatId) => this.activeDetailLoadResult(chatId)
+      hasCachedDetail: (chatId) => this.hasCachedDetail(chatId)
     });
     this.applySelectionCommand(command);
   }
@@ -192,11 +190,8 @@ export class ChatDetailPageController {
 
   async selectChat(chatId: string, options: { syncUrl?: boolean } = {}): Promise<ChatDetailSelectionCommand> {
     const cached = this.hasCachedDetail(chatId);
-    const loaderResult = this.activeDetailLoadResult(chatId);
     const command = selectChatDetail(this.readSession(), chatId, {
       cached,
-      loaderOwnsInitialDetail: Boolean(loaderResult && loaderResult.status !== 'cold'),
-      activeError: loaderResult?.status === 'error' ? loaderResult.error : null,
       syncUrl: options.syncUrl ?? false
     });
     this.applySelectionCommand(command);
@@ -208,7 +203,7 @@ export class ChatDetailPageController {
   }
 
   retryStream(chatId: string | null): void {
-    if (!chatId || chatId.startsWith('draft:pma:')) return;
+    if (!chatId) return;
     this.deps.liveProjection.retry(chatId);
   }
 
@@ -274,6 +269,7 @@ export class ChatDetailPageController {
 
   private applySelectionCommand(command: ChatDetailSelectionCommand): void {
     if (command.runtime) void this.deps.liveProjection.activate(command.runtime.chatId, { quiet: command.runtime.quiet });
+    this.deps.readModelStore.setActiveChatId(command.state.activeChatId);
     this.writeSession(command.state);
     if (command.syncSelectors) this.deps.onSyncSelectors();
     if (command.markRead) this.deps.onMarkRead();
@@ -302,15 +298,7 @@ export class ChatDetailPageController {
   }
 
   private requestedDetailFromUrl(): string | null {
-    const route = this.route;
-    if (!route) return null;
-    return requestedChatDetailFromUrl(route.chatId, route.searchParams);
-  }
-
-  private activeDetailLoadResult(chatId: string): ReadModelLoaderResult | null {
-    const data = this.route?.data;
-    if (data?.chatId !== chatId) return null;
-    return data.activeDetail ?? null;
+    return this.route?.chatId?.trim() || null;
   }
 
   private hasCachedDetail(chatId: string): boolean {

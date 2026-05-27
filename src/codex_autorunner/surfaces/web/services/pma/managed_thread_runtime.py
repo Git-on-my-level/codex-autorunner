@@ -165,6 +165,7 @@ async def _create_managed_thread_for_first_message(
                 thread = service.create_thread_target(
                     resolved.agent_id,
                     provisioned_workspace.workspace_root,
+                    thread_target_id=normalize_optional_text(payload.managed_thread_id),
                     scope=resolved.scope,
                     display_name=normalize_optional_text(payload.name),
                     metadata=metadata,
@@ -173,6 +174,7 @@ async def _create_managed_thread_for_first_message(
                 thread = service.create_thread_target(
                     resolved.agent_id,
                     provisioned_workspace.workspace_root,
+                    thread_target_id=normalize_optional_text(payload.managed_thread_id),
                     repo_id=resolved.repo_id,
                     resource_kind=resolved.resource_kind,
                     resource_id=resolved.resource_id,

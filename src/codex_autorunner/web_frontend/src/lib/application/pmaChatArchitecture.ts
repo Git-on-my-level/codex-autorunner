@@ -6,7 +6,6 @@ import {
   type ChatTranscriptCard,
   type PmaStatusBar
 } from '$lib/viewModels/pmaChat';
-import { isLocalDraftChatId } from './chatDetailSession';
 import type { ChatDetailStreamState } from './chatDetailLiveProjection';
 
 type MessageTranscriptCard = Extract<ChatTranscriptCard, { kind: 'message' }>;
@@ -351,7 +350,6 @@ function shouldQueueComposerDraft(
 ): boolean {
   return Boolean(
     activeChat &&
-      !isLocalDraftChatId(activeChat.id) &&
       (progress?.status === 'running' || queuedTurns.length > 0)
   );
 }

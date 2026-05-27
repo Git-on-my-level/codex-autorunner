@@ -384,6 +384,7 @@ def test_remote_execution_store_delegates_to_hub_client_for_thread_and_execution
     assert create_thread_request.to_dict() == {
         "agent_id": "codex",
         "workspace_root": "/tmp/workspace",
+        "thread_target_id": None,
         "repo_id": "repo-1",
         "resource_kind": "repo",
         "resource_id": "repo-1",

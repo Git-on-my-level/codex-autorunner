@@ -4,7 +4,7 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -16,7 +16,6 @@ from .....core.orchestration.managed_thread_timeline import (
 )
 from .....core.orchestration.managed_thread_transcript import (
     build_managed_thread_transcript,
-    transcript_row_from_tail_event,
 )
 from .....core.orchestration.progress_projection import ProgressProjectionState
 from .....core.orchestration.runtime_thread_events import (
@@ -49,29 +48,6 @@ from .managed_threads import (
 _PERSISTED_TAIL_POLL_SECONDS = 1.0
 _PERSISTED_TAIL_HEARTBEAT_SECONDS = 15.0
 _TRANSCRIPT_STREAM_LIMIT = 200
-_TRANSCRIPT_APPEND_ROW_LIMIT = 80
-
-
-def _transcript_append_frames(
-    rows: list[dict[str, Any]],
-    append_event_id: int,
-    *,
-    chunk_limit: int = _TRANSCRIPT_APPEND_ROW_LIMIT,
-) -> Iterator[str]:
-    if not rows:
-        return
-    effective_limit = max(1, chunk_limit)
-    for offset in range(0, len(rows), effective_limit):
-        chunk = rows[offset : offset + effective_limit]
-        is_final_chunk = offset + effective_limit >= len(rows)
-        append_id_line = (
-            f"id: {append_event_id}\n" if is_final_chunk and append_event_id > 0 else ""
-        )
-        yield (
-            "event: transcript.append\n"
-            f"{append_id_line}"
-            f"data: {json.dumps({'rows': chunk}, ensure_ascii=True)}\n\n"
-        )
 
 
 def parse_tail_duration_seconds(value: Optional[str]) -> Optional[int]:
@@ -669,6 +645,12 @@ def _progress_stream_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
     sse_close, sse_close_reason = _sse_stream_should_terminate(snapshot)
     lifecycle_fields["stream_should_close"] = sse_close
     lifecycle_fields["stream_close_reason"] = sse_close_reason
+    live_activity = snapshot.get("live_activity")
+    live_events = []
+    if isinstance(live_activity, dict):
+        raw_events = live_activity.get("events")
+        if isinstance(raw_events, list):
+            live_events = [event for event in raw_events if isinstance(event, dict)]
     return {
         "managed_thread_id": snapshot.get("managed_thread_id"),
         "managed_turn_id": snapshot.get("managed_turn_id"),
@@ -676,12 +658,16 @@ def _progress_stream_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
         "started_at": snapshot.get("started_at"),
         "elapsed_seconds": snapshot.get("elapsed_seconds"),
         "idle_seconds": snapshot.get("idle_seconds"),
+        "last_event_id": snapshot.get("last_event_id"),
+        "last_event_at": snapshot.get("last_event_at"),
+        "last_activity_at": snapshot.get("last_activity_at"),
         "phase": snapshot.get("phase"),
         "phase_source": snapshot.get("phase_source"),
         "guidance": snapshot.get("guidance"),
         "last_tool": snapshot.get("last_tool"),
-        "live_activity": snapshot.get("live_activity"),
+        "live_activity": live_activity,
         "active_turn_diagnostics": snapshot.get("active_turn_diagnostics"),
+        "events": live_events,
         **lifecycle_fields,
     }
 
@@ -762,13 +748,14 @@ async def _build_managed_thread_transcript_snapshot(
         runtime_projection_state=runtime_projection_state,
     )
     _apply_sse_lifetime_to_snapshot(progress_snapshot)
+    compact_progress = _progress_stream_payload(progress_snapshot)
     return await asyncio.to_thread(
         build_managed_thread_transcript,
         context.hub_root,
         thread_store=context.thread_store(),
         managed_thread_id=managed_thread_id,
         limit=min(limit, _TRANSCRIPT_STREAM_LIMIT),
-        progress_snapshot=progress_snapshot,
+        progress_snapshot=compact_progress,
     )
 
 
@@ -971,23 +958,6 @@ def build_managed_thread_tail_routes(
                     runtime_projection_state=runtime_projection_state,
                 )
                 _apply_sse_lifetime_to_snapshot(refreshed)
-                rows: list[dict[str, Any]] = []
-                for event in refreshed.get("events", []):
-                    if not isinstance(event, dict):
-                        continue
-                    rows.extend(
-                        transcript_row_from_tail_event(
-                            managed_thread_id=managed_thread_id,
-                            managed_turn_id=str(refreshed.get("managed_turn_id") or ""),
-                            tail_event=event,
-                        )
-                    )
-                if rows:
-                    append_event_id = int(
-                        refreshed.get("last_event_id") or last_event_id
-                    )
-                    for frame in _transcript_append_frames(rows, append_event_id):
-                        yield frame
                 last_event_id = int(refreshed.get("last_event_id") or last_event_id)
                 last_managed_turn_id = normalize_optional_text(
                     refreshed.get("managed_turn_id")

@@ -13,7 +13,12 @@ from codex_autorunner.agents.opencode.runtime import (
     OpenCodeTurnOutput,
     extract_session_id,
 )
-from codex_autorunner.core.ports.run_event import Completed, OutputDelta, TokenUsage
+from codex_autorunner.core.ports.run_event import (
+    Completed,
+    Failed,
+    OutputDelta,
+    TokenUsage,
+)
 from codex_autorunner.core.sse import SSEEvent
 
 
@@ -227,6 +232,36 @@ async def test_opencode_backend_passes_first_event_timeout_to_collector(
         isinstance(event, Completed) and event.final_message == "ok"
         for event in run_events
     )
+
+
+@pytest.mark.anyio
+async def test_opencode_backend_failed_output_takes_precedence_over_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_collect(client, **kwargs):
+        _ = client
+        ready_event = kwargs.get("ready_event")
+        if ready_event is not None:
+            ready_event.set()
+        return OpenCodeTurnOutput(text="partial", error="boom")
+
+    monkeypatch.setattr(
+        opencode_backend_module,
+        "collect_opencode_output",
+        _fake_collect,
+    )
+
+    backend = OpenCodeBackend(workspace_root=tmp_path, supervisor=None)
+    backend._client = _FakeOpenCodeClient([])  # type: ignore
+
+    run_events = [event async for event in backend.run_turn_events("s-error", "Ping")]
+
+    assert any(
+        isinstance(event, Failed) and event.error_message == "boom"
+        for event in run_events
+    )
+    assert not any(isinstance(event, Completed) for event in run_events)
 
 
 @pytest.mark.anyio

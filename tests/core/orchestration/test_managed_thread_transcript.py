@@ -67,7 +67,7 @@ def test_transcript_projects_legacy_injected_prompt_as_model_context() -> None:
     assert row["message"]["model_context_text"] == "repo guidance"
 
 
-def test_transcript_hides_internal_lifecycle_notices() -> None:
+def test_transcript_omits_intermediate_progress_rows() -> None:
     rows = transcript_rows_from_timeline_items(
         [
             _intermediate_item(
@@ -105,9 +105,7 @@ def test_transcript_hides_internal_lifecycle_notices() -> None:
         ]
     )
 
-    assert len(rows) == 1
-    assert rows[0]["kind"] == "intermediate"
-    assert rows[0]["text"] == "Reading files"
+    assert rows == []
 
 
 def test_transcript_projects_context_compaction_card() -> None:

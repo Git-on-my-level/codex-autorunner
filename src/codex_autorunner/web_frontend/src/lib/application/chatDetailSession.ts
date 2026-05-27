@@ -1,8 +1,6 @@
 import type { ApiError } from '$lib/api/client';
-import type { ReadModelLoaderResult } from '$lib/data';
 import type { PmaChatSummary } from '$lib/viewModels/domain';
 import {
-  committedDraftChatPlaceholder,
   isLocalChatPlaceholder,
   isPmaChatArchived,
   pmaChatBindingKey,
@@ -27,8 +25,6 @@ export type ChatDetailSessionState = {
   activeChatId: string | null;
   detailMode: ChatDetailMode;
   localDraftChat: PmaChatSummary | null;
-  committedDraftChat: PmaChatSummary | null;
-  pendingCommittedDetailUrlChatId: string | null;
   loadingActive: boolean;
   activeError: ApiError | null;
 };
@@ -45,7 +41,6 @@ export type ChatDetailActivationInput = {
   detailId: string | null;
   chats: PmaChatSummary[];
   hasCachedDetail: (chatId: string) => boolean;
-  activeDetailLoadResult: (chatId: string) => ReadModelLoaderResult | null;
 };
 
 export type ChatDetailRequestedRowsInput = {
@@ -67,52 +62,27 @@ export function initialChatDetailSessionState(): ChatDetailSessionState {
     activeChatId: null,
     detailMode: 'list',
     localDraftChat: null,
-    committedDraftChat: null,
-    pendingCommittedDetailUrlChatId: null,
     loadingActive: false,
     activeError: null
   };
 }
 
-export function isLocalDraftChatId(chatId: string | null): boolean {
-  return Boolean(chatId && chatId.startsWith('draft:pma:'));
-}
-
 export function chatSummaryForSessionId(
   chatId: string | null,
   chats: PmaChatSummary[],
-  localDraftChat: PmaChatSummary | null,
-  committedDraftChat: PmaChatSummary | null = null
+  localDraftChat: PmaChatSummary | null
 ): PmaChatSummary | null {
   if (!chatId) return null;
   if (localDraftChat?.id === chatId) return localDraftChat;
-  return (
-    chats.find((chat) => chat.id === chatId) ??
-    (committedDraftChat?.id === chatId ? committedDraftChat : null)
-  );
+  return chats.find((chat) => chat.id === chatId) ?? null;
 }
 
 export const CHAT_DETAIL_TRANSIENT_QUERY_KEYS = ['chat', 'detail', 'draft', 'new', 'kind'] as const;
-
-export function legacyChatDetailFromSearchParams(
-  searchParams: Pick<URLSearchParams, 'get'> | null | undefined
-): string | null {
-  const detail = searchParams?.get('detail')?.trim();
-  if (detail?.startsWith('chat:')) return detail.slice('chat:'.length).trim() || null;
-  return searchParams?.get('chat')?.trim() || null;
-}
 
 export function canonicalChatDetailSearchParams(searchParams: URLSearchParams): URLSearchParams {
   const next = new URLSearchParams(searchParams);
   for (const key of CHAT_DETAIL_TRANSIENT_QUERY_KEYS) next.delete(key);
   return next;
-}
-
-export function requestedChatDetailFromUrl(
-  routeChatId: string | null | undefined,
-  searchParams?: Pick<URLSearchParams, 'get'> | null
-): string | null {
-  return routeChatId?.trim() || legacyChatDetailFromSearchParams(searchParams);
 }
 
 export function selectChatDetail(
@@ -125,9 +95,7 @@ export function selectChatDetail(
   return {
     state: {
       ...state,
-      localDraftChat: isLocalDraftChatId(chatId) ? state.localDraftChat : null,
-      committedDraftChat: state.committedDraftChat?.id === chatId ? state.committedDraftChat : null,
-      pendingCommittedDetailUrlChatId: null,
+      localDraftChat: state.localDraftChat?.id === chatId ? state.localDraftChat : null,
       activeChatId: chatId,
       detailMode: 'detail',
       loadingActive: activeError ? false : !(options.cached || loaderOwnsInitialDetail),
@@ -140,16 +108,12 @@ export function selectChatDetail(
   };
 }
 
-export function activateChatDetailFromUrl(
+export function activateChatDetail(
   state: ChatDetailSessionState,
   input: ChatDetailActivationInput
 ): ChatDetailSelectionCommand {
   const { detailId } = input;
   if (!detailId) {
-    if (isLocalDraftChatId(state.activeChatId)) return noDetailCommand(state);
-    if (state.pendingCommittedDetailUrlChatId && state.activeChatId === state.pendingCommittedDetailUrlChatId) {
-      return noDetailCommand(state);
-    }
     if (state.activeChatId === null) return noDetailCommand(state);
     return {
       state: {
@@ -165,40 +129,27 @@ export function activateChatDetailFromUrl(
       syncSelectors: false
     };
   }
-  if (detailId === state.activeChatId && state.pendingCommittedDetailUrlChatId === detailId) {
-    return noDetailCommand({
-      ...state,
-      pendingCommittedDetailUrlChatId: null
-    });
-  }
   if (detailId === state.activeChatId) return noDetailCommand(state);
-  if (isLocalDraftChatId(state.activeChatId)) return noDetailCommand(state);
   if (state.localDraftChat && detailId === state.localDraftChat.id) {
     return selectChatDetail(state, detailId, { cached: input.hasCachedDetail(detailId), syncUrl: false });
   }
   if (!input.chats.some((chat) => chat.id === detailId)) {
-    const loaderResult = input.activeDetailLoadResult(detailId);
-    const activeError = loaderResult?.status === 'error' ? loaderResult.error : null;
     return {
       state: {
         ...state,
-        committedDraftChat: state.committedDraftChat?.id === detailId ? state.committedDraftChat : null,
-        pendingCommittedDetailUrlChatId: null,
         activeChatId: detailId,
         detailMode: 'detail',
-        loadingActive: !activeError,
-        activeError
+        loadingActive: true,
+        activeError: null
       },
-      runtime: activeError ? { chatId: null, quiet: true } : { chatId: detailId, quiet: false },
+      runtime: { chatId: detailId, quiet: false },
       syncUrl: false,
       markRead: false,
       syncSelectors: false
     };
   }
-  const loaderResult = input.activeDetailLoadResult(detailId);
   return selectChatDetail(state, detailId, {
     cached: input.hasCachedDetail(detailId),
-    loaderOwnsInitialDetail: Boolean(loaderResult && loaderResult.status !== 'cold'),
     syncUrl: false
   });
 }
@@ -207,7 +158,6 @@ export function activateRequestedChatFromRows(
   state: ChatDetailSessionState,
   input: ChatDetailRequestedRowsInput
 ): ChatDetailSelectionCommand {
-  if (isLocalDraftChatId(state.activeChatId)) return noDetailCommand(state);
   if (input.requestedChatId && !input.loadedChats.some((chat) => chat.id === input.requestedChatId)) {
     return noDetailCommand(state);
   }
@@ -255,9 +205,9 @@ export function clearCommittedDraftPlaceholderIfPersisted(
   state: ChatDetailSessionState,
   persistedChats: PmaChatSummary[]
 ): ChatDetailSessionState {
-  if (!state.committedDraftChat) return state;
-  return persistedChats.some((chat) => chat.id === state.committedDraftChat?.id)
-    ? { ...state, committedDraftChat: null }
+  if (!state.localDraftChat) return state;
+  return persistedChats.some((chat) => chat.id === state.localDraftChat?.id)
+    ? { ...state, localDraftChat: null }
     : state;
 }
 
@@ -268,27 +218,7 @@ export function startLocalDraftChat(
   return {
     ...state,
     localDraftChat: draftChat,
-    committedDraftChat: null,
-    pendingCommittedDetailUrlChatId: null,
     activeChatId: draftChat.id,
-    detailMode: 'detail',
-    loadingActive: false,
-    activeError: null
-  };
-}
-
-export function commitLocalDraftChat(
-  state: ChatDetailSessionState,
-  draftChat: PmaChatSummary | null,
-  committedChatId: string,
-  updatedAt?: string
-): ChatDetailSessionState {
-  return {
-    ...state,
-    localDraftChat: null,
-    committedDraftChat: draftChat ? committedDraftChatPlaceholder(draftChat, committedChatId, updatedAt) : null,
-    pendingCommittedDetailUrlChatId: committedChatId,
-    activeChatId: committedChatId,
     detailMode: 'detail',
     loadingActive: false,
     activeError: null

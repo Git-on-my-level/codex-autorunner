@@ -334,6 +334,7 @@ export type PmaStatusBar = {
 };
 
 export type ManagedThreadCreatePayload = {
+  managed_thread_id?: string;
   agent?: string;
   chat_kind?: PmaChatKind;
   model?: string;
@@ -639,28 +640,6 @@ export function reconcileChatSurfaceSnapshot(
     (chat) => chat.id !== activeChatId && pmaChatBindingKey(chat) === priorBinding && !isPmaChatArchived(chat)
   );
   return { chats: nextChats, replacementChatId: replacement?.id ?? null };
-}
-
-export function committedDraftChatPlaceholder(
-  draftChat: PmaChatSummary,
-  committedChatId: string,
-  updatedAt = new Date().toISOString()
-): PmaChatSummary {
-  return {
-    ...draftChat,
-    id: committedChatId,
-    lifecycleStatus: 'active',
-    status: 'running',
-    updatedAt,
-    raw: {
-      ...draftChat.raw,
-      draft: false,
-      draft_committed_placeholder: true,
-      previous_draft_id: draftChat.id,
-      id: committedChatId,
-      managed_thread_id: committedChatId
-    }
-  };
 }
 
 export function isLocalChatPlaceholder(chat: PmaChatSummary): boolean {
@@ -2519,7 +2498,8 @@ export function buildManagedThreadCreatePayload(
   name = 'New chat',
   model = '',
   profile = '',
-  chatKind: PmaChatKind = 'pma'
+  chatKind: PmaChatKind = 'pma',
+  managedThreadId: string | null = null
 ): ManagedThreadCreatePayload {
   const base: Pick<ManagedThreadCreatePayload, 'agent' | 'name' | 'model'> = {
     agent: agent || undefined,
@@ -2529,6 +2509,7 @@ export function buildManagedThreadCreatePayload(
   const trimmedProfile = profile.trim();
   return {
     ...base,
+    ...(managedThreadId?.trim() ? { managed_thread_id: managedThreadId.trim() } : {}),
     chat_kind: chatKind,
     ...(trimmedProfile ? { profile: trimmedProfile } : {}),
     scope_urn: scope.scopeUrn
@@ -2828,6 +2809,7 @@ export function buildManagedThreadMessagePayload(
 }
 
 export function buildManagedThreadStartMessagePayload(
+  managedThreadId: string,
   scope: PmaChatScopeOption,
   agent: string,
   profile: string,
@@ -2841,7 +2823,7 @@ export function buildManagedThreadStartMessagePayload(
   scopeSource: PmaChatScopeSource = 'default_hub'
 ): ManagedThreadStartMessagePayload {
   return {
-    ...buildManagedThreadCreatePayload(agent, scope, name, model, profile, chatKind),
+    ...buildManagedThreadCreatePayload(agent, scope, name, model, profile, chatKind, managedThreadId),
     origin: 'web',
     scope_source: scopeSource,
     ...buildManagedThreadMessagePayload(

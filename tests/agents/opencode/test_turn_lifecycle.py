@@ -134,6 +134,25 @@ def test_lifecycle_snapshot_recovery_is_explicit() -> None:
     assert result.output_source == "messages_snapshot"
 
 
+def test_lifecycle_failed_observation_does_not_preserve_assistant_text() -> None:
+    result = lifecycle_result_from_observation(
+        OpenCodeTurnObservation(
+            assistant_text="partial text",
+            error="boom",
+            output_source="event_stream",
+            terminal_signal="session.error",
+        ),
+        raw_events=[],
+        command_completed=True,
+        command_accepted_before_terminal=True,
+        collector_completed=True,
+    )
+
+    assert result.state == OpenCodeTurnLifecycleState.FAILED
+    assert result.assistant_text == ""
+    assert result.error == "boom"
+
+
 @pytest.mark.asyncio
 async def test_lifecycle_marks_command_completed_when_failure_follows_collect() -> None:
     async def _command() -> None:

@@ -1,13 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { ApiError } from '$lib/api/client';
 import type { PmaChatSummary } from '$lib/viewModels/domain';
 import type { ChatListEntry } from '$lib/viewModels/pmaChat';
 import {
-  activateChatDetailFromUrl,
+  activateChatDetail,
   activateRequestedChatFromRows,
   chatSummaryForSessionId,
   clearCommittedDraftPlaceholderIfPersisted,
-  commitLocalDraftChat,
   initialChatDetailSessionState,
   loadPinnedChats,
   markSessionChatRead,
@@ -16,26 +14,17 @@ import {
   savePinnedChats,
   sortEntriesForPinnedChats,
   startLocalDraftChat,
-  requestedChatDetailFromUrl,
   togglePinnedChatId
 } from './chatDetailSession';
 
 const now = '2026-05-16T12:00:00.000Z';
 
 describe('chat detail session', () => {
-  it('resolves canonical route ids and legacy query ids for clean migration', () => {
-    expect(requestedChatDetailFromUrl('chat-1', new URLSearchParams('chat=old'))).toBe('chat-1');
-    expect(requestedChatDetailFromUrl(null, new URLSearchParams('chat=chat-2'))).toBe('chat-2');
-    expect(requestedChatDetailFromUrl(null, new URLSearchParams('detail=chat%3Achat-3'))).toBe('chat-3');
-    expect(requestedChatDetailFromUrl(null, new URLSearchParams('detail=repo%3Arepo-1'))).toBeNull();
-  });
-
   it('activates a deep-linked chat before the chat index has loaded', () => {
-    const command = activateChatDetailFromUrl(initialChatDetailSessionState(), {
+    const command = activateChatDetail(initialChatDetailSessionState(), {
       detailId: 'deep-linked-chat',
       chats: [],
-      hasCachedDetail: () => false,
-      activeDetailLoadResult: () => ({ status: 'cold', tags: [] })
+      hasCachedDetail: () => false
     });
 
     expect(command.state).toMatchObject({
@@ -46,20 +35,6 @@ describe('chat detail session', () => {
     });
     expect(command.runtime).toEqual({ chatId: 'deep-linked-chat', quiet: false });
     expect(command.markRead).toBe(false);
-  });
-
-  it('surfaces route-loader errors during deep-link activation', () => {
-    const error: ApiError = { kind: 'http', status: 404, code: 'missing', message: 'missing' };
-    const command = activateChatDetailFromUrl(initialChatDetailSessionState(), {
-      detailId: 'missing-chat',
-      chats: [],
-      hasCachedDetail: () => false,
-      activeDetailLoadResult: () => ({ status: 'error', tags: [], error })
-    });
-
-    expect(command.state.loadingActive).toBe(false);
-    expect(command.state.activeError).toBe(error);
-    expect(command.runtime).toEqual({ chatId: null, quiet: true });
   });
 
   it('does not replace a deep-linked chat with the first loaded row while the requested row is absent', () => {
@@ -93,99 +68,19 @@ describe('chat detail session', () => {
     expect(replacementForArchivedActiveChat(previous, next, 'active')).toBe('replacement');
   });
 
-  it('keeps a committed draft placeholder until the backend chat appears', () => {
+  it('resolves a client-minted draft chat while the active chat window is stale', () => {
     const draft = chat({
-      id: 'draft:pma:1',
+      id: 'pma:11111111-1111-4111-8111-111111111111',
       title: 'New chat',
       lifecycleStatus: 'draft',
       raw: { draft: true }
     });
     const started = startLocalDraftChat(initialChatDetailSessionState(), draft);
-    const committed = commitLocalDraftChat(started, draft, 'managed-thread-1', now);
 
-    expect(committed).toMatchObject({
-      activeChatId: 'managed-thread-1',
-      pendingCommittedDetailUrlChatId: 'managed-thread-1',
-      localDraftChat: null
+    expect(chatSummaryForSessionId('pma:11111111-1111-4111-8111-111111111111', [], started.localDraftChat)).toMatchObject({
+      id: 'pma:11111111-1111-4111-8111-111111111111',
+      title: 'New chat'
     });
-    expect(committed.committedDraftChat).toMatchObject({
-      id: 'managed-thread-1',
-      lifecycleStatus: 'active',
-      raw: {
-        draft_committed_placeholder: true,
-        previous_draft_id: 'draft:pma:1',
-        managed_thread_id: 'managed-thread-1'
-      }
-    });
-    expect(clearCommittedDraftPlaceholderIfPersisted(committed, [chat({ id: 'other' })]).committedDraftChat?.id).toBe(
-      'managed-thread-1'
-    );
-    expect(clearCommittedDraftPlaceholderIfPersisted(committed, [chat({ id: 'managed-thread-1' })]).committedDraftChat).toBeNull();
-  });
-
-  it('resolves a committed draft placeholder even when the active chat window is stale', () => {
-    const draft = chat({
-      id: 'draft:pma:1',
-      title: 'New chat',
-      lifecycleStatus: 'draft',
-      raw: { draft: true }
-    });
-    const committed = commitLocalDraftChat(
-      startLocalDraftChat(initialChatDetailSessionState(), draft),
-      draft,
-      'managed-thread-1',
-      now
-    );
-
-    expect(chatSummaryForSessionId('managed-thread-1', [], null, committed.committedDraftChat)).toMatchObject({
-      id: 'managed-thread-1',
-      title: 'New chat',
-      raw: {
-        draft_committed_placeholder: true,
-        managed_thread_id: 'managed-thread-1'
-      }
-    });
-  });
-
-  it('keeps a committed draft selected while the detail URL is still catching up', () => {
-    const state = {
-      ...initialChatDetailSessionState(),
-      activeChatId: 'managed-thread-1',
-      detailMode: 'detail' as const,
-      pendingCommittedDetailUrlChatId: 'managed-thread-1'
-    };
-
-    const command = activateChatDetailFromUrl(state, {
-      detailId: null,
-      chats: [chat({ id: 'other' })],
-      hasCachedDetail: () => false,
-      activeDetailLoadResult: () => null
-    });
-
-    expect(command.state.activeChatId).toBe('managed-thread-1');
-    expect(command.state.detailMode).toBe('detail');
-    expect(command.state.pendingCommittedDetailUrlChatId).toBe('managed-thread-1');
-    expect(command.runtime).toBeNull();
-  });
-
-  it('clears the committed draft URL guard once the committed detail route is visible', () => {
-    const state = {
-      ...initialChatDetailSessionState(),
-      activeChatId: 'managed-thread-1',
-      detailMode: 'detail' as const,
-      pendingCommittedDetailUrlChatId: 'managed-thread-1'
-    };
-
-    const command = activateChatDetailFromUrl(state, {
-      detailId: 'managed-thread-1',
-      chats: [chat({ id: 'managed-thread-1' })],
-      hasCachedDetail: () => true,
-      activeDetailLoadResult: () => ({ status: 'cache-hit', tags: [] })
-    });
-
-    expect(command.state.activeChatId).toBe('managed-thread-1');
-    expect(command.state.pendingCommittedDetailUrlChatId).toBeNull();
-    expect(command.runtime).toBeNull();
   });
 
   it('persists read markers through an injected adapter', () => {

@@ -135,7 +135,7 @@ def lifecycle_result_from_observation(
 
     return OpenCodeTurnLifecycleResult(
         state=state,
-        assistant_text=observation.assistant_text,
+        assistant_text="" if observation.error else observation.assistant_text,
         terminal_signal=terminal_signal,
         output_source=observation.output_source,
         command_completed=command_completed,

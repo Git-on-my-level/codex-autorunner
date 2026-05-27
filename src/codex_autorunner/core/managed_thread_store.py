@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import uuid
 from contextlib import contextmanager
 from dataclasses import replace
@@ -106,6 +107,9 @@ from .time_utils import now_iso
 
 _BACKEND_RUNTIME_INSTANCE_ID_KEY = "backend_runtime_instance_id"
 _RUNTIME_STARTED_AT_KEY = "runtime_started_at"
+_CLIENT_MANAGED_THREAD_ID_PATTERN = re.compile(
+    r"^(?:pma:)?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 
 
 class ManagedThreadAlreadyHasRunningTurnError(RuntimeError):
@@ -650,6 +654,7 @@ class ManagedThreadStore:
         agent: str | AgentRef,
         workspace_root: Optional[Path] = None,
         *,
+        managed_thread_id: Optional[str] = None,
         scope: Optional[ScopeRef] = None,
         surface: Optional[SurfaceRef] = None,
         backend_binding: Optional[BackendBinding] = None,
@@ -660,7 +665,11 @@ class ManagedThreadStore:
         backend_thread_id: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
-        managed_thread_id = str(uuid.uuid4())
+        managed_thread_id = _coerce_text(managed_thread_id) or str(uuid.uuid4())
+        if not _CLIENT_MANAGED_THREAD_ID_PATTERN.fullmatch(managed_thread_id):
+            raise ValueError("managed_thread_id must be a UUID or pma:<UUID>")
+        if self.get_thread(managed_thread_id) is not None:
+            raise ValueError(f"Managed thread '{managed_thread_id}' already exists")
         now = now_iso()
         resolved_agent = agent.agent_id if isinstance(agent, AgentRef) else agent
         incoming_metadata = dict(metadata or {})

@@ -9,7 +9,7 @@ import {
   type TicketDetailSnapshot
 } from '$lib/api/readModelContracts';
 import type { ApiError, ApiResult } from '$lib/api/client';
-import { CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST, ReadModelEntityStore, selectChatDetailView } from '$lib/data/readModelStore';
+import { CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST, ReadModelEntityStore } from '$lib/data/readModelStore';
 import type { ReadModelSnapshotClient } from '$lib/data/readModelClients';
 import { importRouteLoader } from '$lib/test/importRouteLoader';
 
@@ -49,34 +49,14 @@ describe('/chats route load', () => {
     expect(client.chatIndex).not.toHaveBeenCalled();
   });
 
-  it('registers the chat index and active chat entity dependencies', async () => {
-    const store = new ReadModelEntityStore();
-    store.applyChatDetailSnapshot(chatDetailSnapshot('chat-1'));
+  it('registers only chat index dependencies', async () => {
     const depends = vi.fn();
     const { loadChatRoute } = await importPageLoad(true);
 
-    await loadChatRoute({ chatId: 'chat-1', depends, loaderOptions: { store, client: mockClient() } });
+    await loadChatRoute({ depends, loaderOptions: { client: mockClient() } });
 
     expect(depends).toHaveBeenCalledWith('entity:chat:index');
-    expect(depends).toHaveBeenCalledWith('entity:chat:chat-1');
-  });
-
-  it('returns a cache hit for an already hydrated active chat', async () => {
-    const store = new ReadModelEntityStore();
-    store.applyChatDetailSnapshot(chatDetailSnapshot('chat-1'));
-    const client = mockClient();
-    const { loadChatRoute } = await importPageLoad(true);
-
-    const result = await loadChatRoute({ chatId: 'chat-1', loaderOptions: { store, client } });
-
-    expect(result).toEqual({
-      chatId: 'chat-1',
-      chatIndex: { status: 'cold', tags: ['entity:chat:index'] },
-      activeDetail: { status: 'cache-hit', tags: ['entity:chat:chat-1'] }
-    });
-    expect(result.activeDetail?.status).not.toBe('cold');
-    expect(selectChatDetailView(store.snapshot(), 'chat-1').thread?.title).toBe('Chat detail');
-    expect(client.chatDetail).not.toHaveBeenCalled();
+    expect(depends).not.toHaveBeenCalledWith(expect.stringContaining('entity:chat:chat-'));
   });
 
   it('fetches a fresh deterministic chat index on repeated route loads', async () => {
@@ -103,37 +83,15 @@ describe('/chats route load', () => {
     expect(store.snapshot().chatOrder.map((id) => store.snapshot().chats[id]?.title)).toEqual(firstTitles);
   });
 
-  it('fetches and hydrates a missing active chat detail', async () => {
+  it('does not fetch active chat detail during route load', async () => {
     const store = new ReadModelEntityStore();
-    const client = mockClient({
-      chatDetail: vi.fn().mockResolvedValue(ok(chatDetailSnapshot('chat-2')))
-    });
+    const client = mockClient();
     const { loadChatRoute } = await importPageLoad(true);
 
-    const result = await loadChatRoute({ chatId: 'chat-2', loaderOptions: { store, client, blocking: true } });
+    const result = await loadChatRoute({ loaderOptions: { store, client, blocking: true } });
 
-    expect(result.chatIndex.status).toBe('fetched');
-    expect(result.activeDetail?.status).toBe('fetched');
-    expect(client.chatDetail).toHaveBeenCalledWith('chat-2', 50);
-    expect(selectChatDetailView(store.snapshot(), 'chat-2').thread?.title).toBe('Chat detail');
-  });
-
-  it('returns an error handle when active chat detail fetch fails', async () => {
-    const store = new ReadModelEntityStore();
-    const error = apiError('Snapshot unavailable');
-    const client = mockClient({
-      chatDetail: vi.fn().mockResolvedValue(fail(error))
-    });
-    const { loadChatRoute } = await importPageLoad(true);
-
-    const result = await loadChatRoute({ chatId: 'chat-1', loaderOptions: { store, client, blocking: true } });
-
-    expect(result).toEqual({
-      chatId: 'chat-1',
-      chatIndex: { status: 'fetched', tags: ['entity:chat:index'] },
-      activeDetail: { status: 'error', tags: ['entity:chat:chat-1'], error }
-    });
-    expect(selectChatDetailView(store.snapshot(), 'chat-1').thread).toBeNull();
+    expect(result.activeDetail).toBeNull();
+    expect(client.chatDetail).not.toHaveBeenCalled();
   });
 });
 

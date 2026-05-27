@@ -193,6 +193,7 @@
   }
 
   function displayCardsFor(input: ChatTranscriptCard[]): ChatTranscriptCard[] {
+    if (input.length <= 1) return input;
     const cached = displayCardCache.get(input);
     if (cached) return cached;
     const compacted = compactChatTranscriptCards(input);
