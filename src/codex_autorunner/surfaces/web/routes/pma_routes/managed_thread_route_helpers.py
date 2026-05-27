@@ -1,4 +1,9 @@
-"""Compatibility imports for managed-thread read-model projection helpers."""
+"""Temporary compatibility imports for managed-thread read-model helpers.
+
+New callers and tests should import from ``services.pma.managed_thread_read_models``.
+This module remains only to avoid breaking older route-helper import paths during
+the managed-thread service migration.
+"""
 
 from __future__ import annotations
 

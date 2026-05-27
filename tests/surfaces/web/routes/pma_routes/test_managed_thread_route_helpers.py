@@ -7,7 +7,8 @@ import pytest
 from fastapi import HTTPException
 
 from codex_autorunner.core.orchestration.models import ThreadTarget
-from codex_autorunner.surfaces.web.routes.pma_routes.managed_thread_route_helpers import (
+from codex_autorunner.surfaces.web.schemas import ManagedThreadStartMessageRequest
+from codex_autorunner.surfaces.web.services.pma.managed_thread_read_models import (
     _apply_chat_binding_fields,
     _attach_latest_execution_fields,
     _build_operator_status_fields,
@@ -16,7 +17,6 @@ from codex_autorunner.surfaces.web.routes.pma_routes.managed_thread_route_helper
     resolve_managed_thread_list_query,
     serialize_managed_thread_turn_summary,
 )
-from codex_autorunner.surfaces.web.schemas import ManagedThreadStartMessageRequest
 from codex_autorunner.surfaces.web.services.pma.managed_thread_scope import (
     _normalize_resource_owner,
     _normalize_workspace_root_input,
