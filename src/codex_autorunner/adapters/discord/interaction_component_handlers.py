@@ -400,6 +400,15 @@ async def _handle_approval_component(service: Any, ctx: Any) -> None:
     )
 
 
+async def _handle_user_input_component(service: Any, ctx: Any) -> None:
+    await service._handle_user_input_component(
+        ctx.interaction_id,
+        ctx.interaction_token,
+        custom_id=ctx.custom_id or "",
+        values=ctx.values,
+    )
+
+
 async def _handle_queue_cancel_component(service: Any, ctx: Any) -> None:
     await service._handle_queue_cancel_button(
         ctx.interaction_id,

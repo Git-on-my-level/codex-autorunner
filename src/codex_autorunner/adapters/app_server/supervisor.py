@@ -12,7 +12,12 @@ from ...core.managed_processes import reap_managed_processes
 from ...core.managed_processes.registry import list_process_records
 from ...core.supervisor_utils import evict_lru_handle_locked, pop_idle_handles_locked
 from ...workspace import canonical_workspace_root, workspace_id_for_path
-from .client import ApprovalHandler, CodexAppServerClient, NotificationHandler
+from .client import (
+    ApprovalHandler,
+    CodexAppServerClient,
+    NotificationHandler,
+    UserInputHandler,
+)
 
 EnvBuilder = Callable[[Path, str, Path], Dict[str, str]]
 _ACTIVE_TURN_DRAIN_TIMEOUT_SECONDS = 30.0
@@ -81,6 +86,7 @@ class WorkspaceAppServerSupervisor:
         state_root: Path,
         env_builder: EnvBuilder,
         approval_handler: Optional[ApprovalHandler] = None,
+        question_handler: Optional[UserInputHandler] = None,
         notification_handler: Optional[NotificationHandler] = None,
         logger: Optional[logging.Logger] = None,
         auto_restart: Optional[bool] = None,
@@ -112,6 +118,7 @@ class WorkspaceAppServerSupervisor:
         self._state_root = state_root
         self._env_builder = env_builder
         self._approval_handler = approval_handler
+        self._question_handler = question_handler
         self._notification_handler = notification_handler
         self._logger = logger or logging.getLogger(__name__)
         if auto_restart is None:
@@ -295,6 +302,7 @@ class WorkspaceAppServerSupervisor:
                 env=env,
                 workspace_id=workspace_id,
                 approval_handler=self._approval_handler,
+                question_handler=self._question_handler,
                 default_approval_decision=self._default_approval_decision,
                 auto_restart=self._auto_restart,
                 request_timeout=self._request_timeout,

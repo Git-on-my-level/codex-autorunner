@@ -14,6 +14,7 @@ from ..ports.run_event import (
     RunNotice,
     ToolCall,
     ToolResult,
+    UserInputRequested,
 )
 from ..text_utils import _truncate_text
 from .managed_thread_delivery_ledger import SQLiteManagedThreadDeliveryLedger
@@ -562,6 +563,24 @@ def _progress_item_for_entry(
             description=str(event.get("description") or ""),
             context=dict(context) if isinstance(context, dict) else {},
         )
+    elif event_type == "user_input_requested":
+        questions = event.get("questions")
+        context = event.get("context")
+        run_event = UserInputRequested(
+            timestamp=timestamp,
+            request_id=str(event.get("request_id") or ""),
+            description=str(event.get("description") or ""),
+            questions=(
+                tuple(
+                    dict(question)
+                    for question in questions
+                    if isinstance(question, dict)
+                )
+                if isinstance(questions, list)
+                else ()
+            ),
+            context=dict(context) if isinstance(context, dict) else {},
+        )
     if run_event is None:
         return None, False
     return reduce_progress_event_merged(
@@ -853,16 +872,21 @@ def _append_timeline_event_items(
             continue
 
         flush_tool_group()
-        if event_type == "approval_requested":
+        if event_type in {"approval_requested", "user_input_requested"}:
             request_id = str(event.get("request_id") or event_stable_id)
-            item_id = f"turn:{managed_turn_id}:approval:{request_id}"
+            is_user_input = event_type == "user_input_requested"
+            item_id = (
+                f"turn:{managed_turn_id}:user_input:{request_id}"
+                if is_user_input
+                else f"turn:{managed_turn_id}:approval:{request_id}"
+            )
             progress_item_ids, progress_event_ids = _progress_item_metadata(
                 progress_item
             )
             items.append(
                 ManagedThreadTimelineItem(
                     item_id=item_id,
-                    kind="approval",
+                    kind="user_input" if is_user_input else "approval",
                     order_key=_order_key(timestamp, sequence, item_id),
                     timestamp=timestamp,
                     managed_thread_id=managed_thread_id,
@@ -1195,7 +1219,7 @@ def timeline_item_from_tail_event(
             )
         if _is_internal_run_notice(tail_event, progress):
             return None
-        item_id = f"turn:{normalized_turn_id}:intermediate:" f"{source_event_key}"
+        item_id = f"turn:{normalized_turn_id}:intermediate:{source_event_key}"
         text = str(tail_event.get("summary") or "")
         title = _progress_display_title(
             fallback_kind=progress_kind or event_type or "Update",

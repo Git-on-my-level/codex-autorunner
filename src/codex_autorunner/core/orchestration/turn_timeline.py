@@ -22,6 +22,7 @@ from ..ports.run_event import (
     TokenUsage,
     ToolCall,
     ToolResult,
+    UserInputRequested,
 )
 from ..text_utils import _json_dumps, _truncate_text
 from .cold_trace_store import ColdTraceStore, ColdTraceWriter
@@ -49,6 +50,7 @@ _HOT_FAMILY_ROW_LIMITS = {
     "tool_result": 128,
     "output_delta": 200,
     "run_notice": 100,
+    "user_input_requested": 64,
     "token_usage": 64,
     "terminal": 8,
 }
@@ -80,6 +82,8 @@ def _event_type_and_status(event: RunEvent) -> tuple[str, str]:
         return "tool_result", event.status or "recorded"
     if isinstance(event, ApprovalRequested):
         return "approval_requested", "recorded"
+    if isinstance(event, UserInputRequested):
+        return "user_input_requested", "recorded"
     if isinstance(event, TokenUsage):
         return "token_usage", "recorded"
     if isinstance(event, ProviderRuntimeReported):
@@ -442,6 +446,14 @@ class _CheckpointAccumulator:
                 event.description, _CHECKPOINT_PREVIEW_CHARS
             )
             self.progress_text_kind = "approval"
+            self.progress_char_count = len(event.description)
+            return
+
+        if isinstance(event, UserInputRequested):
+            self.progress_text_preview = _truncate_text(
+                event.description, _CHECKPOINT_PREVIEW_CHARS
+            )
+            self.progress_text_kind = "user_input"
             self.progress_char_count = len(event.description)
             return
 

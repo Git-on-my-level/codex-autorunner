@@ -11,6 +11,7 @@ from .run_event import (
     Started,
     TokenUsage,
     ToolCall,
+    UserInputRequested,
 )
 from .scope_resolver import ResolvedScope, ScopeResolver
 from .surface_port import (
@@ -57,5 +58,6 @@ __all__ = [
     "TicketStore",
     "TokenUsage",
     "ToolCall",
+    "UserInputRequested",
     "now_iso",
 ]

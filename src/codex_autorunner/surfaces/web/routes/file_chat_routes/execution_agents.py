@@ -445,7 +445,7 @@ async def execute_opencode(
             workspace_path=str(repo_root),
             model_payload=model_payload,
             permission_policy=PERMISSION_ALLOW,
-            question_policy="auto_first_option",
+            question_policy="reject",
             should_stop=interrupt_event.is_set,
             ready_event=ready_event,
             part_handler=_part_handler,

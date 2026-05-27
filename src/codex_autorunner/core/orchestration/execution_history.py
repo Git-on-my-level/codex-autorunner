@@ -16,6 +16,7 @@ from ..ports.run_event import (
     TokenUsage,
     ToolCall,
     ToolResult,
+    UserInputRequested,
 )
 from ..text_utils import _truncate_text
 
@@ -44,6 +45,7 @@ _TIMELINE_HOT_FAMILY_BY_EVENT_TYPE: dict[str, ExecutionHistoryEventFamily] = {
     "tool_result": "tool_result",
     "approval_requested": "run_notice",
     "token_usage": "token_usage",
+    "user_input_requested": "run_notice",
     "run_notice": "run_notice",
     "turn_completed": "terminal",
     "turn_failed": "terminal",
@@ -340,7 +342,14 @@ def classify_run_event_family(event: RunEvent) -> ExecutionHistoryEventFamily:
     if isinstance(event, (Completed, Failed, Interrupted)):
         return "terminal"
     if isinstance(
-        event, (Started, ApprovalRequested, RunNotice, ProviderRuntimeReported)
+        event,
+        (
+            Started,
+            ApprovalRequested,
+            UserInputRequested,
+            RunNotice,
+            ProviderRuntimeReported,
+        ),
     ):
         return "run_notice"
     raise TypeError(f"Unsupported run event type '{type(event).__name__}'")

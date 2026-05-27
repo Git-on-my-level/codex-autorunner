@@ -330,6 +330,7 @@ from .interaction_registry import (
 from .interaction_scheduler import (
     schedule_ingressed_interaction as _schedule_ingressed_interaction,
 )
+from .interaction_session import InteractionSessionKind
 from .interactions import extract_interaction_id, extract_interaction_token
 from .managed_thread_delivery import deliver_discord_managed_thread_record
 from .managed_thread_routing import build_discord_thread_orchestration_service
@@ -415,6 +416,8 @@ from .service_normalization import (
     build_attachment_context_payload,
     build_discord_approval_message,
     build_discord_queue_status_message,
+    build_discord_user_input_components,
+    format_discord_user_input_prompt,
     format_hub_flow_overview_line,
 )
 from .service_responses import DiscordInteractionResponseMixin
@@ -635,6 +638,40 @@ class _DiscordPendingApproval:
     message_id: Optional[str]
     prompt: str
     future: asyncio.Future[ApprovalDecision]
+
+
+@dataclass
+class _DiscordPendingUserInput:
+    token: str
+    request_id: str
+    turn_id: str
+    channel_id: str
+    message_id: Optional[str]
+    question_index: int
+    question: dict[str, Any]
+    options: list[str]
+    future: asyncio.Future[list[str] | None]
+
+
+def _discord_question_options(question: Mapping[str, Any]) -> tuple[list[str], bool]:
+    multiple = bool(question.get("multiple"))
+    for key in ("options", "choices"):
+        raw = question.get(key)
+        if not isinstance(raw, list):
+            continue
+        options: list[str] = []
+        for option in raw:
+            if isinstance(option, str) and option.strip():
+                options.append(option.strip())
+                continue
+            if isinstance(option, Mapping):
+                for label_key in ("label", "text", "value", "name", "id"):
+                    value = option.get(label_key)
+                    if isinstance(value, str) and value.strip():
+                        options.append(value.strip())
+                        break
+        return options, multiple
+    return [], multiple
 
 
 @dataclass(frozen=True)
@@ -902,6 +939,7 @@ class DiscordBotService(DiscordInteractionResponseMixin):
             root_app_server_command,
             state_root=self._app_server_state_root,
             env_builder=self._build_workspace_env,
+            question_handler=self._handle_backend_user_input_request,
             notification_handler=cast(
                 Callable[[Mapping[str, object]], Awaitable[None]],
                 self.app_server_events.handle_notification,
@@ -988,6 +1026,7 @@ class DiscordBotService(DiscordInteractionResponseMixin):
             {}
         )
         self._discord_pending_approvals: dict[str, _DiscordPendingApproval] = {}
+        self._discord_pending_user_inputs: dict[str, _DiscordPendingUserInput] = {}
         self._update_status_notifier = discord_update_service.ChatUpdateStatusNotifier(
             platform="discord",
             logger=self._logger,
@@ -3304,6 +3343,230 @@ class DiscordBotService(DiscordInteractionResponseMixin):
                     },
                 )
 
+    async def _handle_backend_user_input_request(
+        self, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        params_raw = request.get("params")
+        params: dict[str, Any] = (
+            dict(params_raw) if isinstance(params_raw, dict) else {}
+        )
+        request_id = str(request.get("id") or "").strip()
+        if not request_id:
+            return {"answers": {}}
+        questions_raw = params.get("questions")
+        questions = (
+            [question for question in questions_raw if isinstance(question, dict)]
+            if isinstance(questions_raw, list)
+            else []
+        )
+        answers = await self._ask_discord_user_input_questions(
+            request_id=request_id,
+            turn_id=str(params.get("turnId") or params.get("turn_id") or ""),
+            questions=questions,
+        )
+        if answers is None:
+            return {"answers": {}}
+        normalized: dict[str, dict[str, list[str]]] = {}
+        for index, question in enumerate(questions):
+            question_id = question.get("id")
+            if not isinstance(question_id, str) or not question_id.strip():
+                continue
+            normalized[question_id.strip()] = {
+                "answers": answers[index] if index < len(answers) else []
+            }
+        return {"answers": normalized}
+
+    async def _handle_opencode_question_request(
+        self,
+        request_id: str,
+        props: dict[str, Any],
+        *,
+        turn_id: str,
+    ) -> list[list[str]] | None:
+        questions_raw = props.get("questions") if isinstance(props, dict) else None
+        questions = (
+            [question for question in questions_raw if isinstance(question, dict)]
+            if isinstance(questions_raw, list)
+            else []
+        )
+        return await self._ask_discord_user_input_questions(
+            request_id=request_id,
+            turn_id=turn_id,
+            questions=questions,
+        )
+
+    async def _ask_discord_user_input_questions(
+        self,
+        *,
+        request_id: str,
+        turn_id: str,
+        questions: list[dict[str, Any]],
+    ) -> list[list[str]] | None:
+        context = self._discord_turn_approval_contexts.get(turn_id)
+        if context is None or not questions:
+            return None
+        answers: list[list[str]] = []
+        for index, question in enumerate(questions):
+            options, _multiple = _discord_question_options(question)
+            token = uuid.uuid4().hex[:12]
+            loop = asyncio.get_running_loop()
+            future: asyncio.Future[list[str] | None] = loop.create_future()
+            prompt = format_discord_user_input_prompt(
+                question,
+                index=index,
+                total=len(questions),
+            )
+            pending = _DiscordPendingUserInput(
+                token=token,
+                request_id=request_id,
+                turn_id=turn_id,
+                channel_id=context.channel_id,
+                message_id=None,
+                question_index=index,
+                question=dict(question),
+                options=options,
+                future=future,
+            )
+            try:
+                response = await self._send_channel_message(
+                    context.channel_id,
+                    {
+                        "content": format_discord_message(prompt),
+                        "components": build_discord_user_input_components(
+                            token,
+                            question_index=index,
+                            question=question,
+                        ),
+                    },
+                )
+            except (DiscordAPIError, OSError) as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.user_input.send_failed",
+                    channel_id=context.channel_id,
+                    request_id=request_id,
+                    turn_id=turn_id,
+                    question_index=index,
+                    exc=exc,
+                )
+                return None
+            message_id = response.get("id") if isinstance(response, dict) else None
+            if isinstance(message_id, str) and message_id:
+                pending.message_id = message_id
+            self._discord_pending_user_inputs[token] = pending
+            try:
+                result = await future
+            finally:
+                self._discord_pending_user_inputs.pop(token, None)
+            if result is None:
+                return None
+            answers.append(result)
+        return answers
+
+    async def _handle_user_input_component(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        custom_id: str,
+        values: Optional[list[str]] = None,
+    ) -> None:
+        parts = custom_id.split(":")
+        token = parts[1] if len(parts) >= 2 else ""
+        action = parts[2] if len(parts) >= 3 else ""
+        pending = self._discord_pending_user_inputs.get(token)
+        if pending is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Question already handled",
+            )
+            return
+        if action == "answer":
+            await self.respond_modal(
+                interaction_id,
+                interaction_token,
+                kind=InteractionSessionKind.COMPONENT,
+                custom_id=f"question_modal:{token}",
+                title="Answer question",
+                components=[
+                    {
+                        "type": 18,
+                        "label": "Answer"[:45],
+                        "component": {
+                            "type": 4,
+                            "custom_id": "answer",
+                            "style": 2,
+                            "required": True,
+                            "max_length": 4000,
+                        },
+                    }
+                ],
+            )
+            return
+        self._discord_pending_user_inputs.pop(token, None)
+        selected_values: list[str] | None
+        if custom_id.startswith("question_select:"):
+            selected_values = []
+            for value in values or []:
+                try:
+                    option_index = int(value)
+                except ValueError:
+                    continue
+                if 0 <= option_index < len(pending.options):
+                    selected_values.append(pending.options[option_index])
+        else:
+            selected_values = None
+        if not pending.future.done():
+            pending.future.set_result(selected_values)
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "Answered" if selected_values is not None else "Canceled",
+        )
+        if pending.message_id:
+            with contextlib.suppress(DiscordAPIError, OSError, RuntimeError):
+                await self._delete_channel_message(
+                    pending.channel_id,
+                    pending.message_id,
+                )
+
+    async def _handle_user_input_modal_submit(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        custom_id: str,
+        values: dict[str, Any],
+    ) -> None:
+        token = custom_id.split(":", 1)[1].strip() if ":" in custom_id else ""
+        pending = self._discord_pending_user_inputs.pop(token, None)
+        if pending is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Question already handled",
+            )
+            return
+        answer = values.get("answer")
+        selected_values = (
+            [answer.strip()] if isinstance(answer, str) and answer.strip() else []
+        )
+        if not pending.future.done():
+            pending.future.set_result(selected_values)
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "Answered",
+        )
+        if pending.message_id:
+            with contextlib.suppress(DiscordAPIError, OSError, RuntimeError):
+                await self._delete_channel_message(
+                    pending.channel_id,
+                    pending.message_id,
+                )
+
     def _build_workspace_env(
         self, workspace_root: Path, workspace_id: str, state_dir: Path
     ) -> dict[str, str]:
@@ -4131,8 +4394,7 @@ class DiscordBotService(DiscordInteractionResponseMixin):
                 surface_key,
                 progress_message_id,
                 record_id=(
-                    "discord:managed-thread-progress-cleanup:"
-                    f"{progress_send_record_id}"
+                    f"discord:managed-thread-progress-cleanup:{progress_send_record_id}"
                 ),
             )
             return

@@ -210,16 +210,21 @@ def _discord_component_entry(
     )
 
 
-def _discord_modal_entry(route_id: str) -> ChatActionUxContractEntry:
+def _discord_modal_entry(
+    route_id: str,
+    *,
+    queue_policy: ChatActionQueuePolicy = "scheduler_serialized",
+    control_priority: ChatActionPriority = "normal",
+) -> ChatActionUxContractEntry:
     return ChatActionUxContractEntry(
         id=f"discord_modal.{route_id}",
         surface="discord_modal",
         lookup_keys=(f"discord_modal:{route_id}",),
         ack_class="defer_ephemeral",
-        queue_policy="scheduler_serialized",
+        queue_policy=queue_policy,
         first_visible_feedback=_first_visible_feedback_for_ack("defer_ephemeral"),
         optimistic_ui_allowed=False,
-        control_priority="normal",
+        control_priority=control_priority,
         anchor_message_reuse="never",
     )
 
@@ -587,6 +592,16 @@ CHAT_ACTION_UX_CONTRACT: tuple[ChatActionUxContractEntry, ...] = (
         control_priority="control",
     ),
     _discord_component_entry(
+        "user_input.button",
+        queue_policy="bypass_active_turn",
+        control_priority="control",
+    ),
+    _discord_component_entry(
+        "user_input.select",
+        queue_policy="bypass_active_turn",
+        control_priority="control",
+    ),
+    _discord_component_entry(
         "turn.continue",
         queue_policy="control_priority",
         control_priority="control",
@@ -594,6 +609,11 @@ CHAT_ACTION_UX_CONTRACT: tuple[ChatActionUxContractEntry, ...] = (
     ),
     # Discord modals and autocomplete.
     _discord_modal_entry("tickets.modal_submit"),
+    _discord_modal_entry(
+        "user_input.modal_submit",
+        queue_policy="bypass_active_turn",
+        control_priority="control",
+    ),
     _discord_autocomplete_entry("car.bind.workspace"),
     _discord_autocomplete_entry("car.model.name"),
     _discord_autocomplete_entry("car.skills.search"),

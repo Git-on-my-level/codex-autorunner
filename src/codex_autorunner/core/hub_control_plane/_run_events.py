@@ -16,6 +16,7 @@ from ..ports.run_event import (
     TokenUsage,
     ToolCall,
     ToolResult,
+    UserInputRequested,
 )
 from ..runtime_identity import RuntimeIdentityStage
 from ._normalizers import normalize_required_text
@@ -32,6 +33,8 @@ def serialize_run_event(event: RunEvent) -> dict[str, Any]:
         event_type = "tool_result"
     elif isinstance(event, ApprovalRequested):
         event_type = "approval_requested"
+    elif isinstance(event, UserInputRequested):
+        event_type = "user_input_requested"
     elif isinstance(event, TokenUsage):
         event_type = "token_usage"
     elif isinstance(event, ProviderRuntimeReported):
@@ -71,6 +74,14 @@ def deserialize_run_event(data: Mapping[str, Any]) -> RunEvent:
         return ToolResult(**event_payload)
     if event_type == "approval_requested":
         return ApprovalRequested(**event_payload)
+    if event_type == "user_input_requested":
+        questions = event_payload.get("questions")
+        if isinstance(questions, list):
+            event_payload["questions"] = tuple(
+                dict(question) if isinstance(question, Mapping) else question
+                for question in questions
+            )
+        return UserInputRequested(**event_payload)
     if event_type == "token_usage":
         return TokenUsage(**event_payload)
     if event_type == "provider_runtime_reported":

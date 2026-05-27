@@ -177,6 +177,25 @@ def test_approval_and_question_callbacks_bypass_queue() -> None:
         ), f"{callback_id} should bypass queue but queue_policy={entry.queue_policy}"
 
 
+def test_discord_user_input_components_and_modal_bypass_queue() -> None:
+    button = discord_component_ux_contract_for_route(
+        "user_input.button",
+        custom_id="question:token:answer",
+    )
+    select = discord_component_ux_contract_for_route(
+        "user_input.select",
+        custom_id="question_select:token:0",
+    )
+    modal = discord_modal_ux_contract_for_route("user_input.modal_submit")
+
+    assert button is not None
+    assert button.queue_policy == "bypass_active_turn"
+    assert select is not None
+    assert select.queue_policy == "bypass_active_turn"
+    assert modal is not None
+    assert modal.queue_policy == "bypass_active_turn"
+
+
 def test_cancel_selection_bypasses_queue() -> None:
     entry = telegram_callback_ux_contract_for_callback("cancel", {"kind": "agent"})
     assert entry is not None

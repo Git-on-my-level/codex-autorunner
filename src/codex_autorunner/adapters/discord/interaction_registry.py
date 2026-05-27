@@ -138,6 +138,7 @@ from .interaction_component_handlers import (
     _handle_update_cancel_component,
     _handle_update_confirm_component,
     _handle_update_target_select_component,
+    _handle_user_input_component,
 )
 from .interaction_slash_builders import (
     BOOLEAN as BOOLEAN,
@@ -1574,6 +1575,18 @@ _COMPONENT_ROUTES: tuple[ComponentRoute, ...] = (
         workspace_lock_policy="bound_workspace",
     ),
     ComponentRoute(
+        id="user_input.button",
+        custom_id_prefix="question:",
+        handler=_handle_user_input_component,
+        workspace_lock_policy="bound_workspace",
+    ),
+    ComponentRoute(
+        id="user_input.select",
+        custom_id_prefix="question_select:",
+        handler=_handle_user_input_component,
+        workspace_lock_policy="bound_workspace",
+    ),
+    ComponentRoute(
         id="queue.cancel",
         custom_id_prefix="queue_cancel:",
         handler=_handle_queue_cancel_component,
@@ -1621,6 +1634,17 @@ _MODAL_ROUTES: tuple[ModalRoute, ...] = (
             custom_id=ctx.custom_id or "",
             values=ctx.modal_values or {},
         ),
+    ),
+    _modal_route(
+        id="user_input.modal_submit",
+        custom_id_prefix="question_modal:",
+        handler=lambda service, ctx: service._handle_user_input_modal_submit(
+            ctx.interaction_id,
+            ctx.interaction_token,
+            custom_id=ctx.custom_id or "",
+            values=ctx.modal_values or {},
+        ),
+        workspace_lock_policy="bound_workspace",
     ),
 )
 

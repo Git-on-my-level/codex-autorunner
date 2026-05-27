@@ -374,6 +374,7 @@ class TelegramBotService(
             state_root=self._app_server_state_root,
             env_builder=self._build_workspace_env,
             approval_handler=self._handle_approval_request,
+            question_handler=self._handle_backend_user_input_request,
             notification_handler=self._handle_buffered_app_server_notification,
             logger=self._logger,
             auto_restart=self._app_server_auto_restart,
@@ -560,6 +561,36 @@ class TelegramBotService(
         self._instance_lock: Optional[FileLock] = None
         self._delivery_worker: Optional[ManagedThreadDeliveryWorker] = None
         self._delivery_worker_task: Optional[asyncio.Task[None]] = None
+
+    async def _handle_backend_user_input_request(
+        self, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        params_raw = request.get("params")
+        params: dict[str, Any] = (
+            dict(params_raw) if isinstance(params_raw, dict) else {}
+        )
+        request_id = str(request.get("id") or "").strip()
+        questions_raw = params.get("questions")
+        questions = (
+            [question for question in questions_raw if isinstance(question, dict)]
+            if isinstance(questions_raw, list)
+            else []
+        )
+        answers = await self._handle_question_request(
+            request_id=request_id,
+            turn_id=str(params.get("turnId") or params.get("turn_id") or ""),
+            thread_id=str(params.get("threadId") or params.get("thread_id") or ""),
+            questions=questions,
+        )
+        normalized: dict[str, dict[str, list[str]]] = {}
+        for index, question in enumerate(questions):
+            question_id = question.get("id")
+            if not isinstance(question_id, str) or not question_id.strip():
+                continue
+            normalized[question_id.strip()] = {
+                "answers": answers[index] if answers and index < len(answers) else []
+            }
+        return {"answers": normalized}
 
     def _build_delivery_worker(self) -> ManagedThreadDeliveryWorker:
         service = self

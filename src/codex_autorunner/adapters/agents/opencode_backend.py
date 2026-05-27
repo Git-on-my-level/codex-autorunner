@@ -10,6 +10,7 @@ import httpx
 from ...agents.opencode.client import OpenCodeClient, OpenCodeProtocolError
 from ...agents.opencode.event_decoder import decode_sse_event
 from ...agents.opencode.logging import OpenCodeEventFormatter
+from ...agents.opencode.protocol_types import QuestionEvent
 from ...agents.opencode.runtime import (
     build_turn_id,
     collect_opencode_output,
@@ -46,6 +47,7 @@ from ...core.ports.run_event import (
     Started,
     TokenUsage,
     ToolCall,
+    UserInputRequested,
 )
 from ...core.sse import SSEEvent
 from ...core.text_delta_coalescer import StreamingTextCoalescer
@@ -601,6 +603,33 @@ class OpenCodeBackend(AgentBackend):
                     timestamp=now_iso(), tool_name=tool_name, tool_input=tool_input
                 )
             )
+
+        elif isinstance(decoded, QuestionEvent) or payload_type == "question":
+            if isinstance(decoded, QuestionEvent):
+                request_id = decoded.question_id
+                question = decoded.question
+                context = {"context": decoded.context} if decoded.context else {}
+            else:
+                request_id = str(
+                    payload.get("id")
+                    or payload.get("questionID")
+                    or payload.get("questionId")
+                    or payload.get("question_id")
+                    or ""
+                ).strip()
+                question = str(payload.get("question") or "").strip()
+                context = {}
+            if request_id:
+                questions = ({"id": request_id, "question": question},)
+                events.append(
+                    UserInputRequested(
+                        timestamp=now_iso(),
+                        request_id=request_id,
+                        description=question or "User input requested",
+                        questions=questions,
+                        context={**payload, **context},
+                    )
+                )
 
         elif payload_type == "usage":
             usage = payload.get("usage")
