@@ -16,6 +16,7 @@ from codex_autorunner.agents.opencode.protocol_payload import (
     extract_message_finish,
     extract_message_phase,
     extract_part_and_delta,
+    extract_question_tool_request,
     extract_session_id,
     extract_status_type,
     extract_total_tokens,
@@ -498,6 +499,45 @@ class TestPromptEchoMatches:
 
     def test_non_string_text(self) -> None:
         assert prompt_echo_matches(42, prompt="hello") is False
+
+
+class TestExtractQuestionToolRequest:
+    def test_extracts_tool_part_question_payload(self) -> None:
+        request_id, props, status, error = extract_question_tool_request(
+            {
+                "id": "part-q1",
+                "type": "tool",
+                "tool": "question",
+                "state": {
+                    "status": "error",
+                    "input": {
+                        "questions": [
+                            {
+                                "question": "Continue?",
+                                "options": [{"label": "Yes"}, {"label": "No"}],
+                            }
+                        ]
+                    },
+                    "error": "The user dismissed this question",
+                },
+            }
+        )
+
+        assert request_id == "part-q1"
+        assert props["source"] == "tool_part"
+        assert props["questions"][0]["question"] == "Continue?"
+        assert status == "error"
+        assert error == "The user dismissed this question"
+
+    def test_ignores_non_question_tools(self) -> None:
+        request_id, props, status, error = extract_question_tool_request(
+            {"id": "part-1", "type": "tool", "tool": "bash"}
+        )
+
+        assert request_id is None
+        assert props == {}
+        assert status is None
+        assert error is None
 
 
 class TestExtractTotalTokens:

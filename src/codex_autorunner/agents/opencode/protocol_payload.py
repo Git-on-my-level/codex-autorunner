@@ -532,6 +532,58 @@ def extract_question_request(payload: Any) -> tuple[Optional[str], dict[str, Any
     return request_id, props
 
 
+def extract_question_tool_request(
+    part: Any,
+) -> tuple[Optional[str], dict[str, Any], Optional[str], Optional[str]]:
+    """Extract a question request encoded as an OpenCode tool part.
+
+    Some OpenCode builds expose the user-input helper as a normal ``tool`` part
+    named ``question`` instead of a top-level ``question.asked`` event.  The
+    request payload lives under ``state.input.questions`` and the part id is the
+    only stable request identifier in the stream.
+    """
+
+    if not isinstance(part, dict):
+        return None, {}, None, None
+    if part.get("type") != "tool" or part.get("tool") != "question":
+        return None, {}, None, None
+
+    state = part.get("state")
+    state_payload = state if isinstance(state, dict) else {}
+    input_payload = state_payload.get("input")
+    if not isinstance(input_payload, dict):
+        input_payload = part.get("input")
+    if not isinstance(input_payload, dict):
+        input_payload = {}
+
+    request_id = None
+    for container in (state_payload, input_payload, part):
+        if not isinstance(container, dict):
+            continue
+        for key in ("id", "requestID", "requestId"):
+            value = container.get(key)
+            if isinstance(value, str) and value.strip():
+                request_id = value.strip()
+                break
+        if request_id:
+            break
+
+    questions = _normalize_questions(input_payload.get("questions"))
+    props = dict(input_payload)
+    props["questions"] = questions
+    if request_id:
+        props["id"] = request_id
+    props["source"] = "tool_part"
+
+    status_raw = state_payload.get("status")
+    status = status_raw.strip().lower() if isinstance(status_raw, str) else None
+    error_raw = state_payload.get("error")
+    error = (
+        error_raw.strip() if isinstance(error_raw, str) and error_raw.strip() else None
+    )
+    return request_id, props, status, error
+
+
 def extract_question_option_label(option: Any) -> Optional[str]:
     if isinstance(option, str):
         return option.strip() or None
