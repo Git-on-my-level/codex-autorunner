@@ -964,6 +964,7 @@
 
   afterNavigate(() => {
     hydrateChatListFiltersFromUrl();
+    pageController.setRoute(currentRouteSnapshot());
   });
 
   function chatTransportFilterOptions(): { key: ChatFacetTransport; label: string; count: number }[] {
@@ -1172,6 +1173,7 @@
   }
 
   function writeChatDetailSessionState(state: ChatDetailSessionState): void {
+    readModelEntityStore.setActiveChatId(state.activeChatId);
     if (
       detailMode === state.detailMode &&
       localDraftChat === state.localDraftChat &&
@@ -1182,7 +1184,6 @@
     }
     detailMode = state.detailMode;
     localDraftChat = state.localDraftChat;
-    readModelEntityStore.setActiveChatId(state.activeChatId);
     refreshingActive = state.loadingActive;
     activeError = state.activeError;
   }
