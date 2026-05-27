@@ -21,7 +21,12 @@ from .destinations import (
 from .git_utils import git_available, git_branch, git_is_clean
 from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock, process_alive
 from .state import RunnerState, load_state, now_iso
-from .state_roots import ORCHESTRATION_DB_FILENAME, resolve_repo_runner_state_db_path
+from .state_roots import (
+    HUB_PROJECTION_DB_FILENAME,
+    ORCHESTRATION_COMPATIBILITY_METADATA_FILENAME,
+    ORCHESTRATION_DB_FILENAME,
+    resolve_repo_runner_state_db_path,
+)
 from .utils import atomic_write
 
 logger = logging.getLogger("codex_autorunner.hub_topology")
@@ -559,6 +564,41 @@ def _non_authoritative_artifacts(
             "orchestration_db",
             state_root / ORCHESTRATION_DB_FILENAME,
             "workspace orchestration database is not runtime authority for this hub",
+        ),
+        (
+            "orchestration_db_wal",
+            state_root / f"{ORCHESTRATION_DB_FILENAME}-wal",
+            "workspace orchestration WAL is not runtime authority for this hub",
+        ),
+        (
+            "orchestration_db_shm",
+            state_root / f"{ORCHESTRATION_DB_FILENAME}-shm",
+            "workspace orchestration SHM is not runtime authority for this hub",
+        ),
+        (
+            "hub_projection_db",
+            state_root / HUB_PROJECTION_DB_FILENAME,
+            "workspace hub projection database is not runtime authority for this hub",
+        ),
+        (
+            "hub_projection_db_wal",
+            state_root / f"{HUB_PROJECTION_DB_FILENAME}-wal",
+            "workspace hub projection WAL is not runtime authority for this hub",
+        ),
+        (
+            "hub_projection_db_shm",
+            state_root / f"{HUB_PROJECTION_DB_FILENAME}-shm",
+            "workspace hub projection SHM is not runtime authority for this hub",
+        ),
+        (
+            "orchestration_compatibility_metadata",
+            state_root / ORCHESTRATION_COMPATIBILITY_METADATA_FILENAME,
+            "workspace compatibility metadata is not runtime authority for this hub",
+        ),
+        (
+            "orchestration_migration_lock",
+            state_root / f"{ORCHESTRATION_DB_FILENAME}.migrate.lock",
+            "workspace migration lock is not runtime authority for this hub",
         ),
     ]
     for kind, candidate, reason in candidates:

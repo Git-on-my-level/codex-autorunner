@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 from pathlib import Path
 from typing import Callable, Optional
@@ -22,6 +23,10 @@ from ....core.archive_retention import (
 from ....core.config import (
     ConfigError,
     load_hub_config,
+)
+from ....core.control_plane_cleanup import (
+    apply_control_plane_cleanup,
+    plan_control_plane_cleanup,
 )
 from ....core.filebox_retention import (
     prune_filebox_root,
@@ -95,6 +100,31 @@ from ..ops_cleanup import (
 logger = logging.getLogger(__name__)
 
 
+def _render_control_plane_cleanup_human(report) -> str:
+    prefix = "DRY RUN: " if report.dry_run else "APPLIED: "
+    lines = [
+        f"{prefix}control-plane cleanup candidates={len(report.candidates)} "
+        f"reclaimable_bytes={report.total_reclaimable_bytes}",
+    ]
+    for candidate in report.candidates:
+        payload = candidate.to_payload(report.hub_root)
+        action = "would archive" if report.dry_run else "archived"
+        archive = payload["archive_path"] or "(none)"
+        lines.append(
+            f"- {payload['path']} size={payload['size_bytes']} "
+            f"kind={payload['kind']} role={payload['control_plane_role']} "
+            f"action={action} -> {archive}"
+        )
+        lines.append(f"  reason: {payload['reason']}")
+    if report.skipped:
+        lines.append(f"skipped={len(report.skipped)}")
+    for error in report.errors:
+        lines.append(f"ERROR: {error}")
+    if report.dry_run:
+        lines.append("Pass --apply to archive these artifacts.")
+    return "\n".join(lines)
+
+
 def _build_force_attestation(
     force_attestation: Optional[str], *, target_scope: str
 ) -> Optional[dict[str, str]]:
@@ -112,6 +142,45 @@ def register_cleanup_commands(
     *,
     require_repo_config: Callable[[Optional[Path], Optional[Path]], RuntimeContext],
 ) -> None:
+    @cleanup_app.command("control-plane")
+    def cleanup_control_plane(
+        hub: Optional[Path] = typer.Option(
+            None,
+            "--hub",
+            "--path",
+            help="Hub root or config path. Defaults to cwd walk-up.",
+        ),
+        apply: bool = typer.Option(
+            False,
+            "--apply",
+            help="Archive classified artifacts. Omit to dry-run only.",
+        ),
+        json_output: bool = typer.Option(
+            False,
+            "--json",
+            help="Output JSON for scripting.",
+        ),
+    ) -> None:
+        """Archive non-authoritative legacy CAR control-plane artifacts."""
+        try:
+            hub_config = load_hub_config(hub or Path.cwd())
+        except ConfigError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+
+        report = plan_control_plane_cleanup(
+            hub_root=hub_config.root,
+            manifest_path=hub_config.manifest_path,
+        )
+        if apply:
+            report = apply_control_plane_cleanup(report)
+
+        if json_output:
+            typer.echo(json.dumps(report.to_payload(), indent=2))
+        else:
+            typer.echo(_render_control_plane_cleanup_human(report))
+        if report.errors:
+            raise typer.Exit(code=1)
+
     @cleanup_app.command("processes")
     def cleanup_processes(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
