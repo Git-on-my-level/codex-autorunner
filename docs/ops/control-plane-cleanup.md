@@ -11,8 +11,8 @@ repo-local project data.
 Preview cleanup before changing disk state:
 
 ```bash
-car cleanup control-plane --hub /path/to/hub
-car cleanup control-plane --hub /path/to/hub --json
+car cleanup control-plane --path /path/to/hub
+car cleanup control-plane --path /path/to/hub --json
 ```
 
 The report lists each artifact, byte size, classification reason, workspace
@@ -24,7 +24,7 @@ workspaces, are skipped as separate control planes.
 Apply cleanup only after reviewing the dry run:
 
 ```bash
-car cleanup control-plane --hub /path/to/hub --apply
+car cleanup control-plane --path /path/to/hub --apply
 ```
 
 The first implementation archives instead of deleting. Files move under:

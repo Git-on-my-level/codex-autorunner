@@ -33,7 +33,7 @@ def test_cleanup_control_plane_dry_run_json_reports_reclaimable_artifacts(
         [
             "cleanup",
             "control-plane",
-            "--hub",
+            "--path",
             str(hub_root_only),
             "--json",
         ],
@@ -73,7 +73,7 @@ def test_cleanup_control_plane_apply_archives_artifacts(
         [
             "cleanup",
             "control-plane",
-            "--hub",
+            "--path",
             str(hub_root_only),
             "--apply",
             "--json",

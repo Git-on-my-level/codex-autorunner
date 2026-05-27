@@ -276,7 +276,7 @@ def hub_control_plane_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
                 ),
                 severity="info",
                 check_id="hub.control_plane.nested_artifacts",
-                fix=f"Preview cleanup with: car cleanup control-plane --hub {hub_config.root}",
+                fix=f"Preview cleanup with: car cleanup control-plane --path {hub_config.root}",
             )
         )
     else:
@@ -287,7 +287,7 @@ def hub_control_plane_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
                 message="No nested non-authoritative orchestration DBs or manifests found.",
                 severity="info",
                 check_id="hub.control_plane.nested_artifacts",
-                fix=f"Use: car cleanup control-plane --hub {hub_config.root} for a full artifact report.",
+                fix=f"Use: car cleanup control-plane --path {hub_config.root} for a full artifact report.",
             )
         )
     return checks

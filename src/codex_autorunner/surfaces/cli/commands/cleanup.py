@@ -144,12 +144,7 @@ def register_cleanup_commands(
 ) -> None:
     @cleanup_app.command("control-plane")
     def cleanup_control_plane(
-        hub: Optional[Path] = typer.Option(
-            None,
-            "--hub",
-            "--path",
-            help="Hub root or config path. Defaults to cwd walk-up.",
-        ),
+        hub: Optional[Path] = hub_root_path_option(),
         apply: bool = typer.Option(
             False,
             "--apply",

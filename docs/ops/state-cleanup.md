@@ -117,7 +117,7 @@ Total: deleted=22 bytes=36700160
 
 Legacy control-plane-looking files under hub-owned repo/worktree
 `.codex-autorunner/` directories are handled separately by
-`car cleanup control-plane --hub <hub>`. That command dry-runs first, archives
+`car cleanup control-plane --path <hub>`. That command dry-runs first, archives
 on `--apply`, and preserves tickets, contextspace, filebox, GitHub context,
 diagnostics, logs, and generated context artifacts.
 
