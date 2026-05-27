@@ -62,6 +62,22 @@ describe('/chats page', () => {
     expect(pageSource).not.toContain('openChatTranscriptEventSource');
   });
 
+  it('delegates chat detail transcript and composer display derivation to the application read model', () => {
+    const pageSource = chatDetailPageSource();
+    const architectureSource = readFileSync(
+      fileURLToPath(new URL('../../lib/application/pmaChatArchitecture.ts', import.meta.url)),
+      'utf8'
+    );
+
+    expect(pageSource).toContain('buildChatDetailDisplayReadModel');
+    expect(architectureSource).toContain('export function buildChatDetailDisplayReadModel');
+    expect(architectureSource).toContain('function shouldShowChatDetailStatusBar');
+    expect(architectureSource).toContain('function shouldQueueComposerDraft');
+    expect(pageSource).not.toContain('visibleChatDetailTranscriptCards(transcriptCards, queuedTurns)');
+    expect(pageSource).not.toContain('compactChatTranscriptCards(activeCards)');
+    expect(pageSource).not.toContain("streamState === 'connecting' || streamState === 'interrupted'");
+  });
+
   it('does not mark active chat updates read without an explicit read action', () => {
     const pageSource = chatDetailPageSource();
 

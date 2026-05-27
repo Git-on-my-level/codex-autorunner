@@ -40,9 +40,10 @@
     ChatFacetTransport
   } from '$lib/api/readModelContracts';
   import {
+    buildChatDetailDisplayReadModel,
     isOptimisticQueuedTurn,
     progressWithLiveElapsed,
-    visibleChatDetailTranscriptCards
+    type ChatTranscriptListItem
   } from '$lib/application/pmaChatArchitecture';
   import { createChatSendController } from '$lib/application/chatSendController';
   import { connectionStore } from '$lib/runtime/connectionStore.svelte';
@@ -108,8 +109,6 @@
     buildPmaChatScopeOptions,
     buildPmaLiveActivity,
     buildManagedThreadMessagePayload,
-    buildPmaStatusBar,
-    compactChatTranscriptCards,
     countSemanticTicketRunGroups,
     filterChatEntries,
     formatBytes,
@@ -178,10 +177,6 @@
 
   const COMPACT_SUMMARY_PROMPT =
     'Summarize the conversation so far into a concise context block I can paste into a new thread. Include goals, constraints, decisions, and current state.';
-  type ChatTranscriptListItem =
-    | { kind: 'card'; id: string; card: ChatTranscriptCard }
-    | { kind: 'typing'; id: string; title: string }
-    | { kind: 'shared-files'; id: string };
   let readModelState = $state(readModelEntityStore.snapshot());
   let activeChatId = $state<string | null>(null);
   // Unsent new chats are page-local only: `localDraftChat` drives the composer until
@@ -579,18 +574,22 @@
   }
   const displayedProgress = $derived(progressWithLiveElapsed(progress, clockNowMs));
   const liveActivity = $derived(buildPmaLiveActivity(displayedProgress));
-  const activeCards = $derived<ChatTranscriptCard[]>(visibleChatDetailTranscriptCards(transcriptCards, queuedTurns));
-  const displayTranscriptCards = $derived<ChatTranscriptCard[]>(compactChatTranscriptCards(activeCards));
-  const lastAssistantMessageCard = $derived.by<ChatTranscriptCard | null>(() => {
-    for (let i = activeCards.length - 1; i >= 0; i -= 1) {
-      const card = activeCards[i];
-      if (card.kind === 'message' && card.message.role === 'assistant') {
-        return card;
-      }
-    }
-    return null;
-  });
-  const statusBar = $derived(buildPmaStatusBar(displayedProgress, activeChat));
+  const chatDetailDisplay = $derived(
+    buildChatDetailDisplayReadModel({
+      transcriptCards,
+      queuedTurns,
+      displayedProgress,
+      activeChat,
+      assistantSharedFileCount: assistantSharedFiles.length,
+      streamState,
+      loadingActive,
+      activeError,
+      draft,
+      pendingAttachmentCount: pendingAttachments.length
+    })
+  );
+  const activeCards = $derived<ChatTranscriptCard[]>(chatDetailDisplay.activeCards);
+  const statusBar = $derived(chatDetailDisplay.statusBar);
   const selectedScope = $derived(scopeOptions.find((scope) => scope.id === selectedScopeId) ?? localPmaChatScopeOption());
   const selectedAgentRecord = $derived(agentRecordForId(agents, selectedAgent));
   const hermesProfileChoices = $derived(agentProfileEntriesForRecord(selectedAgentRecord));
@@ -652,81 +651,28 @@
     },
     confirm: confirmDialog
   });
-  const streamingMessageId = $derived.by<string | null>(() => {
-    if (displayedProgress?.status !== 'running') return null;
-    const card = lastAssistantMessageCard;
-    if (card?.kind !== 'message') return null;
-    // Only mark the message as "streaming" (which suppresses markdown
-    // rendering) when it actually belongs to the running turn. Without this
-    // check, when the user kicks off a follow-up turn the prior turn's
-    // already-completed assistant reply gets re-flagged as streaming and
-    // its markdown collapses back to raw text until the next refresh.
-    if (card.turnId && displayedProgress?.id && card.turnId !== displayedProgress.id) {
-      return null;
-    }
-    return card.id;
-  });
-  const showTypingIndicator = $derived.by<boolean>(() => {
-    if (displayedProgress?.status !== 'running') return false;
-    const last = activeCards[activeCards.length - 1];
-    if (!last) return false;
-    return last.kind === 'message' && last.message.role === 'user';
-  });
-  const transcriptListItems = $derived<ChatTranscriptListItem[]>([
-    ...displayTranscriptCards.map((card) => ({ kind: 'card' as const, id: card.id, card })),
-    ...(showTypingIndicator ? [{ kind: 'typing' as const, id: 'typing-indicator', title: 'Assistant is typing' }] : []),
-    ...(assistantSharedFiles.length > 0
-      ? [{ kind: 'shared-files' as const, id: 'assistant-shared-files' }]
-      : [])
-  ]);
-  const srAnnouncement = $derived.by<string>(() => {
-    if (displayedProgress?.status !== 'running') return '';
-    const card = lastAssistantMessageCard;
-    if (!card || card.kind !== 'message') return '';
-    if (card.turnId && displayedProgress?.id && card.turnId !== displayedProgress.id) return '';
-    const text = (card.message.text ?? '').trim();
-    return text.length > 120 ? text.slice(text.length - 120) : text;
-  });
+  const streamingMessageId = $derived(chatDetailDisplay.streamingMessageId);
+  const transcriptListItems = $derived<ChatTranscriptListItem[]>(chatDetailDisplay.transcriptListItems);
+  const srAnnouncement = $derived(chatDetailDisplay.srAnnouncement);
   const activeChatBadges = $derived(pmaChatBadgeViews(activeChat, { showPmaAgent: false }));
   const activeSharedFileCount = $derived(activeSurfaceDeliveries.length);
   const activeRepoIngress = $derived(repoIngressForChat(activeChat));
   const createChatLabel = $derived(creating ? 'Creating...' : '+ New');
   const headerScopeLine = $derived(pmaChatHeaderScopeLine(activeChat, repoLabelForRepoId));
   /** Omit connected “Live · …” — redundant with the turn-status pill on the scope row. */
-  const showStreamHealthAside = $derived(
-    streamState === 'connecting' || streamState === 'interrupted'
-  );
-  const showStatusBar = $derived(
-    Boolean(
-      statusBar &&
-        statusBar.state !== 'idle' &&
-        (statusBar.state === 'done'
-          ? Boolean(statusBar.tokenUsageLabel || statusBar.contextRemainingLabel)
-            : (displayedProgress?.elapsedSeconds !== null && displayedProgress?.elapsedSeconds !== undefined) ||
-            (displayedProgress?.queueDepth ?? 0) > 0 ||
-            statusBar.tokenUsageLabel ||
-            statusBar.contextRemainingLabel ||
-            ['running', 'waiting', 'blocked', 'failed'].includes(statusBar.state))
-    )
-  );
-  const chatHasActivity = $derived(activeCards.length > 0 || showStatusBar);
-  const showStartPicker = $derived(Boolean(activeChat) && !loadingActive && !activeError && !chatHasActivity);
-  const hasRunnableDraft = $derived(Boolean(activeChat && (draft.trim() || pendingAttachments.length > 0)));
-  const canInterruptWithDraft = $derived(Boolean(activeChat && displayedProgress?.status === 'running' && hasRunnableDraft));
-  /** A new message lands in the queue when the chat is running or already has queued turns. */
-  const composerWillQueue = $derived(
-    Boolean(
-      activeChat &&
-        !isLocalDraftChatId(activeChat.id) &&
-        (displayedProgress?.status === 'running' || queuedTurns.length > 0)
-    )
-  );
+  const showStreamHealthAside = $derived(chatDetailDisplay.showStreamHealthAside);
+  const showStatusBar = $derived(chatDetailDisplay.showStatusBar);
+  const chatHasActivity = $derived(chatDetailDisplay.chatHasActivity);
+  const showStartPicker = $derived(chatDetailDisplay.showStartPicker);
+  const hasRunnableDraft = $derived(chatDetailDisplay.hasRunnableDraft);
+  const canInterruptWithDraft = $derived(chatDetailDisplay.canInterruptWithDraft);
+  const composerWillQueue = $derived(chatDetailDisplay.composerWillQueue);
   const slashSuggestions = $derived<SlashCommandSuggestion[]>(
     buildSlashCommandSuggestions(draft, {
       hasActiveChat: Boolean(activeChat),
       hasScopedWorkspace: selectedScope.kind !== 'local',
       isRunning: displayedProgress?.status === 'running',
-      queueDepth: queuedTurns.length || displayedProgress?.queueDepth || 0
+      queueDepth: chatDetailDisplay.queueDepthForCommands
     })
   );
   const showSlashCommandMenu = $derived(slashSuggestions.length > 0 && composerFocused);
