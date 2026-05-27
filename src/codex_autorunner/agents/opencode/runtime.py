@@ -46,7 +46,6 @@ from .protocol_payload import (
     build_turn_id,
     extract_delta_text_value,
     extract_error_text,
-    extract_message_phase,
     extract_part_and_delta,
     extract_permission_request,
     extract_question_request,
@@ -55,6 +54,7 @@ from .protocol_payload import (
     extract_turn_id,
     format_permission_prompt,
     map_approval_policy_to_permission,
+    message_completion_is_turn_terminal,
     normalize_permission_decision,
     normalize_question_answers,
     normalize_question_policy,
@@ -633,9 +633,8 @@ async def collect_opencode_output_from_events(
                 )
             if event.event == "message.completed" and is_primary_session:
                 assembler.on_primary_assistant_completion(payload, message_role)
-                if (
-                    message_role == "assistant"
-                    and extract_message_phase(payload) != "commentary"
+                if message_role == "assistant" and message_completion_is_turn_terminal(
+                    payload
                 ):
                     lifecycle.on_primary_completion()
             if event.event == "session.idle" or (

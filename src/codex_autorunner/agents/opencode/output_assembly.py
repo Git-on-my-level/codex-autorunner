@@ -9,7 +9,9 @@ exercising reconnect/stall logic.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
@@ -31,10 +33,10 @@ from .event_fields import (
 )
 from .protocol_payload import (
     extract_context_window,
-    extract_message_phase,
     extract_model_ids,
     extract_total_tokens,
     extract_usage_details,
+    message_completion_is_turn_terminal,
     parse_message_response,
     prompt_echo_matches,
     recover_last_assistant_message,
@@ -43,6 +45,7 @@ from .turn_lifecycle import OpenCodeTurnOutputSource
 from .usage_decoder import extract_usage
 
 PartHandler = Callable[[str, dict[str, Any], Optional[str]], Awaitable[None]]
+_CODE_SPAN_PATTERN = re.compile(r"`([^`]*)`")
 
 
 @dataclass(frozen=True)
@@ -52,6 +55,51 @@ class OutputAssemblyResult:
     usage: Optional[dict[str, Any]] = None
     output_source: OpenCodeTurnOutputSource = "none"
     effective_runtime: Optional[RuntimeIdentityStage] = None
+
+
+def _collapse_whitespace(text: str) -> str:
+    return "".join(text.split())
+
+
+def _spacing_anomaly_score(text: str) -> int:
+    """Score spaces that usually come from OpenCode token-boundary artifacts."""
+
+    score = 0
+    for index, char in enumerate(text):
+        if not char.isspace():
+            continue
+        previous = text[index - 1] if index > 0 else ""
+        next_char = text[index + 1] if index + 1 < len(text) else ""
+        if (
+            previous.isalnum()
+            and next_char.isalnum()
+            and (previous.isdigit() or next_char.isdigit())
+        ):
+            score += 2
+    for match in _CODE_SPAN_PATTERN.finditer(text):
+        code_text = match.group(1)
+        stripped = code_text.strip()
+        if code_text != stripped:
+            score += 2
+        score += sum(1 for char in stripped if char.isspace())
+    return score
+
+
+def _select_final_text(
+    completed_text: Optional[str],
+    streamed_text: str,
+) -> str:
+    if not completed_text:
+        return streamed_text
+    if not streamed_text:
+        return completed_text
+    if _collapse_whitespace(completed_text) != _collapse_whitespace(streamed_text):
+        return completed_text
+    completed_score = _spacing_anomaly_score(completed_text)
+    streamed_score = _spacing_anomaly_score(streamed_text)
+    if streamed_score < completed_score:
+        return streamed_text
+    return completed_text
 
 
 class OutputAssembler:
@@ -94,6 +142,7 @@ class OutputAssembler:
         self._error: Optional[str] = None
         self._message_roles: dict[str, str] = {}
         self._message_roles_seen = False
+        self._message_text_parts: dict[str, list[str]] = {}
         self._pending_text: dict[str, list[str]] = {}
         self._pending_no_id: list[str] = []
         self._no_id_role: Optional[str] = None
@@ -101,6 +150,7 @@ class OutputAssembler:
             None
         )
         self._last_completed_assistant_text: Optional[str] = None
+        self._last_terminal_assistant_message_id: Optional[str] = None
         self._last_usage_signature: Optional[
             tuple[
                 Optional[str],
@@ -188,7 +238,7 @@ class OutputAssembler:
         resolved_role = role
         if resolved_role is None and msg_id:
             resolved_role = self._message_roles.get(msg_id)
-        if message_result.text:
+        if message_result.text and message_completion_is_turn_terminal(payload):
             if resolved_role == "assistant" or resolved_role is None:
                 self._fallback_message = (
                     msg_id,
@@ -226,8 +276,11 @@ class OutputAssembler:
         """
         if message_role != "assistant":
             return
-        if extract_message_phase(payload) == "commentary":
+        if not message_completion_is_turn_terminal(payload):
             return
+        msg_id = extract_event_message_id(payload)
+        if msg_id:
+            self._last_terminal_assistant_message_id = msg_id
         message_result = parse_message_response(payload)
         self._last_completed_assistant_text = (
             message_result.text if message_result.text else None
@@ -391,9 +444,12 @@ class OutputAssembler:
     async def build_result(self) -> OutputAssemblyResult:
         """Build the final :class:`OutputAssemblyResult` after the stream loop.
 
-        Applies fallback-message selection and ``messages_fetcher`` recovery
-        if no streaming text was collected.
+        Applies pending stream flushes, fallback-message selection, and
+        ``messages_fetcher`` recovery if no streaming text was collected.
         """
+        if not self._text_parts and self.has_pending_text:
+            self._flush_all_pending_text()
+
         if not self._text_parts and self._fallback_message is not None:
             msg_id, role, text = self._fallback_message
             resolved_role = role
@@ -406,7 +462,60 @@ class OutputAssembler:
             ):
                 self._text_parts.append(text)
 
-        if not self._text_parts and self._messages_fetcher is not None:
+        if not self._text_parts:
+            recovered_text = await self._recover_text_from_messages()
+            if recovered_text:
+                self._text_parts.append(recovered_text)
+                self._output_source = "messages_snapshot"
+
+        streamed_text = self._streamed_text_for_final_message()
+        recovery_candidate = self._last_completed_assistant_text or streamed_text
+        if recovery_candidate and _spacing_anomaly_score(recovery_candidate) > 0:
+            recovered_text = await self._recover_text_from_messages(
+                attempts=3,
+                delay_seconds=0.05,
+            )
+            if (
+                recovered_text
+                and _collapse_whitespace(recovered_text)
+                == _collapse_whitespace(recovery_candidate)
+                and _spacing_anomaly_score(recovered_text)
+                < _spacing_anomaly_score(recovery_candidate)
+            ):
+                if self._last_completed_assistant_text:
+                    self._last_completed_assistant_text = recovered_text
+                else:
+                    streamed_text = recovered_text
+                self._output_source = "messages_snapshot"
+
+        final_text = _select_final_text(
+            self._last_completed_assistant_text,
+            streamed_text,
+        )
+        output_source = self._output_source
+        if final_text and output_source == "none":
+            output_source = "event_stream"
+        return OutputAssemblyResult(
+            text=final_text.strip(),
+            error=self._error,
+            usage=self._latest_usage_snapshot,
+            output_source=output_source,
+            effective_runtime=await self._effective_runtime_stage(),
+        )
+
+    async def _recover_text_from_messages(
+        self,
+        *,
+        attempts: int = 1,
+        delay_seconds: float = 0.0,
+    ) -> str:
+        if self._messages_fetcher is None:
+            return ""
+        recovered_text = ""
+        recovered_error: Optional[str] = None
+        for attempt_index in range(max(1, attempts)):
+            if attempt_index > 0 and delay_seconds > 0:
+                await asyncio.sleep(delay_seconds)
             try:
                 messages_payload = await self._messages_fetcher()
             except (
@@ -422,28 +531,16 @@ class OutputAssembler:
                     session_id=self._session_id,
                     exc=exc,
                 )
-            else:
-                recovered = recover_last_assistant_message(
-                    messages_payload,
-                    prompt=self._prompt,
-                )
-                if recovered.text:
-                    self._text_parts.append(recovered.text)
-                    self._output_source = "messages_snapshot"
-                if recovered.error and not self._error:
-                    self._error = recovered.error
-
-        final_text = self._last_completed_assistant_text or "".join(self._text_parts)
-        output_source = self._output_source
-        if final_text and output_source == "none":
-            output_source = "event_stream"
-        return OutputAssemblyResult(
-            text=final_text.strip(),
-            error=self._error,
-            usage=self._latest_usage_snapshot,
-            output_source=output_source,
-            effective_runtime=await self._effective_runtime_stage(),
-        )
+                continue
+            recovered = recover_last_assistant_message(
+                messages_payload,
+                prompt=self._prompt,
+            )
+            recovered_text = recovered.text or recovered_text
+            recovered_error = recovered.error or recovered_error
+        if recovered_error and not self._error:
+            self._error = recovered_error
+        return recovered_text
 
     async def _effective_runtime_stage(self) -> RuntimeIdentityStage:
         provider_id: Optional[str] = None
@@ -543,8 +640,8 @@ class OutputAssembler:
         if role == "user":
             return
         if role == "assistant":
-            self._append_readable_text(
-                self._text_parts,
+            self._append_assistant_text(
+                message_id,
                 text,
                 preserve_word_boundaries=preserve_word_boundaries,
             )
@@ -585,13 +682,23 @@ class OutputAssembler:
             return
         pending = self._pending_text.pop(message_id, [])
         if pending:
-            self._text_parts.extend(pending)
+            for text in pending:
+                self._append_assistant_text(
+                    message_id,
+                    text,
+                    preserve_word_boundaries=False,
+                )
 
     def _flush_all_pending_text(self) -> None:
         if self._pending_text:
-            for pending in list(self._pending_text.values()):
+            for message_id, pending in list(self._pending_text.items()):
                 if pending:
-                    self._text_parts.extend(pending)
+                    for text in pending:
+                        self._append_assistant_text(
+                            message_id,
+                            text,
+                            preserve_word_boundaries=False,
+                        )
             self._pending_text.clear()
         if self._pending_no_id:
             if (
@@ -601,6 +708,36 @@ class OutputAssembler:
             ):
                 self._text_parts.extend(self._pending_no_id)
             self._pending_no_id.clear()
+
+    def _append_assistant_text(
+        self,
+        message_id: str,
+        text: str,
+        *,
+        preserve_word_boundaries: bool,
+    ) -> None:
+        parts = self._message_text_parts.setdefault(message_id, [])
+        self._append_readable_text(
+            parts,
+            text,
+            preserve_word_boundaries=preserve_word_boundaries,
+        )
+        self._append_readable_text(
+            self._text_parts,
+            text,
+            preserve_word_boundaries=preserve_word_boundaries,
+        )
+
+    def _streamed_text_for_final_message(self) -> str:
+        if self._last_terminal_assistant_message_id is not None:
+            terminal_parts = self._message_text_parts.get(
+                self._last_terminal_assistant_message_id,
+            )
+            if terminal_parts:
+                return "".join(terminal_parts)
+            if self._message_text_parts:
+                return ""
+        return "".join(self._text_parts)
 
     async def _resolve_session_model_ids(
         self,

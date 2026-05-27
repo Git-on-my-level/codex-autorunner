@@ -777,6 +777,316 @@ async def test_multi_message_turn_prefers_last_completed() -> None:
 
 
 @pytest.mark.anyio
+async def test_tool_call_completion_does_not_override_final_text() -> None:
+    asm = OutputAssembler(session_id="s1")
+
+    asm.on_primary_assistant_completion(
+        {
+            "info": {"id": "m1", "role": "assistant", "finish": "tool-calls"},
+            "parts": [{"type": "text", "text": "Let me retry."}],
+        },
+        message_role="assistant",
+    )
+    asm.on_primary_assistant_completion(
+        {
+            "info": {"id": "m2", "role": "assistant", "finish": "stop"},
+            "parts": [{"type": "text", "text": "Done."}],
+        },
+        message_role="assistant",
+    )
+
+    result = await asm.build_result()
+    assert result.text == "Done."
+
+
+@pytest.mark.anyio
+async def test_tool_call_checkpoint_stream_excluded_from_final_stream_fallback() -> (
+    None
+):
+    asm = OutputAssembler(session_id="s1")
+
+    msg_id, role = asm.on_register_message_role(
+        {"info": {"id": "m1", "role": "assistant"}}
+    )
+    asm.on_handle_role_update(msg_id, role)
+    await asm.on_text_delta(
+        part_message_id="m1",
+        delta_text="Let me check.",
+        part_id="p1",
+        part_dict=None,
+    )
+    asm.on_message_completed(
+        {
+            "info": {"id": "m1", "role": "assistant", "finish": "tool-calls"},
+            "parts": [{"type": "text", "text": "Let me check."}],
+        },
+        is_primary_session=True,
+        event_session_id="s1",
+    )
+    asm.on_primary_assistant_completion(
+        {
+            "info": {"id": "m1", "role": "assistant", "finish": "tool-calls"},
+            "parts": [{"type": "text", "text": "Let me check."}],
+        },
+        message_role="assistant",
+    )
+
+    msg_id2, role2 = asm.on_register_message_role(
+        {"info": {"id": "m2", "role": "assistant"}}
+    )
+    asm.on_handle_role_update(msg_id2, role2)
+    await asm.on_text_delta(
+        part_message_id="m2",
+        delta_text="Final answer.",
+        part_id="p2",
+        part_dict=None,
+    )
+    asm.on_message_completed(
+        {"info": {"id": "m2", "role": "assistant", "finish": "stop"}, "parts": []},
+        is_primary_session=True,
+        event_session_id="s1",
+    )
+    asm.on_primary_assistant_completion(
+        {"info": {"id": "m2", "role": "assistant", "finish": "stop"}, "parts": []},
+        message_role="assistant",
+    )
+
+    result = await asm.build_result()
+    assert result.text == "Final answer."
+
+
+@pytest.mark.anyio
+async def test_tool_call_checkpoint_stream_not_used_when_final_has_no_stream() -> None:
+    asm = OutputAssembler(session_id="s1")
+
+    msg_id, role = asm.on_register_message_role(
+        {"info": {"id": "m1", "role": "assistant"}}
+    )
+    asm.on_handle_role_update(msg_id, role)
+    await asm.on_text_delta(
+        part_message_id="m1",
+        delta_text="Let me check.",
+        part_id="p1",
+        part_dict=None,
+    )
+    asm.on_primary_assistant_completion(
+        {
+            "info": {"id": "m1", "role": "assistant", "finish": "tool-calls"},
+            "parts": [{"type": "text", "text": "Let me check."}],
+        },
+        message_role="assistant",
+    )
+
+    msg_id2, role2 = asm.on_register_message_role(
+        {"info": {"id": "m2", "role": "assistant"}}
+    )
+    asm.on_handle_role_update(msg_id2, role2)
+    asm.on_primary_assistant_completion(
+        {"info": {"id": "m2", "role": "assistant", "finish": "stop"}, "parts": []},
+        message_role="assistant",
+    )
+
+    result = await asm.build_result()
+    assert result.text == ""
+
+
+@pytest.mark.anyio
+async def test_completed_message_text_preferred_over_spaced_stream_text() -> None:
+    asm = OutputAssembler(session_id="s1")
+    msg_id, role = asm.on_register_message_role(
+        {"info": {"id": "m1", "role": "assistant"}}
+    )
+    asm.on_handle_role_update(msg_id, role)
+
+    for delta in (
+        "The single failure is a known fl",
+        "aky test in `",
+        "py",
+        "project",
+        ".tom",
+        "l",
+        "`.",
+    ):
+        await asm.on_text_delta(
+            part_message_id="m1",
+            delta_text=delta,
+            part_id="p1",
+            part_dict=None,
+        )
+
+    asm.on_primary_assistant_completion(
+        {
+            "properties": {
+                "info": {"id": "m1", "role": "assistant", "finish": "stop"},
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "The single failure is a known flaky test in `pyproject.toml`.",
+                    }
+                ],
+            }
+        },
+        message_role="assistant",
+    )
+
+    result = await asm.build_result()
+    assert (
+        result.text == "The single failure is a known flaky test in `pyproject.toml`."
+    )
+
+
+@pytest.mark.anyio
+async def test_stream_text_preferred_over_spaced_completed_token_text() -> None:
+    asm = OutputAssembler(session_id="s1")
+    msg_id, role = asm.on_register_message_role(
+        {"info": {"id": "m1", "role": "assistant"}}
+    )
+    asm.on_handle_role_update(msg_id, role)
+
+    await asm.on_text_delta(
+        part_message_id="m1",
+        delta_text="CAR_OPENCODE_PROBE_24db408dd3fd",
+        part_id="p1",
+        part_dict=None,
+    )
+
+    asm.on_primary_assistant_completion(
+        {
+            "properties": {
+                "info": {"id": "m1", "role": "assistant", "finish": "stop"},
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "CAR_OPENCODE_PROBE_24 db 408 dd 3 fd",
+                    }
+                ],
+            }
+        },
+        message_role="assistant",
+    )
+
+    result = await asm.build_result()
+    assert result.text == "CAR_OPENCODE_PROBE_24db408dd3fd"
+
+
+@pytest.mark.anyio
+async def test_spaced_completed_text_recovers_clean_message_snapshot() -> None:
+    async def fetch_messages() -> list[dict[str, object]]:
+        return [
+            {
+                "info": {"id": "m1", "role": "assistant", "finish": "stop"},
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "CAR_OPENCODE_PROBE_ff2aabeb1b46",
+                    }
+                ],
+            }
+        ]
+
+    asm = OutputAssembler(session_id="s1", messages_fetcher=fetch_messages)
+    asm.on_primary_assistant_completion(
+        {
+            "properties": {
+                "info": {"id": "m1", "role": "assistant", "finish": "stop"},
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "CAR_OPENCODE_PROBE_ff 2 aab eb 1 b 46",
+                    }
+                ],
+            }
+        },
+        message_role="assistant",
+    )
+
+    result = await asm.build_result()
+    assert result.text == "CAR_OPENCODE_PROBE_ff2aabeb1b46"
+    assert result.output_source == "messages_snapshot"
+
+
+@pytest.mark.anyio
+async def test_spaced_fallback_text_recovers_clean_message_snapshot() -> None:
+    async def fetch_messages() -> list[dict[str, object]]:
+        return [
+            {
+                "info": {"id": "m1", "role": "assistant", "finish": "stop"},
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "CAR_OPENCODE_PROBE_c25ba7e696ea",
+                    }
+                ],
+            }
+        ]
+
+    asm = OutputAssembler(session_id="s1", messages_fetcher=fetch_messages)
+    asm.on_message_completed(
+        {
+            "properties": {
+                "info": {"id": "m1", "role": "assistant", "finish": "stop"},
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "CAR_OPENCODE_PROBE_c 25 ba 7 e 696 ea",
+                    }
+                ],
+            }
+        },
+        is_primary_session=True,
+        event_session_id="s1",
+    )
+
+    result = await asm.build_result()
+    assert result.text == "CAR_OPENCODE_PROBE_c25ba7e696ea"
+    assert result.output_source == "messages_snapshot"
+
+
+@pytest.mark.anyio
+async def test_pending_stream_text_flushed_before_completed_fallback() -> None:
+    asm = OutputAssembler(session_id="s1")
+
+    await asm.on_text_delta(
+        part_message_id=None,
+        delta_text="`CAR_OPENCODE_PROBE_78ef622258f3`",
+        part_id="p1",
+        part_dict=None,
+    )
+    asm.on_message_completed(
+        {
+            "properties": {
+                "info": {"id": "m1", "role": "assistant", "finish": "stop"},
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "` CAR_OPENCODE_PROBE_78 ef 622258 f 3 `",
+                    }
+                ],
+            }
+        },
+        is_primary_session=True,
+        event_session_id="s1",
+    )
+    asm.on_primary_assistant_completion(
+        {
+            "properties": {
+                "info": {"id": "m1", "role": "assistant", "finish": "stop"},
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "` CAR_OPENCODE_PROBE_78 ef 622258 f 3 `",
+                    }
+                ],
+            }
+        },
+        message_role="assistant",
+    )
+
+    result = await asm.build_result()
+    assert result.text == "`CAR_OPENCODE_PROBE_78ef622258f3`"
+
+
+@pytest.mark.anyio
 async def test_flush_pending_respects_roles_seen() -> None:
     asm = OutputAssembler(session_id="s1")
 

@@ -13,12 +13,14 @@ from codex_autorunner.agents.opencode.protocol_payload import (
     OPENCODE_IDLE_STATUS_VALUES,
     extract_delta_text_value,
     extract_error_text,
+    extract_message_finish,
     extract_message_phase,
     extract_part_and_delta,
     extract_session_id,
     extract_status_type,
     extract_total_tokens,
     extract_usage_details,
+    message_completion_is_turn_terminal,
     normalize_message_phase,
     parse_message_response,
     prompt_echo_matches,
@@ -357,6 +359,29 @@ class TestExtractMessagePhase:
             "message": {"phase": "final_answer"},
         }
         assert extract_message_phase(payload) == "commentary"
+
+
+class TestExtractMessageFinish:
+    def test_properties_info_finish(self) -> None:
+        payload = {"properties": {"info": {"finish": "tool-calls"}}}
+        assert extract_message_finish(payload) == "tool-calls"
+
+    def test_part_stop_reason_does_not_shadow_message_finish(self) -> None:
+        payload = {
+            "properties": {
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "done",
+                        "stop_reason": "tool-calls",
+                    }
+                ],
+                "info": {"finish": "stop"},
+            }
+        }
+
+        assert extract_message_finish(payload) == "stop"
+        assert message_completion_is_turn_terminal(payload)
 
 
 class TestNormalizeMessagePhase:
