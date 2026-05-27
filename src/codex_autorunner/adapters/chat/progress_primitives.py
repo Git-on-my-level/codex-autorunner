@@ -288,6 +288,7 @@ class TurnProgressTracker:
         *,
         new_segment: bool = False,
         preserve_word_boundaries: bool = False,
+        strict_append: bool = False,
     ) -> None:
         output_piece = _normalize_output_text(text)
         if not output_piece.strip():
@@ -306,14 +307,16 @@ class TurnProgressTracker:
             )
             return
         current_output = self.actions[self.last_output_index].text
-        self.output_buffer = _truncate_tail(
-            _merge_output_text(
+        merged_output = (
+            f"{current_output}{output_piece}"
+            if strict_append
+            else _merge_output_text(
                 current_output,
                 output_piece,
                 preserve_word_boundaries=preserve_word_boundaries,
-            ),
-            self.max_output_chars,
+            )
         )
+        self.output_buffer = _truncate_tail(merged_output, self.max_output_chars)
         self.update_action_raw(self.last_output_index, self.output_buffer, "update")
 
     def note_commentary(self, text: str) -> None:

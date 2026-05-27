@@ -128,7 +128,7 @@ def _looks_like_token_continuation(current: str, incoming: str) -> bool:
     fragment = _current_word_fragment(current)
     if any(char in fragment for char in "/._-`*"):
         return True
-    if any(char in incoming for char in "/_-") or "." in incoming[:-1]:
+    if "." in incoming[:-1]:
         return True
     return _likely_subword_prefix_continuation(current_alpha, incoming_alpha)
 

@@ -1081,6 +1081,41 @@ async def test_normalize_runtime_thread_raw_event_handles_opencode_message_part_
     assert state.best_assistant_text() == "OK"
 
 
+async def test_opencode_text_part_updates_preserve_readable_word_boundaries() -> None:
+    state = RuntimeThreadRunEventState()
+
+    for text in (
+        "Currently",
+        "on",
+        "branch",
+        "fix/automations-pma-turn-",
+        "migration",
+        ".",
+    ):
+        await normalize_runtime_thread_raw_event(
+            format_sse(
+                "app-server",
+                {
+                    "message": {
+                        "method": "message.part.updated",
+                        "params": {
+                            "properties": {
+                                "part": {"type": "text"},
+                                "delta": text,
+                            }
+                        },
+                    }
+                },
+            ),
+            state,
+        )
+
+    assert (
+        state.best_assistant_text()
+        == "Currently on branch fix/automations-pma-turn-migration."
+    )
+
+
 async def test_normalize_runtime_thread_raw_event_maps_opencode_reasoning_parts_to_thinking() -> (
     None
 ):

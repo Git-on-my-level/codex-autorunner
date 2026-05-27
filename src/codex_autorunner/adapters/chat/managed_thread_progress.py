@@ -101,6 +101,7 @@ def apply_run_event_to_progress_tracker(
                 preserve_word_boundaries=bool(
                     run_event.data.get("preserve_word_boundaries")
                 ),
+                strict_append=bool(run_event.data.get("strict_append")),
             )
         return ProgressTrackerEventOutcome(changed=True)
 

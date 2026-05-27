@@ -356,9 +356,13 @@ def merge_runtime_thread_raw_events(
     return merge_runtime_raw_events(streamed_raw_events, result_raw_events)
 
 
-def _merge_pending_stream_text(current: str, incoming: str) -> str:
+def _merge_pending_stream_text(
+    current: str, incoming: str, *, preserve_word_boundaries: bool = False
+) -> str:
     accumulator = AssistantTextAccumulator(stream_text=current)
-    accumulator.merge_snapshot(incoming)
+    accumulator.merge_snapshot(
+        incoming, preserve_word_boundaries=preserve_word_boundaries
+    )
     return accumulator.stream_text
 
 
@@ -476,42 +480,59 @@ class RuntimeThreadRunEventState:
         text: str,
         *,
         timestamp: Optional[str] = None,
+        preserve_word_boundaries: bool = False,
     ) -> list[RunEvent]:
         event_timestamp = timestamp or now_iso()
         if not isinstance(text, str) or not text:
             return []
         if message_id is None:
             if not self.message_roles_seen:
-                self.note_stream_text(text)
+                self.note_stream_text(
+                    text, preserve_word_boundaries=preserve_word_boundaries
+                )
                 return [
                     OutputDelta(
                         timestamp=event_timestamp,
                         content=text,
                         delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
                         stream_mode=RUN_EVENT_STREAM_MODE_SNAPSHOT,
+                        data=(
+                            {"preserve_word_boundaries": True}
+                            if preserve_word_boundaries
+                            else {}
+                        ),
                     )
                 ]
             self.pending_stream_no_id = _merge_pending_stream_text(
                 self.pending_stream_no_id,
                 text,
+                preserve_word_boundaries=preserve_word_boundaries,
             )
             return []
         role = self.message_roles.get(message_id)
         if role == "user":
             return []
         if role == "assistant":
-            self.note_stream_text(text)
+            self.note_stream_text(
+                text, preserve_word_boundaries=preserve_word_boundaries
+            )
             return [
                 OutputDelta(
                     timestamp=event_timestamp,
                     content=text,
                     delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
                     stream_mode=RUN_EVENT_STREAM_MODE_SNAPSHOT,
+                    data=(
+                        {"preserve_word_boundaries": True}
+                        if preserve_word_boundaries
+                        else {}
+                    ),
                 )
             ]
         self.pending_stream_by_message[message_id] = _merge_pending_stream_text(
             self.pending_stream_by_message.get(message_id, ""),
             text,
+            preserve_word_boundaries=preserve_word_boundaries,
         )
         return []
 
