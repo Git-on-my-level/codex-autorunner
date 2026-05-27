@@ -413,6 +413,7 @@ from .service_lifecycle import (
 from .service_normalization import (
     DiscordAttachmentAdapter,
     SavedDiscordAttachment,
+    _extract_question_options,
     build_attachment_context_payload,
     build_discord_approval_message,
     build_discord_queue_status_message,
@@ -651,27 +652,6 @@ class _DiscordPendingUserInput:
     question: dict[str, Any]
     options: list[str]
     future: asyncio.Future[list[str] | None]
-
-
-def _discord_question_options(question: Mapping[str, Any]) -> tuple[list[str], bool]:
-    multiple = bool(question.get("multiple"))
-    for key in ("options", "choices"):
-        raw = question.get(key)
-        if not isinstance(raw, list):
-            continue
-        options: list[str] = []
-        for option in raw:
-            if isinstance(option, str) and option.strip():
-                options.append(option.strip())
-                continue
-            if isinstance(option, Mapping):
-                for label_key in ("label", "text", "value", "name", "id"):
-                    value = option.get(label_key)
-                    if isinstance(value, str) and value.strip():
-                        options.append(value.strip())
-                        break
-        return options, multiple
-    return [], multiple
 
 
 @dataclass(frozen=True)
@@ -3407,7 +3387,7 @@ class DiscordBotService(DiscordInteractionResponseMixin):
             return None
         answers: list[list[str]] = []
         for index, question in enumerate(questions):
-            options, _multiple = _discord_question_options(question)
+            options, _multiple = _extract_question_options(question)
             token = uuid.uuid4().hex[:12]
             loop = asyncio.get_running_loop()
             future: asyncio.Future[list[str] | None] = loop.create_future()

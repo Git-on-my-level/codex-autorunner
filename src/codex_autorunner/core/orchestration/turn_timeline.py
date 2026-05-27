@@ -4,7 +4,7 @@ import json
 import logging
 from dataclasses import asdict
 from datetime import datetime, timezone
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from ..ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
@@ -50,10 +50,27 @@ _HOT_FAMILY_ROW_LIMITS = {
     "tool_result": 128,
     "output_delta": 200,
     "run_notice": 100,
-    "user_input_requested": 64,
     "token_usage": 64,
     "terminal": 8,
 }
+_HOT_EVENT_TYPE_ROW_LIMITS = {
+    "user_input_requested": 64,
+}
+
+
+def _hot_persist_spill_metrics(
+    hot_rows: Mapping[str, int],
+    *,
+    family: str,
+    event_type: str,
+) -> tuple[str, int]:
+    normalized_event_type = str(event_type or "").strip()
+    type_limit = _HOT_EVENT_TYPE_ROW_LIMITS.get(normalized_event_type)
+    if type_limit is not None and hot_rows.get(normalized_event_type, 0) >= type_limit:
+        return normalized_event_type, type_limit
+    return family, _HOT_FAMILY_ROW_LIMITS.get(family, 0)
+
+
 _COALESCED_NOTICE_KINDS = frozenset({"progress", "thinking"})
 logger = logging.getLogger(__name__)
 
@@ -141,11 +158,13 @@ def _collect_execution_family_hot_rows(
         ).fetchall()
     family_hot_rows: dict[str, int] = {}
     for row in rows:
-        family = timeline_hot_family_for_event_type(row["event_type"])
+        event_type = str(row["event_type"] or "").strip()
+        count = int(row["cnt"] or 0)
+        if event_type in _HOT_EVENT_TYPE_ROW_LIMITS:
+            family_hot_rows[event_type] = family_hot_rows.get(event_type, 0) + count
+        family = timeline_hot_family_for_event_type(event_type)
         if family:
-            family_hot_rows[family] = family_hot_rows.get(family, 0) + int(
-                row["cnt"] or 0
-            )
+            family_hot_rows[family] = family_hot_rows.get(family, 0) + count
     return family_hot_rows
 
 
@@ -262,8 +281,13 @@ class _HotProjectionState:
         self.last_notice_by_kind = _seed_notice_memory(hub_root, execution_id)
         self.last_output_by_type = _seed_output_memory(hub_root, execution_id)
 
-    def note_hot_persisted(self, family: str) -> None:
+    def note_hot_persisted(self, family: str, *, event_type: str = "") -> None:
         self.family_hot_rows[family] = self.family_hot_rows.get(family, 0) + 1
+        normalized_event_type = str(event_type or "").strip()
+        if normalized_event_type in _HOT_EVENT_TYPE_ROW_LIMITS:
+            self.family_hot_rows[normalized_event_type] = (
+                self.family_hot_rows.get(normalized_event_type, 0) + 1
+            )
 
     def note_deduped(self, family: str) -> None:
         self.deduped_counts[family] = self.deduped_counts.get(family, 0) + 1
@@ -287,7 +311,12 @@ class _HotProjectionState:
                 content, _HOT_STATE_OUTPUT_MAX_CHARS
             )
 
-    def allows_hot_persist(self, family: str) -> bool:
+    def allows_hot_persist(self, family: str, *, event_type: str = "") -> bool:
+        normalized_event_type = str(event_type or "").strip()
+        type_limit = _HOT_EVENT_TYPE_ROW_LIMITS.get(normalized_event_type)
+        if type_limit is not None:
+            if self.family_hot_rows.get(normalized_event_type, 0) >= type_limit:
+                return False
         limit = _HOT_FAMILY_ROW_LIMITS.get(family)
         if limit is None:
             return True
@@ -808,7 +837,12 @@ def persist_turn_timeline(
                         deduped_count=hot_state.deduped_counts.get(family, 0),
                     )
                 continue
-            if not hot_state.allows_hot_persist(family):
+            if not hot_state.allows_hot_persist(family, event_type=event_type):
+                limit_key, hot_limit = _hot_persist_spill_metrics(
+                    hot_state.family_hot_rows,
+                    family=family,
+                    event_type=event_type,
+                )
                 hot_state.note_spilled(
                     family,
                     has_cold_trace=bool(
@@ -825,8 +859,8 @@ def persist_turn_timeline(
                         and cold_trace_writer is not None
                         and routing.capture_cold_trace
                     ),
-                    hot_rows_so_far=hot_state.family_hot_rows.get(family, 0),
-                    hot_limit=_HOT_FAMILY_ROW_LIMITS.get(family, 0),
+                    hot_rows_so_far=hot_state.family_hot_rows.get(limit_key, 0),
+                    hot_limit=hot_limit,
                 )
                 continue
             event_payload = build_hot_projection_envelope(
@@ -902,7 +936,7 @@ def persist_turn_timeline(
                     1,
                 ),
             )
-            hot_state.note_hot_persisted(family)
+            hot_state.note_hot_persisted(family, event_type=event_type)
     if count > 0:
         store.save_checkpoint(checkpoint_accumulator.build())
     return count
