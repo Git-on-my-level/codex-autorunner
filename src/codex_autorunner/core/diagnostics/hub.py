@@ -4,17 +4,12 @@ from pathlib import Path
 
 from ...manifest import load_manifest, load_manifest_with_issues
 from ..config import HubConfig
+from ..control_plane_cleanup import plan_control_plane_cleanup
 from ..destinations import (
     probe_docker_readiness,
     resolve_effective_repo_destination,
 )
 from ..orchestration.sqlite import collect_orchestration_control_plane_status
-from ..state_roots import (
-    HUB_MANIFEST_FILENAME,
-    ORCHESTRATION_DB_FILENAME,
-    resolve_hub_manifest_path,
-    resolve_hub_orchestration_db_path,
-)
 from .types import DoctorCheck
 
 
@@ -256,37 +251,18 @@ def hub_control_plane_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
         )
     )
 
-    canonical_db = resolve_hub_orchestration_db_path(hub_config.root).resolve()
-    canonical_manifest = resolve_hub_manifest_path(
-        hub_config.root,
-        raw_config=hub_config.raw,
-    ).resolve()
-    nested_db_count = 0
-    nested_manifest_count = 0
-    for pattern, filename in (
-        (
-            f"**/.codex-autorunner/{ORCHESTRATION_DB_FILENAME}",
-            ORCHESTRATION_DB_FILENAME,
-        ),
-        (f"**/.codex-autorunner/{HUB_MANIFEST_FILENAME}", HUB_MANIFEST_FILENAME),
-    ):
-        try:
-            candidates = list(hub_config.root.glob(pattern))
-        except OSError:
-            candidates = []
-        for candidate in candidates:
-            try:
-                resolved = candidate.resolve()
-            except OSError:
-                continue
-            if filename == ORCHESTRATION_DB_FILENAME:
-                if resolved == canonical_db:
-                    continue
-                nested_db_count += 1
-            else:
-                if resolved == canonical_manifest:
-                    continue
-                nested_manifest_count += 1
+    cleanup_report = plan_control_plane_cleanup(
+        hub_root=hub_config.root,
+        manifest_path=hub_config.manifest_path,
+    )
+    nested_db_count = sum(
+        1
+        for candidate in cleanup_report.candidates
+        if candidate.kind == "orchestration_db"
+    )
+    nested_manifest_count = sum(
+        1 for candidate in cleanup_report.candidates if candidate.kind == "manifest"
+    )
     if nested_db_count or nested_manifest_count:
         checks.append(
             DoctorCheck(
@@ -300,6 +276,7 @@ def hub_control_plane_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
                 ),
                 severity="info",
                 check_id="hub.control_plane.nested_artifacts",
+                fix=f"Preview cleanup with: car cleanup control-plane --path {hub_config.root}",
             )
         )
     else:
@@ -310,6 +287,7 @@ def hub_control_plane_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
                 message="No nested non-authoritative orchestration DBs or manifests found.",
                 severity="info",
                 check_id="hub.control_plane.nested_artifacts",
+                fix=f"Use: car cleanup control-plane --path {hub_config.root} for a full artifact report.",
             )
         )
     return checks

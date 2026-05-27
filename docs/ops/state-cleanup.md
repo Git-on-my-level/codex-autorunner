@@ -115,6 +115,12 @@ Total: deleted=22 bytes=36700160
 - `manifest.yml`
 - Stable reports (`reports/latest-*`, `final_report.md`)
 
+Legacy control-plane-looking files under hub-owned repo/worktree
+`.codex-autorunner/` directories are handled separately by
+`car cleanup control-plane --path <hub>`. That command dry-runs first, archives
+on `--apply`, and preserves tickets, contextspace, filebox, GitHub context,
+diagnostics, logs, and generated context artifacts.
+
 Blocked candidates appear in the report with a `blocked=` count and a
 human-readable reason.
 
