@@ -249,7 +249,7 @@ export function buildChatDetailDisplayReadModel(
       ...(input.assistantSharedFileCount > 0 ? [{ kind: 'shared-files' as const, id: 'assistant-shared-files' }] : [])
     ],
     statusAnnouncement: screenReaderStatusAnnouncement(input, statusBar, lastAssistantMessageCard),
-    alertAnnouncement: screenReaderAlertAnnouncement(input, statusBar),
+    alertAnnouncement: screenReaderAlertAnnouncement(statusBar),
     showStreamHealthAside: input.streamState === 'connecting' || input.streamState === 'interrupted',
     showStatusBar,
     chatHasActivity,
@@ -320,29 +320,11 @@ function screenReaderStatusAnnouncement(
   return queueText;
 }
 
-function screenReaderAlertAnnouncement(
-  input: ChatDetailDisplayReadModelInput,
-  statusBar: PmaStatusBar | null
-): string {
-  if (input.activeError) {
-    return `Could not load this chat: ${errorMessage(input.activeError)}`;
-  }
-  if (input.streamState === 'interrupted') {
-    return 'Live chat updates were interrupted. Reconnecting and repairing from the latest snapshot.';
-  }
+function screenReaderAlertAnnouncement(statusBar: PmaStatusBar | null): string {
   if (statusBar?.state === 'failed') {
     return statusBar.phase ? `Turn failed: ${statusBar.phase}` : 'Turn failed';
   }
   return '';
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message;
-  if (error && typeof error === 'object') {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === 'string' && message.trim()) return message.trim();
-  }
-  return 'Unknown error';
 }
 
 function shouldShowChatDetailStatusBar(
