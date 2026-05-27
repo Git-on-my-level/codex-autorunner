@@ -2084,10 +2084,16 @@ class ExecutionCommands(TelegramCommandSupportMixin):
             and placeholder_id is not None
             and placeholder_text != PLACEHOLDER_TEXT
         ):
-            await self._edit_message_text(
+            await self._delete_message(
                 message.chat_id,
                 placeholder_id,
-                PLACEHOLDER_TEXT,
+                thread_id=message.thread_id,
+            )
+            placeholder_id = await self._send_placeholder(
+                message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                text=PLACEHOLDER_TEXT,
             )
         return placeholder_id
 

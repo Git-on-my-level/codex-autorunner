@@ -1981,11 +1981,28 @@ async def _run_discord_orchestrated_turn_for_message(
             service, "_claim_queued_notice_progress_message", None
         )
         if callable(claim_queued_notice_progress_message):
+            queued_notice_message_id = None
             with contextlib.suppress(TypeError):
-                reusable_progress_message_id = claim_queued_notice_progress_message(
+                queued_notice_message_id = claim_queued_notice_progress_message(
                     channel_id=channel_id,
                     source_message_id=source_message_id,
                 )
+            if queued_notice_message_id:
+                with contextlib.suppress(
+                    DiscordPermanentError,
+                    DiscordTransientError,
+                    RuntimeError,
+                    ConnectionError,
+                    OSError,
+                ):
+                    await service._delete_channel_message_safe(
+                        channel_id,
+                        queued_notice_message_id,
+                        record_id=(
+                            "discord:queued-progress-started:"
+                            f"{managed_thread_id}:{source_message_id}"
+                        ),
+                    )
     if not reusable_progress_message_id:
         # PMA message ingress posts an immediate "Received. Preparing turn..."
         # placeholder before the managed-turn runner starts. Claim it here so the
