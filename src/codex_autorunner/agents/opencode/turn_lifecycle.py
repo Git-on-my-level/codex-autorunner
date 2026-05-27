@@ -17,6 +17,7 @@ from typing import Any, Callable, Literal, Optional
 from .protocol_payload import (
     extract_message_phase,
     extract_status_type,
+    message_completion_is_turn_terminal,
     parse_message_response,
     status_is_idle,
 )
@@ -89,7 +90,7 @@ def terminal_signal_from_event(method: str, params: dict[str, Any]) -> Optional[
         return "session.idle"
     if method == "session.status" and status_is_idle(extract_status_type(params)):
         return "session.status:idle"
-    if method == "message.completed" and extract_message_phase(params) != "commentary":
+    if method == "message.completed" and message_completion_is_turn_terminal(params):
         return "message.completed"
     if method == "item/completed":
         item = params.get("item")

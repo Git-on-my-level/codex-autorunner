@@ -245,6 +245,76 @@ async def test_collect_output_full_text_growth() -> None:
 
 
 @pytest.mark.anyio
+async def test_collect_output_does_not_stop_on_tool_call_message_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        opencode_stream_lifecycle,
+        "_OPENCODE_POST_COMPLETION_GRACE_SECONDS",
+        0.0,
+    )
+
+    events = [
+        SSEEvent(
+            event="message.updated",
+            data='{"sessionID":"s1","properties":{"info":{"id":"m1","role":"assistant"}}}',
+        ),
+        SSEEvent(
+            event="message.part.delta",
+            data='{"sessionID":"s1","properties":{"partID":"p1","messageID":"m1",'
+            '"delta":{"text":"Let me retry."}}}',
+        ),
+        SSEEvent(
+            event="message.completed",
+            data=json.dumps(
+                {
+                    "sessionID": "s1",
+                    "properties": {
+                        "info": {
+                            "id": "m1",
+                            "role": "assistant",
+                            "finish": "tool-calls",
+                        },
+                        "parts": [{"type": "text", "text": "Let me retry."}],
+                    },
+                }
+            ),
+        ),
+        SSEEvent(
+            event="message.updated",
+            data='{"sessionID":"s1","properties":{"info":{"id":"m2","role":"assistant"}}}',
+        ),
+        SSEEvent(
+            event="message.part.delta",
+            data='{"sessionID":"s1","properties":{"partID":"p2","messageID":"m2",'
+            '"delta":{"text":"Done. Release complete."}}}',
+        ),
+        SSEEvent(
+            event="message.completed",
+            data=json.dumps(
+                {
+                    "sessionID": "s1",
+                    "properties": {
+                        "info": {"id": "m2", "role": "assistant", "finish": "stop"},
+                        "parts": [{"type": "text", "text": "Done. Release complete."}],
+                    },
+                }
+            ),
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+
+    assert output.text == "Done. Release complete."
+    assert output.terminal_signal == "message.completed"
+    assert output.error is None
+
+
+@pytest.mark.anyio
 async def test_collect_output_session_error() -> None:
     events = [
         SSEEvent(

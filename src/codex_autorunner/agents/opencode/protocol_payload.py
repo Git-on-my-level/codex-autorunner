@@ -45,6 +45,17 @@ OPENCODE_IDLE_STATUS_VALUES = {
     "success",
 }
 
+OPENCODE_TOOL_CALL_FINISH_VALUES = {
+    "tool-call",
+    "tool-calls",
+    "tool_call",
+    "tool_calls",
+    "tool-use",
+    "tool-uses",
+    "tool_use",
+    "tool_uses",
+}
+
 
 @dataclass(frozen=True)
 class OpenCodeMessageResult:
@@ -265,7 +276,12 @@ def extract_error_text(payload: Any) -> Optional[str]:
 def extract_visible_message_text(payload: Any) -> str:
     if not isinstance(payload, dict):
         return ""
-    parts_raw = payload.get("parts")
+    parts_raw = None
+    for container in _walk_nested_containers(payload):
+        candidate = container.get("parts")
+        if isinstance(candidate, list):
+            parts_raw = candidate
+            break
     text_parts: list[str] = []
     if isinstance(parts_raw, list):
         for part in parts_raw:
@@ -279,28 +295,44 @@ def extract_visible_message_text(payload: Any) -> str:
     return "".join(text_parts).strip()
 
 
+def _message_response_candidates(payload: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    yield payload
+    properties = payload.get("properties")
+    if isinstance(properties, dict):
+        yield properties
+    response = payload.get("response")
+    if isinstance(response, dict):
+        yield response
+
+
 def parse_message_response(payload: Any) -> OpenCodeMessageResult:
-    decoded = _decode_message_response(payload)
-    text = decoded.get("text")
-    error = decoded.get("error")
-    if isinstance(text, str) and text:
-        return OpenCodeMessageResult(text=text.strip(), error=error)
     if not isinstance(payload, dict):
         return OpenCodeMessageResult(text="")
-    info = payload.get("info")
-    error = error or extract_error_text(info) or extract_error_text(payload)
-    parts_raw = payload.get("parts")
-    text_parts: list[str] = []
-    if isinstance(parts_raw, list):
-        for part in parts_raw:
-            if not isinstance(part, dict):
-                continue
-            if part.get("type") != "text":
-                continue
-            text = part.get("text")
-            if isinstance(text, str) and text:
-                text_parts.append(text)
-    return OpenCodeMessageResult(text="".join(text_parts).strip(), error=error)
+    error: Optional[str] = None
+    for candidate in _message_response_candidates(payload):
+        decoded = _decode_message_response(candidate)
+        text = decoded.get("text")
+        candidate_error = decoded.get("error")
+        if isinstance(candidate_error, str) and candidate_error and error is None:
+            error = candidate_error
+        if isinstance(text, str) and text:
+            return OpenCodeMessageResult(text=text.strip(), error=error)
+        info = candidate.get("info")
+        error = error or extract_error_text(info) or extract_error_text(candidate)
+        parts_raw = candidate.get("parts")
+        text_parts: list[str] = []
+        if isinstance(parts_raw, list):
+            for part in parts_raw:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") != "text":
+                    continue
+                text = part.get("text")
+                if isinstance(text, str) and text:
+                    text_parts.append(text)
+        if text_parts:
+            return OpenCodeMessageResult(text="".join(text_parts).strip(), error=error)
+    return OpenCodeMessageResult(text="", error=error)
 
 
 def recover_last_assistant_message(
@@ -386,6 +418,45 @@ def extract_message_phase(payload: Any) -> Optional[str]:
             if phase is not None:
                 return phase
     return None
+
+
+def normalize_message_finish(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    return normalized or None
+
+
+def extract_message_finish(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    for container in _walk_nested_containers(payload, include_parts=True):
+        finish = normalize_message_finish(
+            container.get("finish")
+            or container.get("finishReason")
+            or container.get("finish_reason")
+            or container.get("stopReason")
+            or container.get("stop_reason")
+        )
+        if finish is not None:
+            return finish
+    return None
+
+
+def message_completion_is_turn_terminal(payload: Any) -> bool:
+    """Whether an OpenCode assistant message completion can end the turn.
+
+    OpenCode emits ``message.completed`` for assistant messages whose finish
+    reason is ``tool-calls``. Those messages are checkpoints before tool
+    execution, not terminal assistant answers.
+    """
+
+    if extract_message_phase(payload) == "commentary":
+        return False
+    finish = extract_message_finish(payload)
+    if finish in OPENCODE_TOOL_CALL_FINISH_VALUES:
+        return False
+    return True
 
 
 def extract_permission_request(payload: Any) -> tuple[Optional[str], dict[str, Any]]:
