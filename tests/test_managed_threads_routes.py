@@ -29,7 +29,10 @@ from codex_autorunner.surfaces.web.routes.pma_routes.managed_threads import (
     build_automation_routes,
     build_managed_thread_crud_routes,
 )
-from codex_autorunner.surfaces.web.services.pma import managed_thread_read_models
+from codex_autorunner.surfaces.web.services.pma import (
+    managed_thread_automation,
+    managed_thread_read_models,
+)
 from tests.conftest import write_test_config
 
 pytestmark = pytest.mark.slow
@@ -1354,6 +1357,34 @@ def test_create_subscription_auto_resolves_lane_from_bound_thread(hub_env) -> No
     subscription = subscription_resp.json()["subscription"]
     assert subscription["thread_id"] == thread_id
     assert subscription["lane_id"] == "discord"
+
+
+def test_list_subscription_unified_model_does_not_hide_store_failures(
+    hub_env, monkeypatch
+) -> None:
+    class FailingAutomationStore:
+        def __init__(self, hub_root: Path) -> None:
+            self.hub_root = hub_root
+
+        def list_rules(self) -> list[object]:
+            raise RuntimeError("automation store unavailable")
+
+    monkeypatch.setattr(
+        managed_thread_automation,
+        "AutomationStore",
+        FailingAutomationStore,
+    )
+    app = FastAPI()
+    app.state.config = SimpleNamespace(
+        root=hub_env.hub_root,
+        raw={"pma": {"enabled": True}},
+    )
+    build_automation_routes(app.router, lambda: SimpleNamespace(pma_current=None))
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        resp = client.get("/subscriptions")
+
+    assert resp.status_code == 500
 
 
 def test_create_subscription_defaults_to_current_runtime_chat_thread(hub_env) -> None:

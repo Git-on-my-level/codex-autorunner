@@ -518,11 +518,6 @@ LEGACY_FILE_CAPS = (
         reason="Legacy managed-thread runtime route module should remain a re-export after ticket 007 extraction.",
     ),
     FileBudget(
-        path="src/codex_autorunner/surfaces/web/routes/pma_routes/managed_thread_route_helpers.py",
-        max_lines=70,
-        reason="Legacy managed-thread route helpers should stay thin after ticket 007 service extraction.",
-    ),
-    FileBudget(
         path="src/codex_autorunner/web_frontend/src/routes/chats/[[chatId]]/+page.svelte",
         max_lines=3280,
         reason="Current legacy chat detail page baseline after the route was already over budget.",

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import uuid
 from pathlib import Path
 from typing import Any, Optional
@@ -46,8 +45,6 @@ from .common import normalize_optional_text
 from .container import get_pma_request_context
 from .managed_thread_read_models import _load_chat_binding_metadata_by_thread
 
-_logger = logging.getLogger(__name__)
-
 SUBSCRIPTION_PURPOSES = {
     "managed_thread_lifecycle_subscription",
     "pma_lifecycle_subscription",
@@ -70,27 +67,19 @@ def unified_pma_automation_read_model(
 ) -> dict[str, Any]:
     context = get_pma_request_context(request)
     purpose_set = _purpose_set(purpose)
-    try:
-        store = AutomationStore(context.hub_root)
-        rules = [
-            rule
-            for rule in store.list_rules()
-            if rule.metadata.get("purpose") in purpose_set
-        ]
-        rule_ids = {rule.rule_id for rule in rules}
-        schedules = [
-            schedule
-            for schedule in store.list_schedules()
-            if schedule.rule_id in rule_ids
-        ]
-        jobs = [
-            job
-            for job in store.list_jobs(limit=max(limit, 1))
-            if job.rule_id in rule_ids
-        ][:limit]
-    except (RuntimeError, OSError, ValueError, TypeError):
-        _logger.exception("Failed to build unified PMA automation read model")
-        return {"rules": [], "schedules": [], "jobs": []}
+    store = AutomationStore(context.hub_root)
+    rules = [
+        rule
+        for rule in store.list_rules()
+        if rule.metadata.get("purpose") in purpose_set
+    ]
+    rule_ids = {rule.rule_id for rule in rules}
+    schedules = [
+        schedule for schedule in store.list_schedules() if schedule.rule_id in rule_ids
+    ]
+    jobs = [
+        job for job in store.list_jobs(limit=max(limit, 1)) if job.rule_id in rule_ids
+    ][:limit]
 
     return {
         "rules": [rule.to_dict() for rule in rules[:limit]],
@@ -467,16 +456,12 @@ def unified_subscription_rows(
     thread_id_norm = normalize_optional_text(thread_id)
     lane_id_norm = normalize_optional_text(lane_id)
     store = AutomationStore(context.hub_root)
-    try:
-        rules = [
-            rule
-            for rule in store.list_rules(enabled=True)
-            if rule.rule_id.startswith(PMA_SUBSCRIPTION_RULE_PREFIX)
-            or rule.metadata.get("purpose") in SUBSCRIPTION_PURPOSES
-        ]
-    except (RuntimeError, OSError, ValueError, TypeError):
-        _logger.exception("Failed to list unified PMA subscription rows")
-        return []
+    rules = [
+        rule
+        for rule in store.list_rules(enabled=True)
+        if rule.rule_id.startswith(PMA_SUBSCRIPTION_RULE_PREFIX)
+        or rule.metadata.get("purpose") in SUBSCRIPTION_PURPOSES
+    ]
 
     out: list[dict[str, Any]] = []
     for rule in rules:
@@ -512,21 +497,17 @@ def unified_timer_rows(
     thread_id_norm = normalize_optional_text(thread_id)
     lane_id_norm = normalize_optional_text(lane_id)
     store = AutomationStore(context.hub_root)
-    try:
-        rules = {
-            rule.rule_id: rule
-            for rule in store.list_rules(enabled=True)
-            if rule.rule_id.startswith(PMA_TIMER_RULE_PREFIX)
-            or rule.metadata.get("purpose") in TIMER_PURPOSES
-        }
-        schedules = [
-            schedule
-            for schedule in store.list_schedules()
-            if schedule.rule_id in rules and schedule.state == "active"
-        ]
-    except (RuntimeError, OSError, ValueError, TypeError):
-        _logger.exception("Failed to list unified PMA timer rows")
-        return []
+    rules = {
+        rule.rule_id: rule
+        for rule in store.list_rules(enabled=True)
+        if rule.rule_id.startswith(PMA_TIMER_RULE_PREFIX)
+        or rule.metadata.get("purpose") in TIMER_PURPOSES
+    }
+    schedules = [
+        schedule
+        for schedule in store.list_schedules()
+        if schedule.rule_id in rules and schedule.state == "active"
+    ]
 
     out: list[dict[str, Any]] = []
     for row in timer_rows_from_rules_and_schedules(rules, schedules):
