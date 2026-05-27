@@ -29,6 +29,7 @@ from ..ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
     RUN_EVENT_DELTA_TYPE_LOG_LINE,
+    RUN_EVENT_STREAM_MODE_DELTA,
     RUN_EVENT_STREAM_MODE_SNAPSHOT,
     ApprovalRequested,
     Failed,
@@ -545,20 +546,43 @@ def _normalize_message_part_updated(
             _extract_part_message_id(params),
             content,
             timestamp=timestamp,
+            preserve_word_boundaries=True,
         )
 
     if part and bool(part.get("ignored")):
         return []
 
     if part_type in {"", "text"}:
-        content = _extract_output_delta(params)
+        part_text = part.get("text")
+        content = part_text if isinstance(part_text, str) else ""
+        has_part_snapshot = bool(content)
+        if not content:
+            content = _extract_output_delta(params)
         if not content:
             return []
-        return state.note_message_part_text(
+        events = state.note_message_part_text(
             _extract_part_message_id(params),
             content,
             timestamp=timestamp,
+            preserve_word_boundaries=not has_part_snapshot,
         )
+        delta_content = _event_extract_output_delta(params, include_part_text=False)
+        if not has_part_snapshot or not delta_content:
+            return events
+        return [
+            (
+                OutputDelta(
+                    timestamp=event.timestamp,
+                    content=delta_content,
+                    delta_type=event.delta_type,
+                    stream_mode=RUN_EVENT_STREAM_MODE_DELTA,
+                    data={"strict_append": True},
+                )
+                if isinstance(event, OutputDelta)
+                else event
+            )
+            for event in events
+        ]
 
     if part_type == "reasoning":
         content = _extract_opencode_reasoning_text(params, part_for_processing, state)

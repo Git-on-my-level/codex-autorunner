@@ -17,6 +17,9 @@ import httpx
 
 from ...core.coercion import coerce_int
 from ...core.logging_utils import log_event
+from ...core.orchestration.stream_text_merge import (
+    append_assistant_stream_text_readably,
+)
 from ...core.runtime_identity import RUNTIME_STAGE_EFFECTIVE, RuntimeIdentityStage
 from ...core.time_utils import now_iso
 from .constants import OPENCODE_MODEL_CONTEXT_KEYS
@@ -86,6 +89,7 @@ class OutputAssembler:
 
         self._text_parts: list[str] = []
         self._part_lengths: dict[str, int] = {}
+        self._part_accumulated_text: dict[str, str] = {}
         self._last_full_text = ""
         self._error: Optional[str] = None
         self._message_roles: dict[str, str] = {}
@@ -238,24 +242,47 @@ class OutputAssembler:
         part_dict: Optional[dict[str, Any]],
     ) -> None:
         """Append a text delta to the output, with dedupe bookkeeping."""
-        self._append_text_for_message(part_message_id, delta_text)
         if isinstance(part_id, str) and part_id:
             if isinstance(part_dict, dict):
                 text = part_dict.get("text")
                 if isinstance(text, str):
+                    last_len = self._part_lengths.get(part_id, 0)
+                    if len(text) > last_len:
+                        self._append_text_for_message(
+                            part_message_id,
+                            text[last_len:],
+                            preserve_word_boundaries=False,
+                        )
+                    elif delta_text:
+                        self._append_text_for_message(part_message_id, delta_text)
                     self._part_lengths[part_id] = len(text)
+                    self._part_accumulated_text[part_id] = text
                 else:
-                    self._part_lengths[part_id] = self._part_lengths.get(
-                        part_id, 0
-                    ) + len(delta_text)
+                    self._append_text_for_message(part_message_id, delta_text)
+                    self._track_part_delta(part_id, delta_text)
             else:
-                self._part_lengths[part_id] = self._part_lengths.get(part_id, 0) + len(
-                    delta_text
-                )
+                self._append_text_for_message(part_message_id, delta_text)
+                self._track_part_delta(part_id, delta_text)
         elif isinstance(part_dict, dict):
             text = part_dict.get("text")
             if isinstance(text, str):
+                if self._last_full_text and text.startswith(self._last_full_text):
+                    self._append_text_for_message(
+                        part_message_id,
+                        text[len(self._last_full_text) :],
+                        preserve_word_boundaries=False,
+                    )
+                elif text != self._last_full_text:
+                    self._append_text_for_message(
+                        part_message_id,
+                        text,
+                        preserve_word_boundaries=False,
+                    )
                 self._last_full_text = text
+            else:
+                self._append_text_for_message(part_message_id, delta_text)
+        else:
+            self._append_text_for_message(part_message_id, delta_text)
 
     async def on_full_text_part(
         self,
@@ -273,6 +300,7 @@ class OutputAssembler:
             if len(text) > last_len:
                 self._append_text_for_message(part_message_id, text[last_len:])
                 self._part_lengths[part_id] = len(text)
+                self._part_accumulated_text[part_id] = text
         else:
             if self._last_full_text and text.startswith(self._last_full_text):
                 self._append_text_for_message(
@@ -488,22 +516,65 @@ class OutputAssembler:
         if self._pending_no_id:
             self._pending_no_id.clear()
 
-    def _append_text_for_message(self, message_id: Optional[str], text: str) -> None:
+    def _append_text_for_message(
+        self,
+        message_id: Optional[str],
+        text: str,
+        *,
+        preserve_word_boundaries: bool = True,
+    ) -> None:
         if not text:
             return
         if message_id is None:
             if self._no_id_role == "assistant":
-                self._text_parts.append(text)
+                self._append_readable_text(
+                    self._text_parts,
+                    text,
+                    preserve_word_boundaries=preserve_word_boundaries,
+                )
             else:
-                self._pending_no_id.append(text)
+                self._append_readable_text(
+                    self._pending_no_id,
+                    text,
+                    preserve_word_boundaries=preserve_word_boundaries,
+                )
             return
         role = self._message_roles.get(message_id)
         if role == "user":
             return
         if role == "assistant":
-            self._text_parts.append(text)
+            self._append_readable_text(
+                self._text_parts,
+                text,
+                preserve_word_boundaries=preserve_word_boundaries,
+            )
             return
-        self._pending_text.setdefault(message_id, []).append(text)
+        self._append_readable_text(
+            self._pending_text.setdefault(message_id, []),
+            text,
+            preserve_word_boundaries=preserve_word_boundaries,
+        )
+
+    def _track_part_delta(self, part_id: str, delta_text: str) -> None:
+        accumulated = self._part_accumulated_text.get(part_id, "")
+        updated = append_assistant_stream_text_readably(accumulated, delta_text)
+        self._part_accumulated_text[part_id] = updated
+        self._part_lengths[part_id] = len(updated)
+
+    def _append_readable_text(
+        self,
+        parts: list[str],
+        text: str,
+        *,
+        preserve_word_boundaries: bool = True,
+    ) -> None:
+        if not parts:
+            parts.append(text)
+            return
+        if not preserve_word_boundaries:
+            parts[-1] = f"{parts[-1]}{text}"
+            return
+        parts[-1] = append_assistant_stream_text_readably(parts[-1], text)
 
     def _flush_pending_text(self, message_id: Optional[str]) -> None:
         if not message_id:

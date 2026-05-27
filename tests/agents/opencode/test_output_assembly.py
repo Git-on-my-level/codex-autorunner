@@ -56,6 +56,64 @@ async def test_text_delta_with_part_id_dedupe() -> None:
 
 
 @pytest.mark.anyio
+async def test_text_delta_recovers_missing_opencode_word_boundaries() -> None:
+    asm = OutputAssembler(session_id="s1")
+    msg_id, role = asm.on_register_message_role(
+        {"info": {"id": "a1", "role": "assistant"}}
+    )
+    asm.on_handle_role_update(msg_id, role)
+
+    for delta in (
+        "Currently",
+        "on",
+        "branch",
+        "fix/automations-pma-turn-",
+        "migration",
+        ".",
+    ):
+        await asm.on_text_delta(
+            part_message_id="a1",
+            delta_text=delta,
+            part_id="p1",
+            part_dict=None,
+        )
+
+    result = await asm.build_result()
+    assert result.text == "Currently on branch fix/automations-pma-turn-migration."
+
+
+@pytest.mark.anyio
+async def test_text_delta_part_lengths_include_readable_inserted_spaces() -> None:
+    asm = OutputAssembler(session_id="s1")
+    msg_id, role = asm.on_register_message_role(
+        {"info": {"id": "a1", "role": "assistant"}}
+    )
+    asm.on_handle_role_update(msg_id, role)
+
+    await asm.on_text_delta(
+        part_message_id="a1",
+        delta_text="Currently",
+        part_id="p1",
+        part_dict=None,
+    )
+    await asm.on_text_delta(
+        part_message_id="a1",
+        delta_text="on",
+        part_id="p1",
+        part_dict=None,
+    )
+    await asm.on_text_delta(
+        part_message_id="a1",
+        delta_text="branch",
+        part_id="p1",
+        part_dict={"type": "text", "text": "Currently on branch"},
+    )
+
+    result = await asm.build_result()
+    assert result.text == "Currently on branch"
+
+
+@pytest.mark.anyio
 async def test_full_text_part_incremental() -> None:
     asm = OutputAssembler(session_id="s1")
     await asm.on_full_text_part(
