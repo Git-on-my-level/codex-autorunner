@@ -611,6 +611,48 @@ def serialize_managed_thread_turn_summary(turn: dict[str, Any]) -> dict[str, Any
     }
 
 
+def serialize_managed_thread_queue_item(
+    item: dict[str, Any],
+    *,
+    position: int,
+    queue_payload: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    attachments: list[dict[str, Any]] = []
+    metadata = None
+    if isinstance(queue_payload, dict):
+        turn_request = queue_payload.get("turn_request")
+        if isinstance(turn_request, dict):
+            metadata = turn_request.get("metadata")
+        if not isinstance(metadata, dict):
+            request_payload = queue_payload.get("request")
+            if isinstance(request_payload, dict):
+                metadata = request_payload.get("metadata")
+    if not isinstance(metadata, dict):
+        turn_request = item.get("turn_request")
+        if isinstance(turn_request, dict):
+            metadata = turn_request.get("metadata")
+    raw_attachments = (
+        metadata.get("attachments") if isinstance(metadata, dict) else None
+    )
+    if isinstance(raw_attachments, list):
+        attachments = [dict(item) for item in raw_attachments if isinstance(item, dict)]
+    return {
+        "managed_turn_id": item.get("managed_turn_id"),
+        "request_kind": item.get("request_kind"),
+        "state": item.get("state"),
+        "position": position,
+        "enqueued_at": item.get("enqueued_at"),
+        "visible_at": item.get("visible_at"),
+        "prompt": item.get("prompt") or "",
+        "prompt_preview": _truncate_text(item.get("prompt") or "", 120),
+        "model": item.get("model"),
+        "reasoning": item.get("reasoning"),
+        "attachments": attachments,
+        "client_turn_id": item.get("client_turn_id"),
+        "queue_item_id": item.get("queue_item_id"),
+    }
+
+
 def serialize_binding_record(binding: Binding) -> dict[str, Any]:
     return {
         "binding_id": binding.binding_id,

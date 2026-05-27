@@ -1,8 +1,52 @@
 import type { PmaQueuedTurn } from '$lib/api/client';
-import type { PmaRunProgress, SurfaceArtifact } from '$lib/viewModels/domain';
-import type { ChatTranscriptCard } from '$lib/viewModels/pmaChat';
+import type { PmaChatSummary, PmaRunProgress, SurfaceArtifact } from '$lib/viewModels/domain';
+import {
+  buildPmaStatusBar,
+  compactChatTranscriptCards,
+  type ChatTranscriptCard,
+  type PmaStatusBar
+} from '$lib/viewModels/pmaChat';
+import { isLocalDraftChatId } from './chatDetailSession';
+import type { ChatDetailStreamState } from './chatDetailLiveProjection';
 
 type MessageTranscriptCard = Extract<ChatTranscriptCard, { kind: 'message' }>;
+
+export type ChatTranscriptListItem =
+  | { kind: 'card'; id: string; card: ChatTranscriptCard }
+  | { kind: 'typing'; id: string; title: string }
+  | { kind: 'shared-files'; id: string };
+
+export type ChatDetailDisplayReadModelInput = {
+  transcriptCards: ChatTranscriptCard[];
+  queuedTurns: PmaQueuedTurn[];
+  displayedProgress: PmaRunProgress | null;
+  activeChat: PmaChatSummary | null;
+  assistantSharedFileCount: number;
+  streamState: ChatDetailStreamState;
+  loadingActive: boolean;
+  activeError: unknown;
+  draft: string;
+  pendingAttachmentCount: number;
+};
+
+export type ChatDetailDisplayReadModel = {
+  activeCards: ChatTranscriptCard[];
+  displayTranscriptCards: ChatTranscriptCard[];
+  lastAssistantMessageCard: ChatTranscriptCard | null;
+  statusBar: PmaStatusBar | null;
+  streamingMessageId: string | null;
+  showTypingIndicator: boolean;
+  transcriptListItems: ChatTranscriptListItem[];
+  srAnnouncement: string;
+  showStreamHealthAside: boolean;
+  showStatusBar: boolean;
+  chatHasActivity: boolean;
+  showStartPicker: boolean;
+  hasRunnableDraft: boolean;
+  canInterruptWithDraft: boolean;
+  composerWillQueue: boolean;
+  queueDepthForCommands: number;
+};
 
 export type PmaChatArchitecturePrinciple =
   | 'backendTranscriptProjection'
@@ -171,6 +215,116 @@ export function visibleChatDetailTranscriptCards(
   if (queuedTurnIds.size === 0) return transcriptCards;
   return transcriptCards.filter(
     (card) => !('turnId' in card && card.turnId && queuedTurnIds.has(card.turnId))
+  );
+}
+
+export function buildChatDetailDisplayReadModel(
+  input: ChatDetailDisplayReadModelInput
+): ChatDetailDisplayReadModel {
+  const activeCards = visibleChatDetailTranscriptCards(input.transcriptCards, input.queuedTurns);
+  const displayTranscriptCards = compactChatTranscriptCards(activeCards);
+  const lastAssistantMessageCard = findLastAssistantMessageCard(activeCards);
+  const statusBar = buildPmaStatusBar(input.displayedProgress, input.activeChat);
+  const streamingMessageId = activeStreamingMessageId(input.displayedProgress, lastAssistantMessageCard);
+  const showTypingIndicator = shouldShowTypingIndicator(input.displayedProgress, activeCards);
+  const showStatusBar = shouldShowChatDetailStatusBar(statusBar, input.displayedProgress);
+  const chatHasActivity = activeCards.length > 0 || showStatusBar;
+  const hasRunnableDraft = Boolean(input.activeChat && (input.draft.trim() || input.pendingAttachmentCount > 0));
+  const composerWillQueue = shouldQueueComposerDraft(
+    input.activeChat,
+    input.displayedProgress,
+    input.queuedTurns
+  );
+  return {
+    activeCards,
+    displayTranscriptCards,
+    lastAssistantMessageCard,
+    statusBar,
+    streamingMessageId,
+    showTypingIndicator,
+    transcriptListItems: [
+      ...displayTranscriptCards.map((card) => ({ kind: 'card' as const, id: card.id, card })),
+      ...(showTypingIndicator ? [{ kind: 'typing' as const, id: 'typing-indicator', title: 'Assistant is typing' }] : []),
+      ...(input.assistantSharedFileCount > 0 ? [{ kind: 'shared-files' as const, id: 'assistant-shared-files' }] : [])
+    ],
+    srAnnouncement: screenReaderStreamingAnnouncement(input.displayedProgress, lastAssistantMessageCard),
+    showStreamHealthAside: input.streamState === 'connecting' || input.streamState === 'interrupted',
+    showStatusBar,
+    chatHasActivity,
+    showStartPicker: Boolean(input.activeChat) && !input.loadingActive && !input.activeError && !chatHasActivity,
+    hasRunnableDraft,
+    canInterruptWithDraft: Boolean(
+      input.activeChat && input.displayedProgress?.status === 'running' && hasRunnableDraft
+    ),
+    composerWillQueue,
+    queueDepthForCommands: input.queuedTurns.length || input.displayedProgress?.queueDepth || 0
+  };
+}
+
+function findLastAssistantMessageCard(cards: ChatTranscriptCard[]): ChatTranscriptCard | null {
+  for (let i = cards.length - 1; i >= 0; i -= 1) {
+    const card = cards[i];
+    if (card.kind === 'message' && card.message.role === 'assistant') return card;
+  }
+  return null;
+}
+
+function activeStreamingMessageId(
+  progress: PmaRunProgress | null,
+  card: ChatTranscriptCard | null
+): string | null {
+  if (progress?.status !== 'running') return null;
+  if (!card || card.kind !== 'message') return null;
+  if (card.turnId && progress.id && card.turnId !== progress.id) return null;
+  return card.id;
+}
+
+function shouldShowTypingIndicator(
+  progress: PmaRunProgress | null,
+  activeCards: ChatTranscriptCard[]
+): boolean {
+  if (progress?.status !== 'running') return false;
+  const last = activeCards[activeCards.length - 1];
+  return Boolean(last && last.kind === 'message' && last.message.role === 'user');
+}
+
+function screenReaderStreamingAnnouncement(
+  progress: PmaRunProgress | null,
+  card: ChatTranscriptCard | null
+): string {
+  if (progress?.status !== 'running') return '';
+  if (!card || card.kind !== 'message') return '';
+  if (card.turnId && progress.id && card.turnId !== progress.id) return '';
+  const text = (card.message.text ?? '').trim();
+  return text.length > 120 ? text.slice(text.length - 120) : text;
+}
+
+function shouldShowChatDetailStatusBar(
+  statusBar: PmaStatusBar | null,
+  progress: PmaRunProgress | null
+): boolean {
+  if (!statusBar || statusBar.state === 'idle') return false;
+  if (statusBar.state === 'done') {
+    return Boolean(statusBar.tokenUsageLabel || statusBar.contextRemainingLabel);
+  }
+  return Boolean(
+    (progress?.elapsedSeconds !== null && progress?.elapsedSeconds !== undefined) ||
+      (progress?.queueDepth ?? 0) > 0 ||
+      statusBar.tokenUsageLabel ||
+      statusBar.contextRemainingLabel ||
+      ['running', 'waiting', 'blocked', 'failed'].includes(statusBar.state)
+  );
+}
+
+function shouldQueueComposerDraft(
+  activeChat: PmaChatSummary | null,
+  progress: PmaRunProgress | null,
+  queuedTurns: PmaQueuedTurn[]
+): boolean {
+  return Boolean(
+    activeChat &&
+      !isLocalDraftChatId(activeChat.id) &&
+      (progress?.status === 'running' || queuedTurns.length > 0)
   );
 }
 

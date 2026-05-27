@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { PmaQueuedTurn } from '$lib/api/client';
-import type { PmaRunProgress, SurfaceArtifact } from '$lib/viewModels/domain';
+import type { PmaChatSummary, PmaRunProgress, SurfaceArtifact } from '$lib/viewModels/domain';
 import type { ChatTranscriptCard } from '$lib/viewModels/pmaChat';
 import {
+  buildChatDetailDisplayReadModel,
   buildOptimisticQueuedTurn,
   buildOptimisticUserTranscriptCard,
   evaluatePmaChatArchitectureGoal,
@@ -167,6 +168,78 @@ describe('PMA chat detail state composition', () => {
     ).toBe(true);
   });
 
+  it('builds the chat detail transcript and composer read model outside the page', () => {
+    const user = { ...userCard('turn:run-1:user', 'next task', {}), turnId: 'run-1' };
+    const assistant = { ...assistantCard('turn:run-1:assistant', 'working'), turnId: 'run-1' };
+    const model = buildChatDetailDisplayReadModel({
+      transcriptCards: [user, assistant],
+      queuedTurns: [queuedTurn('queued-turn')],
+      displayedProgress: { ...progress('run-1', 12, []), queueDepth: 1 },
+      activeChat: chatSummary('chat-1'),
+      assistantSharedFileCount: 1,
+      streamState: 'connecting',
+      loadingActive: false,
+      activeError: null,
+      draft: 'follow up',
+      pendingAttachmentCount: 0
+    });
+
+    expect(model.displayTranscriptCards.map((card) => card.id)).toEqual([
+      'turn:run-1:user',
+      'turn:run-1:assistant'
+    ]);
+    expect(model.streamingMessageId).toBe('turn:run-1:assistant');
+    expect(model.transcriptListItems.map((item) => item.kind)).toEqual(['card', 'card', 'shared-files']);
+    expect(model.srAnnouncement).toBe('working');
+    expect(model.showStreamHealthAside).toBe(true);
+    expect(model.showStatusBar).toBe(true);
+    expect(model.chatHasActivity).toBe(true);
+    expect(model.showStartPicker).toBe(false);
+    expect(model.hasRunnableDraft).toBe(true);
+    expect(model.canInterruptWithDraft).toBe(true);
+    expect(model.composerWillQueue).toBe(true);
+    expect(model.queueDepthForCommands).toBe(1);
+  });
+
+  it('does not mark a stale assistant card as streaming for a newer running turn', () => {
+    const model = buildChatDetailDisplayReadModel({
+      transcriptCards: [{ ...assistantCard('turn:old:assistant', 'done'), turnId: 'old-turn' }],
+      queuedTurns: [],
+      displayedProgress: progress('new-turn', 3, []),
+      activeChat: chatSummary('chat-1'),
+      assistantSharedFileCount: 0,
+      streamState: 'connected',
+      loadingActive: false,
+      activeError: null,
+      draft: '',
+      pendingAttachmentCount: 0
+    });
+
+    expect(model.streamingMessageId).toBeNull();
+    expect(model.srAnnouncement).toBe('');
+  });
+
+  it('shows the start picker only for an idle selected chat with no projected activity', () => {
+    const model = buildChatDetailDisplayReadModel({
+      transcriptCards: [],
+      queuedTurns: [],
+      displayedProgress: null,
+      activeChat: { ...chatSummary('chat-1'), status: 'idle' },
+      assistantSharedFileCount: 0,
+      streamState: 'idle',
+      loadingActive: false,
+      activeError: null,
+      draft: '',
+      pendingAttachmentCount: 0
+    });
+
+    expect(model.showStatusBar).toBe(false);
+    expect(model.chatHasActivity).toBe(false);
+    expect(model.showStartPicker).toBe(true);
+    expect(model.hasRunnableDraft).toBe(false);
+    expect(model.composerWillQueue).toBe(false);
+  });
+
   it('merges live progress elapsed time and deduplicates event rows', () => {
     const previous = progress('run-1', 10, [artifact('event-1')]);
     const next = progress('run-1', 5, [artifact('event-1'), artifact('event-2')]);
@@ -239,6 +312,30 @@ function queuedTurn(managedTurnId: string, raw: Record<string, unknown> = {}): P
     reasoning: null,
     enqueuedAt: now,
     raw
+  };
+}
+
+function chatSummary(id: string): PmaChatSummary {
+  return {
+    id,
+    title: 'Chat One',
+    lifecycleStatus: 'active',
+    status: 'running',
+    agentId: 'codex',
+    agentProfile: null,
+    model: 'gpt-5',
+    repoId: null,
+    worktreeId: null,
+    ticketId: null,
+    ticketDone: null,
+    ticketPath: null,
+    runId: null,
+    unreadCount: 0,
+    flowType: null,
+    isTicketFlow: false,
+    progressPercent: null,
+    updatedAt: now,
+    raw: {}
   };
 }
 
