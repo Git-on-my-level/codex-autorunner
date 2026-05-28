@@ -108,7 +108,7 @@ describe('/chats page', () => {
     expect(syncCommittedBody).not.toContain('pendingCommittedDetailUrlChatId');
   });
 
-  it('pushes the selected chat URL before activating the detail controller', () => {
+  it('pushes the selected chat URL and updates the cached route before activating the detail controller', () => {
     const source = chatDetailPageSource();
     const selectChatBody = source.match(
       /async function selectChat[\s\S]*?\n  function chatIdFromRowEvent/
@@ -116,7 +116,7 @@ describe('/chats page', () => {
 
     expect(selectChatBody).toBeTruthy();
     expect(selectChatBody).toMatch(
-      /await syncCommittedDetailUrl\(chatId, \{ mode: 'push' \}\);[\s\S]*?await pageController\.selectChat\(chatId, \{ syncUrl: true \}\);/
+      /await syncCommittedDetailUrl\(chatId, \{ mode: 'push' \}\);[\s\S]*?pageController\.setRoute\(currentRouteSnapshot\(\)\);[\s\S]*?await pageController\.selectChat\(chatId, \{ syncUrl: true \}\);/
     );
   });
 
