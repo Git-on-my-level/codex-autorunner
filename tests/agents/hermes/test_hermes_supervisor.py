@@ -79,24 +79,21 @@ def test_formatted_current_turn_output_keeps_terminal_when_stream_is_malformed()
     )
 
 
-def test_formatted_current_turn_output_avoids_cumulative_terminal_prefix() -> None:
+def test_formatted_current_turn_output_keeps_uncertain_multiparagraph_terminal() -> (
+    None
+):
     assert (
         _formatted_current_turn_output(
             final_output=(
-                "prior reply\n\n"
-                "Fix: processed update and orchestration\n"
+                "First paragraph.\n\n"
+                "Second paragraph.\n\n"
                 "```python\n"
                 "print('ok')\n"
                 "```"
             ),
-            stream_output=(
-                "Fix: process ed up date and orchestr ation\n"
-                "``python\n"
-                "print('ok')\n"
-                "``"
-            ),
+            stream_output="First paragraph.",
         )
-        == "Fix: processed update and orchestration\n```python\nprint('ok')\n```"
+        == "First paragraph.\n\nSecond paragraph.\n\n```python\nprint('ok')\n```"
     )
 
 

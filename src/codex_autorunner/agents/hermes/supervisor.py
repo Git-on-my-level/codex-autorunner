@@ -185,10 +185,6 @@ def _formatted_current_turn_output(
             return final_text[index:].strip()
     if _terminal_text_looks_cumulative(final_stripped, stream_stripped):
         return stream_stripped
-    if stream_stripped and "\n\n" in final_stripped:
-        terminal_tail = final_stripped.rsplit("\n\n", 1)[-1].strip()
-        if terminal_tail:
-            return terminal_tail
     return final_stripped
 
 
