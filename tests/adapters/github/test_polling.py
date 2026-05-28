@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -656,6 +656,52 @@ def test_emit_new_conditions_dedupes_review_comments_by_stable_event_id(
         (event_type, payload["comment_id"])
         for event_type, payload, _config in _AutomationServiceFake.ingested_events
     ] == [("pull_request_review_comment", "2844")]
+
+
+def test_emit_new_conditions_redelivers_comment_when_binding_gets_thread_target(
+    tmp_path: Path,
+) -> None:
+    store = PrBindingStore(tmp_path)
+    unbound_binding = store.upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=17,
+        pr_state="open",
+        head_branch="feature/scm-polling",
+        base_branch="main",
+    )
+    unbound_watch = _polling_watch_for_binding(tmp_path, unbound_binding)
+    _AutomationServiceFake.ingested_events = []
+    snapshot: dict[str, object] = {
+        "review_thread_comments": {"poll-a": _review_comment_payload("2844")}
+    }
+
+    first_emitted = _emit_review_comment_snapshot(
+        tmp_path,
+        watch=unbound_watch,
+        binding=unbound_binding,
+        previous_snapshot={"review_thread_comments": {}},
+        snapshot=snapshot,
+    )
+    bound_binding = replace(unbound_binding, thread_target_id="thread-123")
+    bound_watch = _polling_watch_for_binding(tmp_path, bound_binding)
+    second_emitted = _emit_review_comment_snapshot(
+        tmp_path,
+        watch=bound_watch,
+        binding=bound_binding,
+        previous_snapshot={"review_thread_comments": {}},
+        snapshot=snapshot,
+    )
+
+    assert first_emitted == 1
+    assert second_emitted == 1
+    assert [
+        (event_type, payload["comment_id"])
+        for event_type, payload, _config in _AutomationServiceFake.ingested_events
+    ] == [
+        ("pull_request_review_comment", "2844"),
+        ("pull_request_review_comment", "2844"),
+    ]
 
 
 def test_emit_new_conditions_retries_existing_event_when_automation_needs_processing(

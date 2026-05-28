@@ -39,10 +39,15 @@ def _stable_poll_event_id(
     *,
     event_type: str,
     watch: ScmPollingWatch,
+    binding: PrBinding,
     payload: Mapping[str, Any],
 ) -> str:
     payload_map = _mapping(payload)
     identity_payload: dict[str, Any] = {
+        "binding": {
+            "binding_id": binding.binding_id,
+            "thread_target_id": binding.thread_target_id,
+        },
         "event_type": event_type,
         "payload": _canonical_payload(payload_map),
         "pr_number": watch.pr_number,
@@ -89,6 +94,7 @@ def _record_poll_event(
     event_id = _stable_poll_event_id(
         event_type=event_type,
         watch=watch,
+        binding=binding,
         payload=payload,
     )
     event = event_store.record_event_if_new(
