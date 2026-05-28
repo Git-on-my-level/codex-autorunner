@@ -185,6 +185,16 @@ def _formatted_current_turn_output(
             return final_text[index:].strip()
     if _terminal_text_looks_cumulative(final_stripped, stream_stripped):
         return stream_stripped
+    if stream_stripped and "\n\n" in final_stripped:
+        prior_turn, terminal_tail = final_stripped.rsplit("\n\n", 1)
+        prior_turn_compact = _text_without_whitespace(prior_turn)
+        if (
+            terminal_tail.strip()
+            and prior_turn_compact
+            and prior_turn_compact not in stream_compact
+            and not prior_turn_compact.startswith(stream_compact)
+        ):
+            return terminal_tail.strip()
     return final_stripped
 
 
