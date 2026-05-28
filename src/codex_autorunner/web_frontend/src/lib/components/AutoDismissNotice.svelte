@@ -83,7 +83,7 @@
     bind:this={toastEl}
     class={`auto-dismiss-notice ${tone}`}
     class:no-timeout={timeoutMs <= 0}
-    role="status"
+    role={tone === 'danger' ? 'alert' : 'status'}
     style={`--notice-timeout: ${Math.max(0, timeoutMs)}ms;`}
   >
     <span class="auto-dismiss-notice__msg">{visibleMessage}</span>

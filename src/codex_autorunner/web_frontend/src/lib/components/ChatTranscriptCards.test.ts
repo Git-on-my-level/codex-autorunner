@@ -43,6 +43,17 @@ function assistantMessageCard(id: string, text: string): ChatTranscriptCard {
   };
 }
 
+function intermediateCard(id: string, title: string, text: string): ChatTranscriptCard {
+  return {
+    ...baseTrace,
+    kind: 'intermediate',
+    id,
+    title,
+    text,
+    detail: null
+  };
+}
+
 describe('ChatTranscriptCards', () => {
   it('collapses thinking traces while keeping commentary visible', () => {
     const cards: ChatTranscriptCard[] = [
@@ -283,6 +294,18 @@ describe('ChatTranscriptCards', () => {
     expect(body).not.toContain('AG ENTS');
     expect(body).not.toContain('car-work space');
     expect(body).not.toContain('cod ex-aut orunner');
+  });
+
+  it('does not add live regions to virtualized transcript rows', () => {
+    const cards: ChatTranscriptCard[] = [
+      assistantMessageCard('a-complete', 'Completed assistant response'),
+      intermediateCard('trace-1', 'thinking', 'Completed thinking trace')
+    ];
+
+    const { body } = render(ChatTranscriptCards, { props: { cards } });
+
+    expect(body).not.toContain('aria-live="polite"');
+    expect(body).not.toContain('aria-atomic="true"');
   });
 
   it('renders the Hermes/Codex golden markdown transcript identically when streaming and completed', () => {

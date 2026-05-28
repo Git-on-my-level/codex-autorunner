@@ -235,7 +235,9 @@
       </details>
     {/if}
     {@const isOptimisticUser = card.message.role === 'user' && card.id.startsWith('optimistic:user:')}
-    <article class={`message ${card.message.role === 'user' ? 'user' : 'assistant'}${isOptimisticUser ? ' is-sending' : ''}`}>
+    <article
+      class={`message ${card.message.role === 'user' ? 'user' : 'assistant'}${isOptimisticUser ? ' is-sending' : ''}`}
+    >
       <span>{card.message.role === 'user' ? 'You' : assistantLabel}</span>
       {#if isStreaming}
         <div class="message-markdown markdown-body streaming">

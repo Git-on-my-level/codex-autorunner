@@ -329,7 +329,7 @@
   <ContentSkeleton variant="index" rows={5} />
 {:else if viewState === 'error'}
   <section class="page-stack">
-    <div class="state-panel error">Could not load tickets. {errorMessage}</div>
+    <div class="state-panel error" role="alert">Could not load tickets. {errorMessage}</div>
   </section>
 {:else if mode === 'list' && list}
   <section class="page-stack ticket-page ticket-list-page">
@@ -398,6 +398,14 @@
     <AutoDismissNotice message={actionStatus} tone={noticeTone(actionStatus)} />
 
     <section class="ticket-list-section">
+      {#if list.scopedOwner}
+        <p class="sr-only" aria-live="polite" aria-atomic="true">
+          Ticket queue status: {list.flowStatus.statusLabel}
+          {#if list.flowStatus.currentTicketLabel !== 'None'}
+            . Current ticket: {list.flowStatus.currentTicketLabel}
+          {/if}
+        </p>
+      {/if}
       {#if showFlowLine}
         <p class={`ticket-flow-line ${list.flowStatus.signal}`} aria-label="Ticket flow status">
           <span class="status-pill {list.flowStatus.signal}">{list.flowStatus.statusLabel}</span>
@@ -537,6 +545,9 @@
       </div>
 
       <div class="ticket-settings-bar" aria-label="Ticket settings">
+        <span class="sr-only" aria-live="polite" aria-atomic="true">
+          Ticket status: {statusLabel(detail.status)}
+        </span>
         {#if detail.needsRepair}
           <button
             type="button"
