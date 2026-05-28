@@ -51,6 +51,7 @@ from .polling_snapshot import (
     build_snapshot,
     initial_post_open_boost_until,
     snapshot_with_polling_metadata,
+    snapshot_without_backfilled_comments,
 )
 from .publisher import build_github_publish_executors
 
@@ -379,6 +380,20 @@ class GitHubScmPollingService:
                 now_iso_fn=now_iso,
             )
         except Exception:
+            retry_snapshot = snapshot_without_backfilled_comments(
+                snapshot,
+                reference_timestamp=now_timestamp,
+                window_seconds=polling_config.comment_backfill_window_seconds,
+                parse_optional_iso=_parse_optional_iso,
+            )
+            self._watch_store.refresh_watch(
+                watch_id=watch.watch_id,
+                snapshot=snapshot_with_polling_metadata(
+                    snapshot=retry_snapshot,
+                    previous_snapshot=snapshot,
+                    post_open_boost_until=post_open_boost,
+                ),
+            )
             _LOGGER.warning(
                 "Failed emitting SCM polling comment backfill for %s#%s",
                 binding.repo_slug,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,6 +17,7 @@ from codex_autorunner.adapters.github.polling import (
     GitHubScmPollingService,
 )
 from codex_autorunner.adapters.github.polling_events import emit_new_conditions
+from codex_autorunner.core.automation import AutomationEvent
 from codex_autorunner.core.automation.store import AutomationStore
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
@@ -123,6 +124,32 @@ class _AutomationServiceFake:
         _ = limit
         type(self).process_calls += 1
         return []
+
+
+class _FailingAutomationServiceFake(_AutomationServiceFake):
+    def ingest_event(self, event) -> None:
+        _ = event
+        raise RuntimeError("automation ingestion failed")
+
+
+class _RetryNeededAutomationServiceFake(_AutomationServiceFake):
+    def scm_event_needs_processing(self, event_id: str) -> bool:
+        _ = event_id
+        return True
+
+
+class _AutomationStoreNeedsProcessingStub:
+    def __init__(self, event: AutomationEvent | None, jobs=None) -> None:
+        self._event = event
+        self._jobs = list(jobs or [])
+
+    def get_event(self, event_id: str):
+        _ = event_id
+        return self._event
+
+    def list_jobs(self, *, limit: int):
+        _ = limit
+        return list(self._jobs)
 
 
 class _DiscoveringGitHubServiceStub(_GitHubServiceStub):
@@ -587,10 +614,17 @@ def test_polling_config_defaults_to_30_minute_post_open_boost() -> None:
     assert config.no_activity_tier == "cold"
 
 
-def test_emit_new_conditions_dedupes_review_comments_by_processed_comment_id(
+def test_emit_new_conditions_dedupes_review_comments_by_stable_event_id(
     tmp_path: Path,
 ) -> None:
-    binding = _polling_test_binding()
+    binding = PrBindingStore(tmp_path).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=17,
+        pr_state="open",
+        head_branch="feature/scm-polling",
+        base_branch="main",
+    )
     watch = _polling_watch_for_binding(tmp_path, binding)
     _AutomationServiceFake.ingested_events = []
     _AutomationServiceFake.process_calls = 0
@@ -622,6 +656,258 @@ def test_emit_new_conditions_dedupes_review_comments_by_processed_comment_id(
         (event_type, payload["comment_id"])
         for event_type, payload, _config in _AutomationServiceFake.ingested_events
     ] == [("pull_request_review_comment", "2844")]
+
+
+def test_emit_new_conditions_redelivers_comment_when_binding_gets_thread_target(
+    tmp_path: Path,
+) -> None:
+    store = PrBindingStore(tmp_path)
+    unbound_binding = store.upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=17,
+        pr_state="open",
+        head_branch="feature/scm-polling",
+        base_branch="main",
+    )
+    unbound_watch = _polling_watch_for_binding(tmp_path, unbound_binding)
+    _AutomationServiceFake.ingested_events = []
+    snapshot: dict[str, object] = {
+        "review_thread_comments": {"poll-a": _review_comment_payload("2844")}
+    }
+
+    first_emitted = _emit_review_comment_snapshot(
+        tmp_path,
+        watch=unbound_watch,
+        binding=unbound_binding,
+        previous_snapshot={"review_thread_comments": {}},
+        snapshot=snapshot,
+    )
+    bound_binding = replace(unbound_binding, thread_target_id="thread-123")
+    bound_watch = _polling_watch_for_binding(tmp_path, bound_binding)
+    second_emitted = _emit_review_comment_snapshot(
+        tmp_path,
+        watch=bound_watch,
+        binding=bound_binding,
+        previous_snapshot={"review_thread_comments": {}},
+        snapshot=snapshot,
+    )
+
+    assert first_emitted == 1
+    assert second_emitted == 1
+    assert [
+        (event_type, payload["comment_id"])
+        for event_type, payload, _config in _AutomationServiceFake.ingested_events
+    ] == [
+        ("pull_request_review_comment", "2844"),
+        ("pull_request_review_comment", "2844"),
+    ]
+
+
+def test_emit_new_conditions_retries_existing_event_when_automation_needs_processing(
+    tmp_path: Path,
+) -> None:
+    binding = _polling_test_binding()
+    watch = _polling_watch_for_binding(tmp_path, binding)
+    _AutomationServiceFake.ingested_events = []
+    snapshot: dict[str, object] = {
+        "review_thread_comments": {"poll-a": _review_comment_payload("2844")}
+    }
+
+    with pytest.raises(RuntimeError, match="automation ingestion failed"):
+        emit_new_conditions(
+            event_store=ScmEventStore(tmp_path),
+            watch=watch,
+            binding=binding,
+            previous_snapshot={"review_thread_comments": {}},
+            snapshot=snapshot,
+            automation_service_factory=lambda: _FailingAutomationServiceFake(tmp_path),
+            now_iso_fn=lambda: "2026-03-30T00:05:00Z",
+        )
+
+    emitted = emit_new_conditions(
+        event_store=ScmEventStore(tmp_path),
+        watch=watch,
+        binding=binding,
+        previous_snapshot={"review_thread_comments": {}},
+        snapshot=snapshot,
+        automation_service_factory=lambda: _RetryNeededAutomationServiceFake(tmp_path),
+        now_iso_fn=lambda: "2026-03-30T00:06:00Z",
+    )
+
+    assert emitted == 1
+    assert [
+        (event_type, payload["comment_id"])
+        for event_type, payload, _config in _AutomationServiceFake.ingested_events
+    ] == [("pull_request_review_comment", "2844")]
+
+
+def test_arm_watch_backfill_failure_keeps_comment_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding = PrBindingStore(tmp_path).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=17,
+        pr_state="open",
+        head_branch="feature/scm-polling",
+        base_branch="main",
+    )
+    comment = _review_comment_payload("2844")
+
+    def _factory(repo_root: Path, raw_config=None) -> _GitHubServiceStub:
+        return _GitHubServiceStub(
+            repo_root,
+            raw_config,
+            pr_view_payload={
+                "state": "OPEN",
+                "isDraft": False,
+                "headRefOid": "abc123",
+                "createdAt": "2026-03-30T00:00:00Z",
+                "author": {"login": "pr-author"},
+            },
+            reviews_payload=[],
+            checks_payload=[],
+            review_threads_payload=[
+                {
+                    "isResolved": False,
+                    "comments": [comment],
+                }
+            ],
+        )
+
+    monkeypatch.setattr(github_polling, "now_iso", lambda: "2026-03-30T00:05:00Z")
+    service = GitHubScmPollingService(
+        tmp_path,
+        raw_config=_polling_config(post_open_boost_minutes=0),
+        github_service_factory=_factory,
+    )
+    automation_services = [
+        _FailingAutomationServiceFake(tmp_path),
+        _RetryNeededAutomationServiceFake(tmp_path),
+    ]
+    monkeypatch.setattr(
+        service,
+        "_build_automation_service",
+        lambda **kwargs: automation_services.pop(0),
+    )
+    _AutomationServiceFake.ingested_events = []
+
+    watch = service.arm_watch(
+        binding=binding,
+        workspace_root=tmp_path / "repo",
+        next_poll_at="2026-03-30T00:00:00Z",
+    )
+
+    assert watch is not None
+    refreshed = ScmPollingWatchStore(tmp_path).get_watch(
+        provider="github",
+        binding_id=binding.binding_id,
+    )
+    assert refreshed is not None
+    assert refreshed.snapshot.get("review_thread_comments") is None
+
+    counts = service.process(limit=1)
+
+    assert counts["events_emitted"] == 1
+    assert [
+        (event_type, payload["comment_id"])
+        for event_type, payload, _config in _AutomationServiceFake.ingested_events
+    ] == [("pull_request_review_comment", "2844")]
+
+
+def test_scm_event_needs_processing_ignores_actionless_existing_event() -> None:
+    service = object.__new__(ScmAutomationService)
+    event = AutomationEvent.create(
+        event_id="scm:github:poll:ignored",
+        event_type="scm.github.pull_request_review_comment.created",
+        source="scm.github",
+        payload={"actions": []},
+    )
+    service._automation_store = _AutomationStoreNeedsProcessingStub(event)
+
+    assert service.scm_event_needs_processing("github:poll:ignored") is False
+
+
+@pytest.mark.parametrize(
+    ("snapshot_key", "event_type", "payload"),
+    [
+        (
+            "changes_requested_reviews",
+            "pull_request_review",
+            {
+                "action": "submitted",
+                "review_id": "rev-1",
+                "review_state": "CHANGES_REQUESTED",
+                "submitted_at": "2026-03-30T00:04:00Z",
+            },
+        ),
+        (
+            "failed_checks",
+            "check_run",
+            {
+                "action": "completed",
+                "name": "unit-tests",
+                "status": "completed",
+                "conclusion": "failure",
+                "head_sha": "abc123",
+                "details_url": "https://example.invalid/checks/1",
+            },
+        ),
+        (
+            "issue_comments",
+            "issue_comment",
+            {
+                "action": "created",
+                "comment_id": "issue-comment-1",
+                "body": "Please follow up.",
+                "updated_at": "2026-03-30T00:04:00Z",
+            },
+        ),
+    ],
+)
+def test_emit_new_conditions_dedupes_non_thread_events_by_stable_event_id(
+    tmp_path: Path,
+    snapshot_key: str,
+    event_type: str,
+    payload: dict[str, object],
+) -> None:
+    binding = _polling_test_binding()
+    watch = _polling_watch_for_binding(tmp_path, binding)
+    _AutomationServiceFake.ingested_events = []
+    base_snapshot: dict[str, object] = {"head_sha": "abc123"}
+    first_snapshot = {**base_snapshot, snapshot_key: {"poll-a": payload}}
+    second_snapshot = {**base_snapshot, snapshot_key: {"poll-b": payload}}
+
+    assert (
+        emit_new_conditions(
+            event_store=ScmEventStore(tmp_path),
+            watch=watch,
+            binding=binding,
+            previous_snapshot={**base_snapshot, snapshot_key: {}},
+            snapshot=first_snapshot,
+            automation_service_factory=lambda: _AutomationServiceFake(tmp_path),
+            now_iso_fn=lambda: "2026-03-30T00:05:00Z",
+        )
+        == 1
+    )
+    assert (
+        emit_new_conditions(
+            event_store=ScmEventStore(tmp_path),
+            watch=watch,
+            binding=binding,
+            previous_snapshot=first_snapshot,
+            snapshot=second_snapshot,
+            automation_service_factory=lambda: _AutomationServiceFake(tmp_path),
+            now_iso_fn=lambda: "2026-03-30T00:06:00Z",
+        )
+        == 0
+    )
+
+    assert [observed[0] for observed in _AutomationServiceFake.ingested_events] == [
+        event_type
+    ]
 
 
 def test_emit_new_conditions_dispatches_only_new_comment_in_mixed_poll(

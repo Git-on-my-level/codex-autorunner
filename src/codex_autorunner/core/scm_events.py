@@ -94,6 +94,40 @@ class ScmEventStore:
     def __init__(self, hub_root: Path) -> None:
         self._hub_root = Path(hub_root)
 
+    def record_event_if_new(
+        self,
+        *,
+        provider: str,
+        event_type: str,
+        occurred_at: Optional[str] = None,
+        received_at: Optional[str] = None,
+        repo_slug: Optional[str] = None,
+        repo_id: Optional[str] = None,
+        pr_number: Optional[int] = None,
+        delivery_id: Optional[str] = None,
+        correlation_id: Optional[str] = None,
+        payload: Optional[dict[str, Any]] = None,
+        raw_payload: Optional[dict[str, Any]] = None,
+        event_id: str,
+        max_raw_payload_bytes: int = 65_536,
+    ) -> Optional[ScmEvent]:
+        return self._record_event(
+            provider=provider,
+            event_type=event_type,
+            occurred_at=occurred_at,
+            received_at=received_at,
+            repo_slug=repo_slug,
+            repo_id=repo_id,
+            pr_number=pr_number,
+            delivery_id=delivery_id,
+            correlation_id=correlation_id,
+            payload=payload,
+            raw_payload=raw_payload,
+            event_id=event_id,
+            max_raw_payload_bytes=max_raw_payload_bytes,
+            require_new=False,
+        )
+
     def record_event(
         self,
         *,
@@ -111,6 +145,44 @@ class ScmEventStore:
         event_id: Optional[str] = None,
         max_raw_payload_bytes: int = 65_536,
     ) -> ScmEvent:
+        event = self._record_event(
+            provider=provider,
+            event_type=event_type,
+            occurred_at=occurred_at,
+            received_at=received_at,
+            repo_slug=repo_slug,
+            repo_id=repo_id,
+            pr_number=pr_number,
+            delivery_id=delivery_id,
+            correlation_id=correlation_id,
+            payload=payload,
+            raw_payload=raw_payload,
+            event_id=event_id,
+            max_raw_payload_bytes=max_raw_payload_bytes,
+            require_new=True,
+        )
+        if event is None:
+            raise RuntimeError("SCM event row missing after insert")
+        return event
+
+    def _record_event(
+        self,
+        *,
+        provider: str,
+        event_type: str,
+        occurred_at: Optional[str],
+        received_at: Optional[str],
+        repo_slug: Optional[str],
+        repo_id: Optional[str],
+        pr_number: Optional[int],
+        delivery_id: Optional[str],
+        correlation_id: Optional[str],
+        payload: Optional[dict[str, Any]],
+        raw_payload: Optional[dict[str, Any]],
+        event_id: Optional[str],
+        max_raw_payload_bytes: int,
+        require_new: bool,
+    ) -> Optional[ScmEvent]:
         normalized_provider = _normalize_text(provider)
         normalized_event_type = _normalize_text(event_type)
         normalized_event_id = _normalize_text(event_id) or uuid.uuid4().hex
@@ -144,9 +216,10 @@ class ScmEventStore:
         normalized_pr_number = _normalize_int(pr_number, field_name="pr_number")
 
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
-            conn.execute(
-                """
-                INSERT INTO orch_scm_events (
+            verb = "INSERT" if require_new else "INSERT OR IGNORE"
+            cursor = conn.execute(
+                f"""
+                {verb} INTO orch_scm_events (
                     event_id,
                     provider,
                     event_type,
@@ -178,6 +251,8 @@ class ScmEventStore:
                     created_at,
                 ),
             )
+            if not require_new and cursor.rowcount == 0:
+                return None
             row = conn.execute(
                 """
                 SELECT *

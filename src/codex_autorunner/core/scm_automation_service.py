@@ -1843,6 +1843,24 @@ class ScmAutomationService:
             if job.event_id == automation_event.event_id
         )
 
+    def scm_event_needs_processing(self, event_id: str) -> bool:
+        normalized_event_id = _normalize_text(event_id)
+        if normalized_event_id is None:
+            return False
+        automation_event_id = f"scm:{normalized_event_id}"
+        automation_event = self._automation_store.get_event(automation_event_id)
+        if automation_event is None:
+            return True
+        event_jobs = tuple(
+            job
+            for job in self._automation_store.list_jobs(limit=1000)
+            if job.event_id == automation_event_id and _is_scm_publish_bridge_job(job)
+        )
+        if not event_jobs:
+            actions = automation_event.payload.get("actions")
+            return isinstance(actions, list) and bool(actions)
+        return any(job.state == "pending" for job in event_jobs)
+
     def process_scm_automation_jobs(
         self,
         *,
