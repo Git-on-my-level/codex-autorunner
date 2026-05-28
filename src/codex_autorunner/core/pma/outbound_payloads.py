@@ -13,9 +13,9 @@ MANAGED_THREAD_PUBLIC_EXECUTION_ERROR = "Managed thread execution failed"
 
 def sanitize_managed_thread_result_error(detail: Any) -> str:
     sanitized = _normalize_optional_text(detail)
-    if sanitized == RUNTIME_THREAD_TIMEOUT_ERROR:
+    if sanitized in {RUNTIME_THREAD_TIMEOUT_ERROR, "Managed thread timed out"}:
         return "Managed thread timed out"
-    if sanitized == RUNTIME_THREAD_INTERRUPTED_ERROR:
+    if sanitized in {RUNTIME_THREAD_INTERRUPTED_ERROR, "Managed thread interrupted"}:
         return "Managed thread interrupted"
     return MANAGED_THREAD_PUBLIC_EXECUTION_ERROR
 
