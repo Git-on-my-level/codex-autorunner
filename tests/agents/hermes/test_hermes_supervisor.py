@@ -57,6 +57,46 @@ def test_formatted_current_turn_output_trims_cumulative_terminal_output() -> Non
     )
 
 
+def test_formatted_current_turn_output_keeps_terminal_when_stream_is_malformed() -> (
+    None
+):
+    assert (
+        _formatted_current_turn_output(
+            final_output=(
+                "Fix: processed update and orchestration\n"
+                "```python\n"
+                "print('ok')\n"
+                "```"
+            ),
+            stream_output=(
+                "Fix: process ed up date and orchestr ation\n"
+                "``python\n"
+                "print('ok')\n"
+                "``"
+            ),
+        )
+        == "Fix: processed update and orchestration\n```python\nprint('ok')\n```"
+    )
+
+
+def test_formatted_current_turn_output_keeps_uncertain_multiparagraph_terminal() -> (
+    None
+):
+    assert (
+        _formatted_current_turn_output(
+            final_output=(
+                "First paragraph.\n\n"
+                "Second paragraph.\n\n"
+                "```python\n"
+                "print('ok')\n"
+                "```"
+            ),
+            stream_output="First paragraph.",
+        )
+        == "First paragraph.\n\nSecond paragraph.\n\n```python\nprint('ok')\n```"
+    )
+
+
 class _HermesPreflightConfig:
     def agent_binary(self, agent_id: str) -> str:
         assert agent_id == "hermes"

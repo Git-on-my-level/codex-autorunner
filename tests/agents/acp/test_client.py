@@ -16,7 +16,7 @@ from codex_autorunner.agents.acp import (
     ACPMissingSessionError,
     ACPPermissionRequestEvent,
 )
-from codex_autorunner.agents.acp.client import _PromptState
+from codex_autorunner.agents.acp.client import _PromptState, _session_update_input_kind
 from codex_autorunner.agents.acp.errors import (
     ACPProcessCrashedError,
     ACPProtocolError,
@@ -68,6 +68,18 @@ def test_prompt_state_session_update_snapshots_merge_without_duplication() -> No
     state.note_output_delta("fixture reply", merge_snapshot=True)
 
     assert state.final_output == "fixture reply"
+
+
+def test_prompt_state_delta_preserves_literal_assistant_label() -> None:
+    state = _PromptState(session_id="session-1", turn_id="turn-1")
+
+    assert _session_update_input_kind(state, "Assistant: keep this label") == (
+        "current_turn_delta"
+    )
+    state.note_output_delta("Assistant:", preserve_word_boundaries=False)
+    state.note_output_delta(" keep this label", preserve_word_boundaries=False)
+
+    assert state.final_output == "Assistant: keep this label"
 
 
 def test_prompt_state_session_update_chunks_preserve_word_boundaries() -> None:
@@ -492,6 +504,36 @@ async def test_client_merges_cumulative_stream_chunks_without_duplication(
             for event in handle.snapshot_events()
             if event.kind == "output_delta"
         ] == ["fixture", "fixture reply"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_client_preserves_hermes_delta_markdown_chunks(
+    tmp_path: Path,
+) -> None:
+    client = ACPClient(
+        fixture_command("official_hermes_delta_markdown_chunks"),
+        cwd=tmp_path,
+    )
+    try:
+        created = await client.create_session(cwd=str(tmp_path))
+        handle = await client.start_prompt(created.session_id, "markdown")
+
+        result = await asyncio.wait_for(handle.wait(), timeout=0.4)
+
+        assert result.status == "completed"
+        assert result.final_output == (
+            "Processed update and orchestration are intact.\n"
+            "```\n"
+            'print("ok")\n'
+            "```"
+        )
+        assert [
+            getattr(event, "final_output", None)
+            for event in handle.snapshot_events()
+            if event.kind == "turn_terminal"
+        ] == [result.final_output]
     finally:
         await client.close()
 

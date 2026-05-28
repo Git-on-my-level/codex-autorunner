@@ -129,6 +129,17 @@ def _text_without_whitespace(value: str) -> str:
     return "".join(str(value or "").split())
 
 
+def _terminal_text_looks_cumulative(final_text: str, stream_text: str) -> bool:
+    final_compact = _text_without_whitespace(final_text)
+    stream_compact = _text_without_whitespace(stream_text)
+    return bool(
+        final_compact
+        and stream_compact
+        and final_compact.endswith(stream_compact)
+        and final_compact != stream_compact
+    )
+
+
 def _formatted_current_turn_output(
     *,
     final_output: str,
@@ -140,7 +151,8 @@ def _formatted_current_turn_output(
     to the active turn but may be tokenizer fragments with poor spacing, while
     terminal `finalOutput` preserves formatting but may include prior transcript
     text. The compact suffix match lets the stream prove the current-turn scope
-    before we trust terminal formatting.
+    before we trim terminal formatting. When it cannot prove scope, keep
+    terminal formatting rather than returning damaged stream text.
     """
 
     final_text = str(final_output or "")
@@ -171,7 +183,19 @@ def _formatted_current_turn_output(
             and "".join(reversed(compact_suffix_reversed)) == stream_compact
         ):
             return final_text[index:].strip()
-    return stream_stripped
+    if _terminal_text_looks_cumulative(final_stripped, stream_stripped):
+        return stream_stripped
+    if stream_stripped and "\n\n" in final_stripped:
+        prior_turn, terminal_tail = final_stripped.rsplit("\n\n", 1)
+        prior_turn_compact = _text_without_whitespace(prior_turn)
+        if (
+            terminal_tail.strip()
+            and prior_turn_compact
+            and prior_turn_compact not in stream_compact
+            and not prior_turn_compact.startswith(stream_compact)
+        ):
+            return terminal_tail.strip()
+    return final_stripped
 
 
 def _replace_session_update_content_text(content: Any, text: str) -> Any:

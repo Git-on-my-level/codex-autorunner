@@ -34,6 +34,7 @@ from .runtime_payload_shapes import canonicalize_token_usage
 from .runtime_retry_semantics import is_retrying_turn_error
 
 RuntimeStateEventStatus = Literal["ok", "error", "interrupted"]
+AssistantStreamMode = Literal["delta", "snapshot"]
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,8 @@ class AssistantDelta:
     text: str
     source: str
     message_id: Optional[str] = None
+    stream_mode: AssistantStreamMode = "delta"
+    preserve_word_boundaries: bool = False
 
 
 @dataclass(frozen=True)
@@ -190,7 +193,14 @@ def normalize_runtime_state_events(raw_event: Any) -> list[RuntimeStateEvent]:
                 assistant_stream_text = _extract_output_delta(update)
 
     if assistant_stream_text:
-        events.append(AssistantDelta(text=assistant_stream_text, source=method))
+        events.append(
+            AssistantDelta(
+                text=assistant_stream_text,
+                source=method,
+                stream_mode="delta",
+                preserve_word_boundaries=False,
+            )
+        )
     if assistant_message_text:
         events.append(AssistantMessage(text=assistant_message_text, source=method))
     if failure_message:
@@ -247,6 +257,7 @@ def _extract_message_role(params: dict[str, Any]) -> str:
 
 __all__ = [
     "AssistantDelta",
+    "AssistantStreamMode",
     "AssistantMessage",
     "FailureSignal",
     "ProgressSignal",
