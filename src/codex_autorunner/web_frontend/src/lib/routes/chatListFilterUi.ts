@@ -5,7 +5,7 @@ import type {
   ChatFacetTransport
 } from '$lib/api/readModelContracts';
 import type { ChatListFilters } from '$lib/routes/chatListFiltersUrl';
-import type { ChatStatusFilter } from '$lib/viewModels/pmaChat';
+import type { ChatStatusFilter } from '$lib/viewModels/chat';
 
 export type ChatFilterSummaryChip = {
   id: 'status' | 'category' | 'transport' | 'scopeKind' | 'search';

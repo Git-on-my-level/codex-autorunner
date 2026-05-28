@@ -108,6 +108,41 @@ def test_transcript_omits_intermediate_progress_rows() -> None:
     assert rows == []
 
 
+def test_transcript_projects_commentary_intermediate_rows() -> None:
+    rows = transcript_rows_from_timeline_items(
+        [
+            _intermediate_item(
+                {
+                    "intermediate_kind": "commentary",
+                    "title": "commentary",
+                    "text": "I am checking the renderer.",
+                    "event_ids": ["journal:1"],
+                    "progress_source_ids": ["progress:commentary:0001"],
+                    "event": {
+                        "kind": "commentary",
+                        "summary": "I am checking the renderer.",
+                    },
+                }
+            )
+        ]
+    )
+
+    assert rows == [
+        {
+            "kind": "intermediate",
+            "id": "turn:1:intermediate:commentary",
+            "title": "commentary",
+            "text": "I am checking the renderer.",
+            "event_ids": ["journal:1"],
+            "progress_source_ids": ["progress:commentary:0001"],
+            "detail": '{\n  "kind": "commentary",\n  "summary": "I am checking the renderer."\n}',
+            "turn_id": "turn-1",
+            "order_key": "002",
+            "timestamp": "2026-05-10T12:00:01Z",
+        }
+    ]
+
+
 def test_transcript_projects_context_compaction_card() -> None:
     rows = transcript_rows_from_timeline_items(
         [

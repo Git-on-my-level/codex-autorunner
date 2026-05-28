@@ -6,7 +6,7 @@ SQLite tables for threads, automation, and queues) and must not become an
 alternate owner of routing, lifecycle, or workspace-identity truth.
 
 Workspace/repo resolution for notification delivery lives in
-``pma_chat_delivery`` and uses shared helpers from ``chat_bindings``.
+``chat_delivery`` and uses shared helpers from ``chat_bindings``.
 """
 
 from __future__ import annotations

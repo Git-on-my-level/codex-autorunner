@@ -4,17 +4,17 @@ import type {
   TicketRunGroup
 } from '$lib/api/readModelContracts';
 import type {
-  PmaChatMessage,
-  PmaMessageCapsuleRef,
-  PmaChatSummary,
-  PmaRunProgress,
-  PmaTimelineItem,
+  ChatMessage,
+  MessageCapsuleRef,
+  ChatSummary,
+  ChatRunProgress,
+  ChatTimelineItem,
   RepoSummary,
   SurfaceArtifact,
   WorktreeSummary,
   WorkStatus
 } from './domain';
-import { mapPmaMessageCapsuleRef, normalizeOptionalWorkStatus, pmaChatArchivedFromRawSignals, pmaLifecycleTokenIsActive, pmaLifecycleTokenIsArchived, pmaTimelineContractFields } from './domain';
+import { mapMessageCapsuleRef, normalizeOptionalWorkStatus, chatArchivedFromRawSignals, chatLifecycleTokenIsActive, chatLifecycleTokenIsArchived, chatTimelineContractFields } from './domain';
 import { isChatUnread } from './unread';
 
 /** Status chips (All / Waiting / …) on the chat list. */
@@ -65,7 +65,7 @@ function messengerBadgeClass(slug: string): string {
   return `surface-${safe}`;
 }
 
-export function pmaChatFacets(chat: PmaChatSummary | null): ChatIndexFacets | null {
+export function chatFacets(chat: ChatSummary | null): ChatIndexFacets | null {
   const rawFacets = chat?.raw.facets;
   if (!rawFacets || typeof rawFacets !== 'object' || Array.isArray(rawFacets)) return null;
   const facets = rawFacets as Partial<ChatIndexFacets>;
@@ -95,10 +95,10 @@ export function chatCategoryLabel(category: ChatIndexFacets['category']): string
   return map[category];
 }
 
-export function pmaChatTransportBadges(
-  chat: PmaChatSummary | null
+export function chatTransportBadges(
+  chat: ChatSummary | null
 ): { slug: ChatFacetTransport; label: string; badgeClass: string }[] {
-  const facets = pmaChatFacets(chat);
+  const facets = chatFacets(chat);
   if (!facets) return [];
   return facets.transports
     .filter((transport): transport is Exclude<ChatFacetTransport, 'pma'> => transport !== 'pma')
@@ -109,27 +109,27 @@ export function pmaChatTransportBadges(
     }));
 }
 
-export type PmaChatBadgeView =
+export type ChatBadgeView =
   | { kind: 'agent-kind'; label: string; className: string }
   | { kind: 'category'; label: string; className: string }
   | { kind: 'surface'; label: string; className: string }
   | { kind: 'agent'; label: string; className: string };
 
-export function pmaChatBadgeViews(
-  chat: PmaChatSummary | null,
-  opts: { agentLabel?: string | null; showPmaAgent?: boolean } = {}
-): PmaChatBadgeView[] {
-  const badges: PmaChatBadgeView[] = [];
-  if (opts.showPmaAgent !== false && showPmaAgentBadge(chat)) {
+export function chatBadgeViews(
+  chat: ChatSummary | null,
+  opts: { agentLabel?: string | null; showManagerAgent?: boolean } = {}
+): ChatBadgeView[] {
+  const badges: ChatBadgeView[] = [];
+  if (opts.showManagerAgent !== false && showManagerAgentBadge(chat)) {
     badges.push({ kind: 'agent-kind', label: 'PMA', className: 'chat-kind-badge pma' });
   }
-  if (pmaChatKind(chat) === 'coding_agent') {
-    badges.push({ kind: 'agent-kind', label: pmaChatKindLabel('coding_agent'), className: 'chat-kind-badge coding_agent' });
+  if (chatKind(chat) === 'coding_agent') {
+    badges.push({ kind: 'agent-kind', label: chatKindLabel('coding_agent'), className: 'chat-kind-badge coding_agent' });
   }
-  if (pmaChatFacets(chat)?.category === 'automation') {
+  if (chatFacets(chat)?.category === 'automation') {
     badges.push({ kind: 'category', label: 'Automation', className: 'chat-kind-badge automation' });
   }
-  for (const transport of pmaChatTransportBadges(chat)) {
+  for (const transport of chatTransportBadges(chat)) {
     badges.push({ kind: 'surface', label: transport.label, className: `chat-surface-badge ${transport.badgeClass}` });
   }
   const agentLabel = opts.agentLabel?.trim();
@@ -140,12 +140,12 @@ export function pmaChatBadgeViews(
 }
 
 /** True when the chat is owned by the project manager agent, not merely PMA-surface reachable. */
-export function showPmaAgentBadge(chat: PmaChatSummary | null): boolean {
+export function showManagerAgentBadge(chat: ChatSummary | null): boolean {
   if (!chat) return false;
-  const facets = pmaChatFacets(chat);
+  const facets = chatFacets(chat);
   if (facets?.agentKind === 'coding_agent') return false;
   if (facets?.agentKind === 'pma') return true;
-  if (pmaChatKind(chat) === 'coding_agent') return false;
+  if (chatKind(chat) === 'coding_agent') return false;
   if (chat.chatKind === 'pma') return true;
   const rawKind = stringValue(chat.raw.chat_kind ?? chat.raw.thread_kind);
   return rawKind === 'pma';
@@ -153,9 +153,9 @@ export function showPmaAgentBadge(chat: PmaChatSummary | null): boolean {
 
 /** Badge + filter slug for chats bound to a backend-declared transport facet. */
 export function chatMessengerSurface(
-  chat: PmaChatSummary | null
+  chat: ChatSummary | null
 ): { slug: string; label: string; badgeClass: string } | null {
-  const transport = pmaChatFacets(chat)?.transports.find((value) => value !== 'pma') ?? null;
+  const transport = chatFacets(chat)?.transports.find((value) => value !== 'pma') ?? null;
   return transport ? { slug: transport, label: messengerSurfaceLabel(transport), badgeClass: messengerBadgeClass(transport) } : null;
 }
 
@@ -168,11 +168,11 @@ export function isChatSurfaceFilter(filter: ChatFilter): filter is `surface:${st
 }
 
 export function chatSurfaceFilterOptions(
-  chats: PmaChatSummary[]
+  chats: ChatSummary[]
 ): { slug: string; label: string; count: number }[] {
   const counts = new Map<string, { label: string; count: number }>();
   for (const chat of chats) {
-    if (isPmaChatArchived(chat)) continue;
+    if (isChatArchived(chat)) continue;
     const surf = chatMessengerSurface(chat);
     if (!surf) continue;
     const prev = counts.get(surf.slug);
@@ -234,7 +234,7 @@ export type ArtifactCardView = {
 };
 
 export type ChatTranscriptCard =
-  | { kind: 'message'; id: string; message: PmaChatMessage; turnId: string | null; orderKey: string; timestamp: string | null }
+  | { kind: 'message'; id: string; message: ChatMessage; turnId: string | null; orderKey: string; timestamp: string | null }
   | {
       kind: 'intermediate';
       id: string;
@@ -288,7 +288,7 @@ export type ChatToolCallCard = {
 
 export type ChatTranscriptSnapshot = {
   rows: ChatTranscriptCard[];
-  status: PmaRunProgress | null;
+  status: ChatRunProgress | null;
   raw: Record<string, unknown>;
 };
 
@@ -307,7 +307,7 @@ type CanonicalProgressItem = {
   hidden?: boolean;
 };
 
-export type PmaLiveActivity = {
+export type ChatLiveActivity = {
   state: WorkStatus;
   title: string;
   summary: string;
@@ -315,7 +315,7 @@ export type PmaLiveActivity = {
   steps: SurfaceArtifact[];
 };
 
-export type PmaStatusBar = {
+export type ChatStatusBar = {
   state: WorkStatus;
   phase: string;
   elapsedLabel: string;
@@ -336,20 +336,20 @@ export type PmaStatusBar = {
 export type ManagedThreadCreatePayload = {
   managed_thread_id?: string;
   agent?: string;
-  chat_kind?: PmaChatKind;
+  chat_kind?: ChatKind;
   model?: string;
   profile?: string;
   name: string;
   scope_urn: string;
 };
 
-export type PmaChatScopeSource =
+export type ChatScopeSource =
   | 'default_hub'
   | 'route_explicit'
   | 'picker_explicit'
   | 'inherited_continuation';
 
-export type PmaChatScopeOption =
+export type ChatScopeOption =
   | {
       id: 'local';
       kind: 'local';
@@ -412,7 +412,7 @@ function surfaceTitle(kind: string, key: string, display: ChatSurfaceDisplay): s
 }
 
 /** Convert one generic chat-surface projection row into the existing chat-list view shape. */
-export function mapChatSurfaceToPmaChatSummary(surface: Record<string, unknown>): PmaChatSummary | null {
+export function mapChatSurfaceToChatSummary(surface: Record<string, unknown>): ChatSummary | null {
   const surfaceKind = firstRawString(surface.surface_kind);
   const surfaceKey = firstRawString(surface.surface_key);
   if (!surfaceKind || !surfaceKey) return null;
@@ -428,7 +428,7 @@ export function mapChatSurfaceToPmaChatSummary(surface: Record<string, unknown>)
   const lifecycle = firstRawString(surface.lifecycle);
   const lcField = firstRawString(surface.lifecycle_status);
   const lifecycleStatus =
-    pmaLifecycleTokenIsArchived(lcField) || pmaLifecycleTokenIsArchived(lifecycle) ? 'archived' : (lcField ?? 'active');
+    chatLifecycleTokenIsArchived(lcField) || chatLifecycleTokenIsArchived(lifecycle) ? 'archived' : (lcField ?? 'active');
   const id = managedThreadId;
   const resourceKind = firstRawString(owner.resource_kind);
   const resourceId = firstRawString(owner.resource_id);
@@ -500,13 +500,13 @@ export function mapChatSurfaceToPmaChatSummary(surface: Record<string, unknown>)
  * Legacy diagnostics/test helper for `/hub/chat/events` snapshots.
  * Production chat-list rows come from the typed chat-index read model.
  */
-export function mapChatSurfaceSnapshotToPmaChats(payload: Record<string, unknown>): PmaChatSummary[] {
+export function mapChatSurfaceSnapshotToChats(payload: Record<string, unknown>): ChatSummary[] {
   const surfaces = Array.isArray(payload.surfaces) ? payload.surfaces : [];
   const mapped = surfaces
     .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
-    .map((item) => mapChatSurfaceToPmaChatSummary(item))
-    .filter((chat): chat is PmaChatSummary => chat !== null);
-  const byId = new Map<string, PmaChatSummary>();
+    .map((item) => mapChatSurfaceToChatSummary(item))
+    .filter((chat): chat is ChatSummary => chat !== null);
+  const byId = new Map<string, ChatSummary>();
   for (const chat of mapped) {
     const existing = byId.get(chat.id);
     byId.set(chat.id, existing ? mergeDuplicateChatSurfaceRows(existing, chat) : chat);
@@ -514,7 +514,7 @@ export function mapChatSurfaceSnapshotToPmaChats(payload: Record<string, unknown
   return [...byId.values()];
 }
 
-function mergeDuplicateChatSurfaceRows(left: PmaChatSummary, right: PmaChatSummary): PmaChatSummary {
+function mergeDuplicateChatSurfaceRows(left: ChatSummary, right: ChatSummary): ChatSummary {
   const leftKind = rawString(left.raw.surface_kind);
   const rightKind = rawString(right.raw.surface_kind);
   const primary = leftKind === 'pma' ? left : rightKind === 'pma' ? right : left;
@@ -536,7 +536,7 @@ function mergeDuplicateChatSurfaceRows(left: PmaChatSummary, right: PmaChatSumma
   };
 }
 
-export function mapChatSurfaceEventToPmaChatSummary(payload: Record<string, unknown>): PmaChatSummary | null {
+export function mapChatSurfaceEventToChatSummary(payload: Record<string, unknown>): ChatSummary | null {
   const surface = rawRecord(payload.surface);
   const details = rawRecord(payload.details);
   const channel = rawRecord(details.channel);
@@ -554,7 +554,7 @@ export function mapChatSurfaceEventToPmaChatSummary(payload: Record<string, unkn
   if (eventProfile) metadata.agent_profile = eventProfile;
   const eventModel = firstRawString(threadDetail.model);
   if (eventModel) metadata.model = eventModel;
-  return mapChatSurfaceToPmaChatSummary({
+  return mapChatSurfaceToChatSummary({
     surface_kind: surfaceKind,
     surface_key: surfaceKey,
     facts: ['managed_thread'],
@@ -572,7 +572,7 @@ export function mapChatSurfaceEventToPmaChatSummary(payload: Record<string, unkn
 }
 
 /** Legacy diagnostics/test helper; do not use as a production chat-index writer. */
-export function pmaChatBindingKey(chat: PmaChatSummary | null): string | null {
+export function chatBindingKey(chat: ChatSummary | null): string | null {
   if (!chat) return null;
   const raw = chat.raw as Record<string, unknown>;
   const kind = typeof raw.binding_kind === 'string' ? raw.binding_kind.trim() : '';
@@ -593,15 +593,15 @@ export function pmaChatBindingKey(chat: PmaChatSummary | null): string | null {
 
 /** Legacy diagnostics/test helper; production list updates use chat.index.patch. */
 export function reconcileChatSurfaceEvent(
-  currentChats: PmaChatSummary[],
+  currentChats: ChatSummary[],
   eventPayload: Record<string, unknown>
-): PmaChatSummary[] {
-  const eventChat = mapChatSurfaceEventToPmaChatSummary(eventPayload);
+): ChatSummary[] {
+  const eventChat = mapChatSurfaceEventToChatSummary(eventPayload);
   if (!eventChat) return currentChats;
-  const eventBinding = pmaChatBindingKey(eventChat);
+  const eventBinding = chatBindingKey(eventChat);
   let found = false;
   const nextChats = currentChats.map((chat) => {
-    if (chat.id !== eventChat.id && (!eventBinding || pmaChatBindingKey(chat) !== eventBinding)) return chat;
+    if (chat.id !== eventChat.id && (!eventBinding || chatBindingKey(chat) !== eventBinding)) return chat;
     found = true;
     return {
       ...chat,
@@ -626,49 +626,49 @@ function isProtocolIdTitle(title: string): boolean {
 
 /** Legacy diagnostics/test helper; production list repair uses chat.index.snapshot. */
 export function reconcileChatSurfaceSnapshot(
-  currentChats: PmaChatSummary[],
-  nextChats: PmaChatSummary[],
+  currentChats: ChatSummary[],
+  nextChats: ChatSummary[],
   activeChatId: string | null
-): { chats: PmaChatSummary[]; replacementChatId: string | null } {
+): { chats: ChatSummary[]; replacementChatId: string | null } {
   if (!activeChatId) return { chats: nextChats, replacementChatId: null };
   const priorActive = currentChats.find((chat) => chat.id === activeChatId) ?? null;
-  const priorBinding = pmaChatBindingKey(priorActive);
+  const priorBinding = chatBindingKey(priorActive);
   const nextActive = nextChats.find((chat) => chat.id === activeChatId) ?? null;
-  if (nextActive && !isPmaChatArchived(nextActive)) return { chats: nextChats, replacementChatId: null };
+  if (nextActive && !isChatArchived(nextActive)) return { chats: nextChats, replacementChatId: null };
   if (!priorBinding) return { chats: nextChats, replacementChatId: null };
   const replacement = nextChats.find(
-    (chat) => chat.id !== activeChatId && pmaChatBindingKey(chat) === priorBinding && !isPmaChatArchived(chat)
+    (chat) => chat.id !== activeChatId && chatBindingKey(chat) === priorBinding && !isChatArchived(chat)
   );
   return { chats: nextChats, replacementChatId: replacement?.id ?? null };
 }
 
-export function isLocalChatPlaceholder(chat: PmaChatSummary): boolean {
+export function isLocalChatPlaceholder(chat: ChatSummary): boolean {
   return chat.lifecycleStatus === 'draft' || chat.raw.draft === true || chat.raw.draft_committed_placeholder === true;
 }
 
 export function mergeLocalChatPlaceholders(
-  persistedChats: PmaChatSummary[],
-  placeholders: Array<PmaChatSummary | null | undefined>
-): PmaChatSummary[] {
+  persistedChats: ChatSummary[],
+  placeholders: Array<ChatSummary | null | undefined>
+): ChatSummary[] {
   const visiblePlaceholders = visibleLocalChatPlaceholders(persistedChats, placeholders);
   return visiblePlaceholders.length > 0 ? [...visiblePlaceholders, ...persistedChats] : persistedChats;
 }
 
 export function visibleLocalChatPlaceholders(
-  persistedChats: PmaChatSummary[],
-  placeholders: Array<PmaChatSummary | null | undefined>
-): PmaChatSummary[] {
+  persistedChats: ChatSummary[],
+  placeholders: Array<ChatSummary | null | undefined>
+): ChatSummary[] {
   return placeholders
-    .filter((chat): chat is PmaChatSummary => Boolean(chat))
+    .filter((chat): chat is ChatSummary => Boolean(chat))
     .filter((chat) => !persistedChats.some((row) => row.id === chat.id));
 }
 
 export function mergeChatFacetSourceChats(
-  baseChats: PmaChatSummary[],
-  currentChats: PmaChatSummary[],
-  placeholders: Array<PmaChatSummary | null | undefined> = []
-): PmaChatSummary[] {
-  const byId = new Map<string, PmaChatSummary>();
+  baseChats: ChatSummary[],
+  currentChats: ChatSummary[],
+  placeholders: Array<ChatSummary | null | undefined> = []
+): ChatSummary[] {
+  const byId = new Map<string, ChatSummary>();
   for (const chat of baseChats) byId.set(chat.id, chat);
   for (const chat of currentChats) byId.set(chat.id, chat);
   return mergeLocalChatPlaceholders([...byId.values()], placeholders);
@@ -689,28 +689,28 @@ export type ManagedThreadMessagePayload = {
 export type ManagedThreadStartMessagePayload = ManagedThreadCreatePayload &
   ManagedThreadMessagePayload & {
     origin: 'web';
-    scope_source: PmaChatScopeSource;
+    scope_source: ChatScopeSource;
   };
 
 const activeStatuses: WorkStatus[] = ['running'];
 const waitingStatuses: WorkStatus[] = ['waiting', 'blocked'];
 
-export function isPmaChatArchived(chat: PmaChatSummary): boolean {
-  if (pmaLifecycleTokenIsArchived(chat.lifecycleStatus)) return true;
-  if (pmaLifecycleTokenIsActive(chat.lifecycleStatus)) return false;
-  return pmaChatArchivedFromRawSignals(chat.raw);
+export function isChatArchived(chat: ChatSummary): boolean {
+  if (chatLifecycleTokenIsArchived(chat.lifecycleStatus)) return true;
+  if (chatLifecycleTokenIsActive(chat.lifecycleStatus)) return false;
+  return chatArchivedFromRawSignals(chat.raw);
 }
 
-export function filterPmaChats(
-  chats: PmaChatSummary[],
+export function filterChats(
+  chats: ChatSummary[],
   filter: ChatFilter,
   query: string,
   lastSeen: Record<string, string> = {}
-): PmaChatSummary[] {
+): ChatSummary[] {
   const needle = query.trim().toLowerCase();
   return chats
     .filter((chat) => {
-      const archived = isPmaChatArchived(chat);
+      const archived = isChatArchived(chat);
       if (filter === 'archived') return archived;
       if (archived) return false;
       if (isChatSurfaceFilter(filter)) {
@@ -718,7 +718,7 @@ export function filterPmaChats(
         return chatMessengerSurface(chat)?.slug === slug;
       }
       if (filter === 'ticket_runs') return chatRunGroupKey(chat) !== null;
-      if (filter === 'automation') return pmaChatIsAutomation(chat);
+      if (filter === 'automation') return chatIsAutomation(chat);
       if (filter === 'drafts') return chat.raw.has_local_draft === true;
       if (filter === 'active') return activeStatuses.includes(chat.status);
       if (filter === 'waiting') return waitingStatuses.includes(chat.status);
@@ -748,9 +748,9 @@ export function filterPmaChats(
 
 /** Unread chats first, then most recently updated. Waiting/running only break ties. */
 export function sortChatsUnreadFirst(
-  chats: PmaChatSummary[],
+  chats: ChatSummary[],
   lastSeen: Record<string, string> = {}
-): PmaChatSummary[] {
+): ChatSummary[] {
   const statusRank = (status: WorkStatus) =>
     status === 'waiting' || status === 'blocked' ? 0 : status === 'running' ? 1 : 2;
   return [...chats].sort((left, right) => {
@@ -769,7 +769,7 @@ export function sortChatsUnreadFirst(
 }
 
 /** Waiting/blocked chats first (operator inbox), then most recently updated. */
-export function sortChatsWaitingFirst(chats: PmaChatSummary[]): PmaChatSummary[] {
+export function sortChatsWaitingFirst(chats: ChatSummary[]): ChatSummary[] {
   const waitingRank = (status: WorkStatus) =>
     status === 'waiting' || status === 'blocked' ? 0 : 1;
   return [...chats].sort((left, right) => {
@@ -782,33 +782,33 @@ export function sortChatsWaitingFirst(chats: PmaChatSummary[]): PmaChatSummary[]
 }
 
 export function summarizeFilterCounts(
-  chats: PmaChatSummary[],
+  chats: ChatSummary[],
   lastSeen: Record<string, string> = {}
 ): Record<ChatStatusFilter, number> {
-  const activeChats = chats.filter((chat) => !isPmaChatArchived(chat));
+  const activeChats = chats.filter((chat) => !isChatArchived(chat));
   return {
     all: activeChats.length,
     active: activeChats.filter((chat) => activeStatuses.includes(chat.status)).length,
     waiting: activeChats.filter((chat) => waitingStatuses.includes(chat.status)).length,
     unread: activeChats.filter((chat) => isUnread(chat, lastSeen)).length,
     drafts: 0,
-    archived: chats.filter(isPmaChatArchived).length
+    archived: chats.filter(isChatArchived).length
   };
 }
 
-export function pmaChatIsAutomation(chat: PmaChatSummary | null): boolean {
-  return pmaChatFacets(chat)?.category === 'automation';
+export function chatIsAutomation(chat: ChatSummary | null): boolean {
+  return chatFacets(chat)?.category === 'automation';
 }
 
 export function adjustedUnreadFilterCount(
   serverUnread: number,
-  knownChats: PmaChatSummary[],
+  knownChats: ChatSummary[],
   lastSeen: Record<string, string> = {}
 ): number {
   let knownServerUnread = 0;
   let knownEffectiveUnread = 0;
   for (const chat of knownChats) {
-    if (isPmaChatArchived(chat) || typeof chat.unreadCount !== 'number' || chat.unreadCount <= 0) continue;
+    if (isChatArchived(chat) || typeof chat.unreadCount !== 'number' || chat.unreadCount <= 0) continue;
     knownServerUnread += 1;
     if (isUnread(chat, lastSeen)) knownEffectiveUnread += 1;
   }
@@ -816,8 +816,8 @@ export function adjustedUnreadFilterCount(
 }
 
 export function summarizeVisibleLocalPlaceholderStatusCounts(
-  persistedChats: PmaChatSummary[],
-  placeholders: Array<PmaChatSummary | null | undefined>
+  persistedChats: ChatSummary[],
+  placeholders: Array<ChatSummary | null | undefined>
 ): Pick<Record<ChatStatusFilter, number>, 'active' | 'waiting'> {
   const visible = visibleLocalChatPlaceholders(persistedChats, placeholders);
   return {
@@ -836,7 +836,7 @@ export type ChatRunGroup = {
   scopeKind: 'worktree' | 'repo';
   scopeId: string;
   scopeLabel: string;
-  chats: PmaChatSummary[];
+  chats: ChatSummary[];
   totalCount: number;
   unreadCount: number;
   activeCount: number;
@@ -851,7 +851,7 @@ export type ChatRunGroup = {
 
 export type ChatListEntry =
   | { kind: 'group'; group: ChatRunGroup }
-  | { kind: 'chat'; chat: PmaChatSummary };
+  | { kind: 'chat'; chat: ChatSummary };
 
 export function chatRunGroupSummaryParts(group: ChatRunGroup): string[] {
   const parts: string[] = [];
@@ -862,8 +862,8 @@ export function chatRunGroupSummaryParts(group: ChatRunGroup): string[] {
   return parts;
 }
 
-export function chatRunGroupKey(chat: PmaChatSummary): string | null {
-  if (pmaChatFacets(chat)?.category !== 'ticket_run') return null;
+export function chatRunGroupKey(chat: ChatSummary): string | null {
+  if (chatFacets(chat)?.category !== 'ticket_run') return null;
   const runSuffix = chat.runId ? `:run:${chat.runId}` : '';
   if (chat.worktreeId) return `worktree:${chat.worktreeId}${runSuffix}`;
   if (chat.repoId) return `repo:${chat.repoId}${runSuffix}`;
@@ -871,22 +871,22 @@ export function chatRunGroupKey(chat: PmaChatSummary): string | null {
 }
 
 /** Number of distinct repo/worktree ticket-flow runs (same cardinality as run-group rows). */
-export function countTicketRunGroups(chats: PmaChatSummary[]): number {
+export function countTicketRunGroups(chats: ChatSummary[]): number {
   const keys = new Set<string>();
   for (const chat of chats) {
-    if (isPmaChatArchived(chat)) continue;
+    if (isChatArchived(chat)) continue;
     const key = chatRunGroupKey(chat);
     if (key) keys.add(key);
   }
   return keys.size;
 }
 
-export function countSemanticTicketRunGroups(groups: TicketRunGroup[], chats: PmaChatSummary[] = []): number {
+export function countSemanticTicketRunGroups(groups: TicketRunGroup[], chats: ChatSummary[] = []): number {
   void chats;
   return groups.length;
 }
 
-function isUnread(chat: PmaChatSummary, lastSeen: Record<string, string>): boolean {
+function isUnread(chat: ChatSummary, lastSeen: Record<string, string>): boolean {
   if (typeof chat.unreadCount === 'number' && chat.unreadCount <= 0) return false;
   if (!isChatUnread(chat, lastSeen)) return false;
   return typeof chat.unreadCount === 'number' ? chat.unreadCount > 0 : true;
@@ -900,13 +900,13 @@ function rollupGroupStatus(group: ChatRunGroup): WorkStatus {
   return 'idle';
 }
 
-function chatCountsDoneForRun(chat: PmaChatSummary): boolean {
+function chatCountsDoneForRun(chat: ChatSummary): boolean {
   if (chat.status === 'failed' || chat.status === 'invalid') return false;
   return chat.ticketDone === true || chat.ticketStatus === 'done';
 }
 
 export function buildChatListEntries(
-  chats: PmaChatSummary[],
+  chats: ChatSummary[],
   options: {
     lastSeen?: Record<string, string>;
     repoLabel?: (repoId: string) => string | null;
@@ -919,7 +919,7 @@ export function buildChatListEntries(
     return sortChatsUnreadFirst(chats, lastSeen).map((chat) => ({ kind: 'chat', chat }) as ChatListEntry);
   }
   const groups = new Map<string, ChatRunGroup>();
-  const standalone: PmaChatSummary[] = [];
+  const standalone: ChatSummary[] = [];
 
   for (const chat of chats) {
     const key = chatRunGroupKey(chat);
@@ -1007,7 +1007,7 @@ export function buildChatListEntries(
 
 // Current `/chats` rendering uses backend TicketRunGroup rows for semantic run groups.
 export function buildSemanticChatListEntries(
-  chats: PmaChatSummary[],
+  chats: ChatSummary[],
   groups: TicketRunGroup[],
   options: {
     lastSeen?: Record<string, string>;
@@ -1022,7 +1022,7 @@ export function buildSemanticChatListEntries(
   }
 
   const lastSeen = options.lastSeen ?? {};
-  const chatsByGroup = new Map<string, PmaChatSummary[]>();
+  const chatsByGroup = new Map<string, ChatSummary[]>();
   const groupedIds = new Set<string>();
   for (const chat of chats) {
     const groupId = backendGroupIdForChat(chat);
@@ -1070,7 +1070,7 @@ export function buildSemanticChatListEntries(
   return sortChatListEntries(entries, lastSeen);
 }
 
-function backendGroupIdForChat(chat: PmaChatSummary): string | null {
+function backendGroupIdForChat(chat: ChatSummary): string | null {
   const row = chat.raw.row;
   if (row && typeof row === 'object' && !Array.isArray(row)) {
     const value = (row as Record<string, unknown>).groupId;
@@ -1108,7 +1108,7 @@ function sortChatListEntries(entries: ChatListEntry[], lastSeen: Record<string, 
   });
 }
 
-/** Filter entries against a single PMA chat filter while preserving group structure. */
+/** Filter entries against a single chat filter while preserving group structure. */
 export function filterChatEntries(
   entries: ChatListEntry[],
   filter: ChatFilter,
@@ -1118,11 +1118,11 @@ export function filterChatEntries(
   const out: ChatListEntry[] = [];
   for (const entry of entries) {
     if (entry.kind === 'chat') {
-      const filtered = filterPmaChats([entry.chat], filter, search, lastSeen);
+      const filtered = filterChats([entry.chat], filter, search, lastSeen);
       if (filtered.length) out.push(entry);
       continue;
     }
-    const matchedChats = filterPmaChats(entry.group.chats, filter, search, lastSeen);
+    const matchedChats = filterChats(entry.group.chats, filter, search, lastSeen);
     if (entry.group.aggregateSource === 'backend' && filter === 'ticket_runs' && matchedChats.length === 0) {
       const needle = search.trim().toLowerCase();
       if (!needle || [entry.group.key, entry.group.scopeId, entry.group.scopeLabel].some((value) => value.toLowerCase().includes(needle))) {
@@ -1172,7 +1172,7 @@ export function filterChatEntries(
 }
 
 export function chooseActiveChatId(
-  chats: PmaChatSummary[],
+  chats: ChatSummary[],
   currentId: string | null,
   requestedId: string | null = null
 ): string | null {
@@ -1182,8 +1182,8 @@ export function chooseActiveChatId(
 }
 
 export function buildChatTranscriptCards(
-  timeline: PmaTimelineItem[],
-  chat: PmaChatSummary | null,
+  timeline: ChatTimelineItem[],
+  chat: ChatSummary | null,
   artifacts: SurfaceArtifact[]
 ): ChatTranscriptCard[] {
   const normalizedTimeline = suppressDuplicateTimelineDeliveries(timeline);
@@ -1213,9 +1213,9 @@ export function buildChatTranscriptCards(
   return cards;
 }
 
-function suppressDuplicateTimelineDeliveries(timeline: PmaTimelineItem[]): PmaTimelineItem[] {
+function suppressDuplicateTimelineDeliveries(timeline: ChatTimelineItem[]): ChatTimelineItem[] {
   const seen = new Set<string>();
-  const out: PmaTimelineItem[] = [];
+  const out: ChatTimelineItem[] = [];
   for (const item of timeline) {
     const key = canonicalTimelineIdentityKey(item);
     if (seen.has(key)) continue;
@@ -1225,7 +1225,7 @@ function suppressDuplicateTimelineDeliveries(timeline: PmaTimelineItem[]): PmaTi
   return out;
 }
 
-function canonicalTimelineIdentityKey(item: PmaTimelineItem): string {
+function canonicalTimelineIdentityKey(item: ChatTimelineItem): string {
   return item.identity.timelineItemId;
 }
 
@@ -1234,7 +1234,7 @@ function isMessageAttachmentArtifactCard(card: ChatTranscriptCard, messageAttach
   return artifactKeysFor(card.artifact).some((key) => messageAttachmentKeys.has(key));
 }
 
-function collectMessageAttachmentKeys(timeline: PmaTimelineItem[]): Set<string> {
+function collectMessageAttachmentKeys(timeline: ChatTimelineItem[]): Set<string> {
   const keys = new Set<string>();
   for (const item of timeline) {
     if (item.kind !== 'user_message' && item.kind !== 'assistant_message') continue;
@@ -1269,7 +1269,7 @@ function artifactKeysFor(artifact: SurfaceArtifact): string[] {
 
 export function mapChatTranscriptSnapshot(
   raw: Record<string, unknown>,
-  mapProgress: (raw: Record<string, unknown>) => PmaRunProgress
+  mapProgress: (raw: Record<string, unknown>) => ChatRunProgress
 ): ChatTranscriptSnapshot {
   return {
     rows: asRecordArray(raw.rows).map(mapChatTranscriptRow).filter((row): row is ChatTranscriptCard => row !== null),
@@ -1531,13 +1531,13 @@ function mapChatTranscriptRow(raw: Record<string, unknown>): ChatTranscriptCard 
     const identity = asRecord(raw.identity ?? message.identity);
     const userVisibleText = nullableString(raw.user_visible_text ?? message.user_visible_text);
     const capsuleRefs = asRecordArray(raw.capsule_refs ?? message.capsule_refs)
-      .map(mapPmaMessageCapsuleRef)
-      .filter((item): item is PmaMessageCapsuleRef => item !== null);
+      .map(mapMessageCapsuleRef)
+      .filter((item): item is MessageCapsuleRef => item !== null);
     const visibleText = nullableString(raw.visible_text ?? message.visible_text);
     const modelContextText = nullableString(raw.model_context_text ?? message.model_context_text);
     const modelContextRefs = asRecordArray(raw.model_context_refs ?? message.model_context_refs)
-      .map(mapPmaMessageCapsuleRef)
-      .filter((item): item is PmaMessageCapsuleRef => item !== null);
+      .map(mapMessageCapsuleRef)
+      .filter((item): item is MessageCapsuleRef => item !== null);
     const rawModelPrompt = nullableString(raw.raw_model_prompt ?? message.raw_model_prompt);
     return {
       kind: 'message',
@@ -1790,8 +1790,8 @@ function findMergeableIntermediate(
 
 export function filterArtifactsForActiveChat(
   artifacts: SurfaceArtifact[],
-  chat: PmaChatSummary | null,
-  progress: PmaRunProgress | null
+  chat: ChatSummary | null,
+  progress: ChatRunProgress | null
 ): SurfaceArtifact[] {
   if (!chat) return [];
   const durableIds = new Set(
@@ -1832,7 +1832,7 @@ export function filterArtifactsForActiveChat(
   );
 }
 
-export function buildPmaLiveActivity(progress: PmaRunProgress | null): PmaLiveActivity | null {
+export function buildChatLiveActivity(progress: ChatRunProgress | null): ChatLiveActivity | null {
   if (!progress) return null;
   const steps = progress.events.filter(isPrimaryProgressArtifact).slice(-4);
   const phase = progress.phase?.replace(/_/g, ' ') ?? null;
@@ -1864,7 +1864,7 @@ export function buildPmaLiveActivity(progress: PmaRunProgress | null): PmaLiveAc
   return { state: status, title, summary, elapsedLabel, steps };
 }
 
-export function buildPmaStatusBar(progress: PmaRunProgress | null, chat: PmaChatSummary | null): PmaStatusBar | null {
+export function buildChatStatusBar(progress: ChatRunProgress | null, chat: ChatSummary | null): ChatStatusBar | null {
   if (!progress && !chat) return null;
   const state = progress?.status ?? chat?.status ?? 'idle';
   const tokenUsage = extractTokenUsage(progress?.raw) ?? extractTokenUsage(chat?.raw);
@@ -2037,7 +2037,7 @@ function clampMergedIntermediateText(text: string, maxChars: number): string {
   return `${text.slice(0, bodyLimit).trimEnd()}${marker}`;
 }
 
-function thinkingTimelineDetail(item: PmaTimelineItem): string | null {
+function thinkingTimelineDetail(item: ChatTimelineItem): string | null {
   const kind = stringValue(item.payload.intermediate_kind).trim().toLowerCase();
   if (kind !== 'thinking') return null;
   return traceDetailSummary('Thinking', timelineSourceEventIds(item));
@@ -2127,7 +2127,7 @@ function isHiddenLifecycleActivity(event: SurfaceArtifact): boolean {
   return title === 'chat execution journal' || title === 'compaction summary';
 }
 
-function timelineItemToCard(item: PmaTimelineItem): ChatTranscriptCard[] {
+function timelineItemToCard(item: ChatTimelineItem): ChatTranscriptCard[] {
   if (item.kind === 'user_message' || item.kind === 'assistant_message') {
     const text = stringValue(item.payload.text);
     if (!text.trim()) return [];
@@ -2227,7 +2227,7 @@ function timelineItemToCard(item: PmaTimelineItem): ChatTranscriptCard[] {
   return [];
 }
 
-function toolCardFromTimeline(item: PmaTimelineItem): ChatToolCallCard {
+function toolCardFromTimeline(item: ChatTimelineItem): ChatToolCallCard {
   const result = asRecord(item.payload.result);
   const call = asRecord(item.payload.call);
   const rawState = stringValue(result.status ?? item.raw.status ?? item.status).toLowerCase();
@@ -2242,7 +2242,7 @@ function toolCardFromTimeline(item: PmaTimelineItem): ChatToolCallCard {
   return { id: item.id, title, summary, detail: timelineDetail(item), state, eventIds: timelineSourceEventIds(item) };
 }
 
-function intermediateTimelineTitle(item: PmaTimelineItem): string {
+function intermediateTimelineTitle(item: ChatTimelineItem): string {
   const payload = asRecord(item.payload);
   const kind = traceLabelText(payload.intermediate_kind);
   return traceTitleFromSources(kind || 'Update', [payload, asRecord(payload.progress_item), asRecord(payload.event)], {
@@ -2250,13 +2250,13 @@ function intermediateTimelineTitle(item: PmaTimelineItem): string {
   });
 }
 
-function isDecodeFailureTimelineItem(item: PmaTimelineItem): boolean {
+function isDecodeFailureTimelineItem(item: ChatTimelineItem): boolean {
   const kind = stringValue(item.payload.intermediate_kind).toLowerCase();
   const title = intermediateTimelineTitle(item).trim().toLowerCase();
   return kind === 'decode_failure' || title === 'decode failure';
 }
 
-function isHiddenLifecycleTimelineItem(item: PmaTimelineItem): boolean {
+function isHiddenLifecycleTimelineItem(item: ChatTimelineItem): boolean {
   if (isDecodeFailureTimelineItem(item)) return true;
   const intermediateKind = stringValue(item.payload.intermediate_kind).toLowerCase();
   const eventType = stringValue(item.payload.event_type).toLowerCase();
@@ -2272,7 +2272,7 @@ function isHiddenLifecycleTimelineItem(item: PmaTimelineItem): boolean {
   );
 }
 
-function timelineDetail(item: PmaTimelineItem): string | null {
+function timelineDetail(item: ChatTimelineItem): string | null {
   const detailSource =
     item.payload.live_tail_event ??
     item.payload.event ??
@@ -2321,7 +2321,7 @@ function isTerminalTraceEvent(event: SurfaceArtifact): boolean {
   return title === 'run failed' || title === 'turn failed' || title === 'interrupted';
 }
 
-function timelineSourceEventIds(item: PmaTimelineItem): string[] {
+function timelineSourceEventIds(item: ChatTimelineItem): string[] {
   return [
     ...unknownArrayToStrings(item.provenance.sourceEventIds),
     ...unknownArrayToStrings(item.provenance.progressEventIds)
@@ -2329,7 +2329,7 @@ function timelineSourceEventIds(item: PmaTimelineItem): string[] {
 }
 
 function progressItemEventIds(item: CanonicalProgressItem | null | undefined): string[] {
-  return unknownArrayToStrings(item?.event_ids);
+  return uniqueStrings([stringValue(item?.item_id), ...unknownArrayToStrings(item?.event_ids)]);
 }
 
 function unknownArray(value: unknown): unknown[] {
@@ -2415,7 +2415,7 @@ export function formatCompactMessageDateTime(
   return `${dateFmt.format(parsed)} · ${timeStr}`;
 }
 
-export function progressPercent(chat: PmaChatSummary, progress: PmaRunProgress | null = null): number {
+export function progressPercent(chat: ChatSummary, progress: ChatRunProgress | null = null): number {
   if (typeof chat.progressPercent === 'number') return clampPercent(chat.progressPercent);
   if (progress?.status === 'done') return 100;
   if (progress?.status === 'failed') return 100;
@@ -2494,11 +2494,11 @@ export function composeMessageWithAttachments(
 
 export function buildManagedThreadCreatePayload(
   agent: string,
-  scope: PmaChatScopeOption = localPmaChatScopeOption(),
+  scope: ChatScopeOption = localChatScopeOption(),
   name = 'New chat',
   model = '',
   profile = '',
-  chatKind: PmaChatKind = 'pma',
+  chatKind: ChatKind = 'pma',
   managedThreadId: string | null = null
 ): ManagedThreadCreatePayload {
   const base: Pick<ManagedThreadCreatePayload, 'agent' | 'name' | 'model'> = {
@@ -2516,9 +2516,9 @@ export function buildManagedThreadCreatePayload(
   };
 }
 
-export type PmaChatKind = 'pma' | 'coding_agent';
+export type ChatKind = 'pma' | 'coding_agent';
 
-export function pmaChatKind(chat: PmaChatSummary | null): PmaChatKind {
+export function chatKind(chat: ChatSummary | null): ChatKind {
   if (!chat) return 'pma';
   if (chat.chatKind === 'coding_agent') return 'coding_agent';
   if (chat.chatKind === 'pma') return 'pma';
@@ -2529,7 +2529,7 @@ export function pmaChatKind(chat: PmaChatSummary | null): PmaChatKind {
   return explicitName.includes('coding agent') ? 'coding_agent' : 'pma';
 }
 
-export function pmaChatKindLabel(kind: PmaChatKind): string {
+export function chatKindLabel(kind: ChatKind): string {
   return kind === 'coding_agent' ? 'Coding agent' : 'Chat';
 }
 
@@ -2545,7 +2545,7 @@ export function agentCapabilityAllowed(
   return Boolean(result && typeof result === 'object' && (result as Record<string, unknown>).allowed === true);
 }
 
-export function localPmaChatScopeOption(): PmaChatScopeLocalOption {
+export function localChatScopeOption(): ChatScopeLocalOption {
   return {
     id: 'local',
     kind: 'local',
@@ -2555,12 +2555,12 @@ export function localPmaChatScopeOption(): PmaChatScopeLocalOption {
   };
 }
 
-export function buildPmaChatScopeOptions(
+export function buildChatScopeOptions(
   repos: RepoSummary[],
   worktrees: WorktreeSummary[]
-): PmaChatScopeOption[] {
+): ChatScopeOption[] {
   return [
-    localPmaChatScopeOption(),
+    localChatScopeOption(),
     ...repos.map((repo) => ({
       id: `repo:${repo.id}`,
       kind: 'repo' as const,
@@ -2587,26 +2587,26 @@ export function buildPmaChatScopeOptions(
   ];
 }
 
-export type PmaChatScopeLocalOption = Extract<PmaChatScopeOption, { kind: 'local' }>;
-export type PmaChatScopeRepoOption = Extract<PmaChatScopeOption, { kind: 'repo' }>;
-export type PmaChatScopeWorktreeOption = Extract<PmaChatScopeOption, { kind: 'worktree' }>;
+export type ChatScopeLocalOption = Extract<ChatScopeOption, { kind: 'local' }>;
+export type ChatScopeRepoOption = Extract<ChatScopeOption, { kind: 'repo' }>;
+export type ChatScopeWorktreeOption = Extract<ChatScopeOption, { kind: 'worktree' }>;
 
 /** A repo and the worktrees that belong to it, mirroring the repos-page grouping. */
-export type PmaChatScopeGroup = {
+export type ChatScopeGroup = {
   /** Stable key — repo id, or a synthetic key for worktrees with no catalogued repo. */
   key: string;
   /** Header label shown above the group's worktrees. */
   repoLabel: string;
   /** The repo itself as a selectable scope, when one exists in the catalog. */
-  repo: PmaChatScopeRepoOption | null;
+  repo: ChatScopeRepoOption | null;
   /** Worktrees belonging to this repo. */
-  worktrees: PmaChatScopeWorktreeOption[];
+  worktrees: ChatScopeWorktreeOption[];
 };
 
-export type PmaChatScopeGroupView = {
+export type ChatScopeGroupView = {
   /** Local hub option, or null when filtered out by a search query. */
-  local: PmaChatScopeLocalOption | null;
-  groups: PmaChatScopeGroup[];
+  local: ChatScopeLocalOption | null;
+  groups: ChatScopeGroup[];
 };
 
 const ORPHAN_SCOPE_GROUP_KEY = '__orphan__';
@@ -2616,12 +2616,12 @@ const ORPHAN_SCOPE_GROUP_KEY = '__orphan__';
  * worktree belongs to. Repo order is preserved; worktrees with no catalogued repo collapse into a
  * single trailing "Other worktrees" group.
  */
-export function groupPmaChatScopeOptions(options: PmaChatScopeOption[]): PmaChatScopeGroupView {
-  const local = options.find((opt): opt is PmaChatScopeLocalOption => opt.kind === 'local') ?? null;
-  const groups: PmaChatScopeGroup[] = [];
-  const byKey = new Map<string, PmaChatScopeGroup>();
+export function groupChatScopeOptions(options: ChatScopeOption[]): ChatScopeGroupView {
+  const local = options.find((opt): opt is ChatScopeLocalOption => opt.kind === 'local') ?? null;
+  const groups: ChatScopeGroup[] = [];
+  const byKey = new Map<string, ChatScopeGroup>();
 
-  const ensureGroup = (key: string, label: string, repo: PmaChatScopeRepoOption | null): PmaChatScopeGroup => {
+  const ensureGroup = (key: string, label: string, repo: ChatScopeRepoOption | null): ChatScopeGroup => {
     let group = byKey.get(key);
     if (!group) {
       group = { key, repoLabel: label, repo, worktrees: [] };
@@ -2647,7 +2647,7 @@ export function groupPmaChatScopeOptions(options: PmaChatScopeOption[]): PmaChat
   return { local, groups };
 }
 
-function scopeOptionMatchesQuery(option: PmaChatScopeOption, query: string): boolean {
+function scopeOptionMatchesQuery(option: ChatScopeOption, query: string): boolean {
   if (!query) return true;
   const haystack = `${option.label} ${option.detail} ${option.scopeUrn}`.toLowerCase();
   return query
@@ -2662,14 +2662,14 @@ function scopeOptionMatchesQuery(option: PmaChatScopeOption, query: string): boo
  * worktrees; otherwise only matching worktrees are kept — but the repo header always stays so the
  * worktree's owning repo remains visible while searching.
  */
-export function filterPmaChatScopeGroups(
-  view: PmaChatScopeGroupView,
+export function filterChatScopeGroups(
+  view: ChatScopeGroupView,
   query: string
-): PmaChatScopeGroupView {
+): ChatScopeGroupView {
   const trimmed = query.trim();
   if (!trimmed) return view;
   const needle = trimmed.toLowerCase();
-  const groups: PmaChatScopeGroup[] = [];
+  const groups: ChatScopeGroup[] = [];
   for (const group of view.groups) {
     const headerMatches =
       group.repoLabel.toLowerCase().includes(needle) ||
@@ -2686,8 +2686,8 @@ export function filterPmaChatScopeGroups(
 }
 
 /** Selectable options in keyboard-navigation order: local hub, then each repo before its worktrees. */
-export function flattenPmaChatScopeGroupView(view: PmaChatScopeGroupView): PmaChatScopeOption[] {
-  const flat: PmaChatScopeOption[] = [];
+export function flattenChatScopeGroupView(view: ChatScopeGroupView): ChatScopeOption[] {
+  const flat: ChatScopeOption[] = [];
   if (view.local) flat.push(view.local);
   for (const group of view.groups) {
     if (group.repo) flat.push(group.repo);
@@ -2696,14 +2696,14 @@ export function flattenPmaChatScopeGroupView(view: PmaChatScopeGroupView): PmaCh
   return flat;
 }
 
-export function pmaChatScopeLabel(scope: PmaChatScopeOption | null): string {
+export function chatScopeLabel(scope: ChatScopeOption | null): string {
   if (!scope) return 'Workspace scope';
   if (scope.kind === 'local') return 'Local hub · current workspace';
   if (scope.kind === 'repo') return `Repo · ${scope.resourceId}`;
   return `Worktree · ${scope.resourceId}`;
 }
 
-export function pmaChatScopeLabelFromChat(chat: PmaChatSummary | null): string {
+export function chatScopeLabelFromChat(chat: ChatSummary | null): string {
   if (!chat) return 'Choose a scope before creating a chat';
   if (chat.worktreeId) return `Worktree · ${chat.worktreeId}`;
   if (chat.repoId) return `Repo · ${chat.repoId}`;
@@ -2712,10 +2712,10 @@ export function pmaChatScopeLabelFromChat(chat: PmaChatSummary | null): string {
   return 'Local hub · current workspace';
 }
 
-export type PmaChatScopeUiKind = 'repo' | 'worktree' | 'hub' | 'local';
+export type ChatScopeUiKind = 'repo' | 'worktree' | 'hub' | 'local';
 
-export type PmaChatScopeTagView = {
-  kindKey: PmaChatScopeUiKind;
+export type ChatScopeTagView = {
+  kindKey: ChatScopeUiKind;
   kindLabel: string;
   detail: string;
   /** Full path / id for tooltip when `detail` is shortened (hub workspace basename). */
@@ -2728,13 +2728,13 @@ function workspacePathBasename(path: string): string {
 }
 
 /** Scope line split into a kind chip plus detail for chat list cards. */
-export function pmaChatScopeTagView(
-  chat: PmaChatSummary,
+export function chatScopeTagView(
+  chat: ChatSummary,
   opts?: {
     repoLabel?: (repoId: string) => string | null;
     worktreeLabel?: (worktreeId: string) => string | null;
   }
-): PmaChatScopeTagView {
+): ChatScopeTagView {
   const repoLabel = opts?.repoLabel;
   const worktreeLabel = opts?.worktreeLabel;
   if (chat.worktreeId) {
@@ -2765,8 +2765,8 @@ export function pmaChatScopeTagView(
 }
 
 /** One-line scope for the active chat header (hub workspace vs repo naming). */
-export function pmaChatHeaderScopeLine(
-  chat: PmaChatSummary | null,
+export function chatHeaderScopeLine(
+  chat: ChatSummary | null,
   repoLabel?: (repoId: string) => string | null
 ): string {
   if (!chat) return '';
@@ -2810,17 +2810,17 @@ export function buildManagedThreadMessagePayload(
 
 export function buildManagedThreadStartMessagePayload(
   managedThreadId: string,
-  scope: PmaChatScopeOption,
+  scope: ChatScopeOption,
   agent: string,
   profile: string,
   model: string,
   name: string,
-  chatKind: PmaChatKind,
+  chatKind: ChatKind,
   message: string,
   attachments: Array<PendingAttachment | DocumentFileIntentPayload> = [],
   reasoning = '',
   clientTurnId = '',
-  scopeSource: PmaChatScopeSource = 'default_hub'
+  scopeSource: ChatScopeSource = 'default_hub'
 ): ManagedThreadStartMessagePayload {
   return {
     ...buildManagedThreadCreatePayload(agent, scope, name, model, profile, chatKind, managedThreadId),

@@ -986,7 +986,7 @@ async def test_terminal_run_event_from_outcome_canonicalizes_surface_interrupts(
     for surface_error in (
         "Discord PMA turn interrupted",
         "Telegram PMA turn interrupted",
-        "PMA chat interrupted",
+        "chat interrupted",
     ):
         event = terminal_run_event_from_outcome(
             RuntimeThreadOutcome(

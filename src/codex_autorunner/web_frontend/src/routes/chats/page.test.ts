@@ -64,15 +64,15 @@ describe('/chats page', () => {
 
   it('delegates chat detail transcript and composer display derivation to the application read model', () => {
     const pageSource = chatDetailPageSource();
-    const architectureSource = readFileSync(
-      fileURLToPath(new URL('../../lib/application/pmaChatArchitecture.ts', import.meta.url)),
+    const readModelSource = readFileSync(
+      fileURLToPath(new URL('../../lib/application/chatDetailReadModel.ts', import.meta.url)),
       'utf8'
     );
 
     expect(pageSource).toContain('buildChatDetailDisplayReadModel');
-    expect(architectureSource).toContain('export function buildChatDetailDisplayReadModel');
-    expect(architectureSource).toContain('function shouldShowChatDetailStatusBar');
-    expect(architectureSource).toContain('function shouldQueueComposerDraft');
+    expect(readModelSource).toContain('export function buildChatDetailDisplayReadModel');
+    expect(readModelSource).toContain('function shouldShowChatDetailStatusBar');
+    expect(readModelSource).toContain('function shouldQueueComposerDraft');
     expect(pageSource).not.toContain('visibleChatDetailTranscriptCards(transcriptCards, queuedTurns)');
     expect(pageSource).not.toContain('compactChatTranscriptCards(activeCards)');
     expect(pageSource).not.toContain("streamState === 'connecting' || streamState === 'interrupted'");
@@ -129,12 +129,12 @@ describe('/chats page', () => {
       ['openChatTranscriptEventSource', 'stream wiring belongs in chatDetailLiveProjection'],
       ['shouldUseChatTranscriptStream', 'stream selection belongs in chatDetailLiveProjection'],
       ['mapChatTranscriptRows', 'transcript normalization belongs in chatDetailLiveProjection'],
-      ['mergePmaProgressUpdate', 'progress normalization belongs in chatDetailLiveProjection'],
+      ['mergeChatProgressUpdate', 'progress normalization belongs in chatDetailLiveProjection'],
       [
         'mergeTranscriptSnapshotWithPendingOptimistic',
         'snapshot repair belongs in chatDetailLiveProjection'
       ],
-      ['executePmaChatCommandPlan', 'send execution belongs in chatSendController'],
+      ['executeChatCommandPlan', 'send execution belongs in chatSendController'],
       ['buildOptimisticQueuedTurn', 'optimistic queue reconciliation belongs in chatSendController'],
       [
         'buildOptimisticUserTranscriptCard',
@@ -249,7 +249,7 @@ describe('/chats page', () => {
     expect(pageSource).toContain('loadChatDraftRecords');
     expect(pageSource).toContain('setChatDraftText(chatDraftRecords, chatId, value, chatSummaryForId(chatId))');
     expect(pageSource).toContain("statusFilter === 'drafts' ? filteredDraftChats");
-    expect(pageSource).toContain("filterPmaChats(source, 'drafts', search, lastSeenMap)");
+    expect(pageSource).toContain("filterChats(source, 'drafts', search, lastSeenMap)");
     expect(pageSource).toContain("facets?.category !== categoryFilter");
     expect(pageSource).toContain("filter === 'drafts' ? 'all' : filter");
     expect(pageSource).toContain("filterChatEntries(chatListEntries, statusFilter === 'drafts' ? 'all' : statusFilter");
@@ -337,7 +337,7 @@ describe('/chats page', () => {
     )?.[0];
 
     expect(subtitleBody).toBeTruthy();
-    expect(pageSource).toContain('pmaChatBadgeViews(activeChat, { showPmaAgent: false })');
+    expect(pageSource).toContain('chatBadgeViews(activeChat, { showManagerAgent: false })');
     expect(subtitleBody).toContain('{#each activeChatBadges as badge}');
   });
 

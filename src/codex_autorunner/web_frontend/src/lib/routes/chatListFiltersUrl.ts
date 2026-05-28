@@ -4,7 +4,7 @@ import type {
   ChatFacetTransport
 } from '$lib/api/readModelContracts';
 import { CHAT_DETAIL_TRANSIENT_QUERY_KEYS } from '$lib/application/chatDetailSession';
-import { CHAT_FILTER_ORDER, type ChatStatusFilter } from '$lib/viewModels/pmaChat';
+import { CHAT_FILTER_ORDER, type ChatStatusFilter } from '$lib/viewModels/chat';
 import { chatRoute } from '$lib/viewModels/routes';
 
 export type ChatListFilters = {

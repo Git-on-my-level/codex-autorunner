@@ -1,4 +1,4 @@
-"""Read-model snapshots for PMA chat index and detail (``GET /hub/read-models/chats``).
+"""Read-model snapshots for chat index and detail (``GET /hub/read-models/chats``).
 
 Emitted with ``dump_read_model_contract`` (camelCase) for ``mapReadModelContract`` consumers.
 Older ``GET /hub/chat/index`` hub-shaped snapshots remain for non-SPA tooling.

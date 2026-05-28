@@ -4,8 +4,8 @@ type JsonRecord = Record<string, unknown>;
 
 export type WorkStatus = 'running' | 'waiting' | 'idle' | 'done' | 'failed' | 'blocked' | 'invalid';
 
-/** Stable chat-list shape consumed by PMA room components. */
-export type PmaChatSummary = {
+/** Stable chat-list shape consumed by chat components. */
+export type ChatSummary = {
   id: string;
   title: string;
   lifecycleStatus: string | null;
@@ -39,11 +39,11 @@ export type PmaChatSummary = {
 };
 
 /** True when a projection field explicitly marks the managed thread as archived (case-insensitive). */
-export function pmaLifecycleTokenIsArchived(value: unknown): boolean {
+export function chatLifecycleTokenIsArchived(value: unknown): boolean {
   return String(value ?? '').trim().toLowerCase() === 'archived';
 }
 
-export function pmaLifecycleTokenIsActive(value: unknown): boolean {
+export function chatLifecycleTokenIsActive(value: unknown): boolean {
   return String(value ?? '').trim().toLowerCase() === 'active';
 }
 
@@ -51,20 +51,20 @@ export function pmaLifecycleTokenIsActive(value: unknown): boolean {
  * Archived chat detection from durable raw fields (index rows, surface snapshots, detail loads).
  * Intentionally ignores generic `status` strings so live execution status cannot mask archival.
  */
-export function pmaChatArchivedFromRawSignals(raw: JsonRecord | null | undefined): boolean {
+export function chatArchivedFromRawSignals(raw: JsonRecord | null | undefined): boolean {
   if (!raw || typeof raw !== 'object') return false;
   for (const key of ['archive_state', 'archiveState', 'lifecycle_status', 'lifecycleStatus'] as const) {
-    if (pmaLifecycleTokenIsArchived(raw[key])) return true;
-    if (pmaLifecycleTokenIsActive(raw[key])) return false;
+    if (chatLifecycleTokenIsArchived(raw[key])) return true;
+    if (chatLifecycleTokenIsActive(raw[key])) return false;
   }
   for (const key of ['lifecycle', 'runtime_status'] as const) {
-    if (pmaLifecycleTokenIsArchived(raw[key])) return true;
+    if (chatLifecycleTokenIsArchived(raw[key])) return true;
   }
   return false;
 }
 
-/** Normalized user/PMA message shape, including surfaced cards as child artifacts. */
-export type PmaChatMessage = {
+/** Normalized user/chat message shape, including surfaced cards as child artifacts. */
+export type ChatMessage = {
   id: string;
   chatId: string | null;
   role: 'user' | 'assistant' | 'system' | 'tool';
@@ -72,17 +72,17 @@ export type PmaChatMessage = {
   visibility?: string | null;
   visibleText?: string | null;
   modelContextText?: string | null;
-  modelContextRefs?: PmaMessageCapsuleRef[];
+  modelContextRefs?: MessageCapsuleRef[];
   rawModelPrompt?: string | null;
   userVisibleText?: string | null;
-  capsuleRefs?: PmaMessageCapsuleRef[];
+  capsuleRefs?: MessageCapsuleRef[];
   createdAt: string | null;
   status: WorkStatus | null;
   artifacts: SurfaceArtifact[];
   raw: JsonRecord;
 };
 
-export type PmaMessageCapsuleRef = {
+export type MessageCapsuleRef = {
   capsuleId: string;
   capsuleVersion: string;
   visibility: string;
@@ -93,7 +93,7 @@ export type PmaMessageCapsuleRef = {
   reason: string | null;
 };
 
-export type PmaTimelineItemKind =
+export type ChatTimelineItemKind =
   | 'user_message'
   | 'assistant_message'
   | 'intermediate'
@@ -104,10 +104,10 @@ export type PmaTimelineItemKind =
   | 'delivery_state'
   | 'lifecycle';
 
-/** Backend-owned PMA chat timeline item with stable reconciliation identity. */
-export type PmaTimelineItem = {
+/** Backend-owned chat timeline item with stable reconciliation identity. */
+export type ChatTimelineItem = {
   id: string;
-  kind: PmaTimelineItemKind;
+  kind: ChatTimelineItemKind;
   orderKey: string;
   timestamp: string | null;
   chatId: string | null;
@@ -127,7 +127,7 @@ export type PmaTimelineItem = {
   raw: JsonRecord;
 };
 
-export function pmaTimelineContractFields(
+export function chatTimelineContractFields(
   timelineItemId: string,
   options: {
     progressItemIds?: string[];
@@ -136,7 +136,7 @@ export function pmaTimelineContractFields(
     cursorEventId?: string | null;
     correlationId?: string | null;
   } = {}
-): Pick<PmaTimelineItem, 'identity' | 'provenance'> {
+): Pick<ChatTimelineItem, 'identity' | 'provenance'> {
   return {
     identity: {
       timelineItemId,
@@ -152,7 +152,7 @@ export function pmaTimelineContractFields(
 }
 
 /** Compact run/tail/status state for chat, dashboard, repo, and ticket surfaces. */
-export type PmaRunProgress = {
+export type ChatRunProgress = {
   id: string;
   chatId: string | null;
   status: WorkStatus;
@@ -304,7 +304,7 @@ export type TicketSummary = {
 /** Ticket detail shape with associated progress and artifacts. */
 export type TicketDetail = TicketSummary & {
   body: string;
-  progress: PmaRunProgress | null;
+  progress: ChatRunProgress | null;
   artifacts: SurfaceArtifact[];
 };
 
@@ -319,7 +319,7 @@ export type ContextspaceDocument = {
   raw: JsonRecord;
 };
 
-export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
+export function mapChatSummary(raw: JsonRecord): ChatSummary {
   const latest = asRecord(raw.latest_execution ?? raw.latest_turn ?? raw.turn);
   const status = normalizeWorkStatus(
     raw.effective_status ??
@@ -342,21 +342,21 @@ export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
   const archiveState = nullableString(raw.archive_state ?? raw.archiveState);
   const lifecycleField = nullableString(raw.lifecycle_status ?? raw.lifecycleStatus);
   const lifecycleRoot = nullableString(raw.lifecycle);
-  let lifecycleStatus: string | null = pmaLifecycleTokenIsArchived(archiveState)
+  let lifecycleStatus: string | null = chatLifecycleTokenIsArchived(archiveState)
     ? 'archived'
-    : pmaLifecycleTokenIsActive(archiveState)
+    : chatLifecycleTokenIsActive(archiveState)
       ? 'active'
-      : pmaLifecycleTokenIsArchived(lifecycleField)
+      : chatLifecycleTokenIsArchived(lifecycleField)
         ? 'archived'
-        : pmaLifecycleTokenIsActive(lifecycleField)
+        : chatLifecycleTokenIsActive(lifecycleField)
           ? 'active'
-          : pmaLifecycleTokenIsArchived(lifecycleRoot)
+          : chatLifecycleTokenIsArchived(lifecycleRoot)
             ? 'archived'
             : lifecycleField;
   if (
     lifecycleStatus !== 'archived' &&
     lifecycleStatus !== 'active' &&
-    pmaLifecycleTokenIsArchived(raw.runtime_status ?? raw.execution_status ?? raw.normalized_status)
+    chatLifecycleTokenIsArchived(raw.runtime_status ?? raw.execution_status ?? raw.normalized_status)
   ) {
     lifecycleStatus = 'archived';
   }
@@ -400,7 +400,7 @@ export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
   };
 }
 
-export function mapPmaChatMessage(raw: JsonRecord): PmaChatMessage {
+export function mapChatMessage(raw: JsonRecord): ChatMessage {
   const id = stringValue(raw.managed_turn_id ?? raw.turn_id ?? raw.message_id ?? raw.id, 'unknown-message');
   const role = normalizeRole(raw.role ?? raw.author ?? raw.request_kind);
   const text = normalizeMessageText(raw, role);
@@ -413,13 +413,13 @@ export function mapPmaChatMessage(raw: JsonRecord): PmaChatMessage {
     visibleText: nullableString(raw.visible_text ?? raw.visibleText),
     modelContextText: nullableString(raw.model_context_text ?? raw.modelContextText),
     modelContextRefs: asArray(raw.model_context_refs ?? raw.modelContextRefs)
-      .map((item) => mapPmaMessageCapsuleRef(asRecord(item)))
-      .filter((item): item is PmaMessageCapsuleRef => item !== null),
+      .map((item) => mapMessageCapsuleRef(asRecord(item)))
+      .filter((item): item is MessageCapsuleRef => item !== null),
     rawModelPrompt: nullableString(raw.raw_model_prompt ?? raw.rawModelPrompt),
     userVisibleText: nullableString(raw.user_visible_text ?? raw.userVisibleText),
     capsuleRefs: asArray(raw.capsule_refs ?? raw.capsuleRefs)
-      .map((item) => mapPmaMessageCapsuleRef(asRecord(item)))
-      .filter((item): item is PmaMessageCapsuleRef => item !== null),
+      .map((item) => mapMessageCapsuleRef(asRecord(item)))
+      .filter((item): item is MessageCapsuleRef => item !== null),
     createdAt: dateString(raw.created_at ?? raw.started_at ?? raw.timestamp),
     status: normalizeOptionalWorkStatus(raw.status),
     artifacts: asArray(raw.artifacts ?? raw.attachments).map(mapSurfaceArtifact),
@@ -427,7 +427,7 @@ export function mapPmaChatMessage(raw: JsonRecord): PmaChatMessage {
   };
 }
 
-export function mapPmaMessageCapsuleRef(raw: JsonRecord): PmaMessageCapsuleRef | null {
+export function mapMessageCapsuleRef(raw: JsonRecord): MessageCapsuleRef | null {
   const capsuleId = nullableString(raw.capsule_id ?? raw.capsuleId);
   const capsuleVersion = nullableString(raw.capsule_version ?? raw.capsuleVersion ?? raw.version);
   const visibility = nullableString(raw.visibility);
@@ -446,7 +446,7 @@ export function mapPmaMessageCapsuleRef(raw: JsonRecord): PmaMessageCapsuleRef |
   };
 }
 
-export function mapPmaTimelineItem(raw: JsonRecord): PmaTimelineItem {
+export function mapChatTimelineItem(raw: JsonRecord): ChatTimelineItem {
   const payload = asRecord(raw.payload);
   const identity = asRecord(raw.identity);
   const provenance = asRecord(raw.provenance);
@@ -465,7 +465,7 @@ export function mapPmaTimelineItem(raw: JsonRecord): PmaTimelineItem {
     chatId: nullableString(raw.managed_thread_id ?? raw.thread_id ?? raw.chat_id),
     turnId: nullableString(raw.managed_turn_id ?? raw.turn_id),
     status: normalizeOptionalWorkStatus(raw.status),
-    ...pmaTimelineContractFields(timelineItemId, {
+    ...chatTimelineContractFields(timelineItemId, {
       progressItemIds: asUnknownArray(identity.progress_item_ids).map((value) => String(value)),
       sourceEventIds: asUnknownArray(provenance.source_event_ids),
       progressEventIds: asUnknownArray(provenance.progress_event_ids),
@@ -477,7 +477,7 @@ export function mapPmaTimelineItem(raw: JsonRecord): PmaTimelineItem {
   };
 }
 
-export function mapPmaRunProgress(raw: JsonRecord): PmaRunProgress {
+export function mapChatRunProgress(raw: JsonRecord): ChatRunProgress {
   const snapshot = asRecord(raw.snapshot ?? raw.progress);
   const source = Object.keys(snapshot).length ? { ...raw, ...snapshot } : raw;
   const id = stringValue(source.managed_turn_id ?? source.run_id ?? source.id, 'unknown-run');
@@ -733,7 +733,7 @@ export function mapTicketDetail(raw: JsonRecord): TicketDetail {
   return {
     ...summary,
     body: stringValue(raw.body ?? raw.content ?? raw.markdown, ''),
-    progress: raw.run || raw.status ? mapPmaRunProgress(asRecord(raw.run ?? raw.status ?? raw)) : null,
+    progress: raw.run || raw.status ? mapChatRunProgress(asRecord(raw.run ?? raw.status ?? raw)) : null,
     artifacts: history.flatMap((entry) => asArray(entry.attachments)).map(mapSurfaceArtifact)
   };
 }
@@ -797,7 +797,7 @@ export function normalizeOptionalWorkStatus(value: unknown): WorkStatus | null {
   return normalizeWorkStatus(value);
 }
 
-function normalizeRole(value: unknown): PmaChatMessage['role'] {
+function normalizeRole(value: unknown): ChatMessage['role'] {
   const text = String(value ?? '').trim().toLowerCase();
   if (text === 'user') return 'user';
   if (['assistant', 'pma', 'agent'].includes(text)) return 'assistant';
@@ -805,7 +805,7 @@ function normalizeRole(value: unknown): PmaChatMessage['role'] {
   return 'system';
 }
 
-function normalizeTimelineKind(value: unknown): PmaTimelineItemKind {
+function normalizeTimelineKind(value: unknown): ChatTimelineItemKind {
   const text = String(value ?? '').trim().toLowerCase();
   if (text === 'user_message') return 'user_message';
   if (text === 'assistant_message') return 'assistant_message';
@@ -819,7 +819,7 @@ function normalizeTimelineKind(value: unknown): PmaTimelineItemKind {
   return 'intermediate';
 }
 
-function normalizeMessageText(raw: JsonRecord, role: PmaChatMessage['role']): string {
+function normalizeMessageText(raw: JsonRecord, role: ChatMessage['role']): string {
   if (role === 'user') {
     const text = firstText(
       raw.user_visible_text,

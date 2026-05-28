@@ -253,7 +253,7 @@ class ChatSurfaceReadService:
     def pma_compat_snapshot(
         self, *, limit: int = DEFAULT_CHAT_SURFACE_SNAPSHOT_LIMIT
     ) -> dict[str, Any]:
-        """Return the legacy PMA chat snapshot shape from the generic projection.
+        """Return the legacy managed thread snapshot shape from the generic projection.
 
         PMA compatibility keeps legacy field names: ``updated_at`` means the
         PMA thread/runtime lifecycle changed, while chat-index recency is exposed

@@ -1,53 +1,53 @@
 import { describe, expect, it } from 'vitest';
 import type { TicketRunGroup } from '$lib/api/readModelContracts';
-import type { PmaChatSummary, PmaRunProgress, PmaTimelineItem, SurfaceArtifact } from './domain';
-import { pmaTimelineContractFields } from './domain';
+import type { ChatSummary, ChatRunProgress, ChatTimelineItem, SurfaceArtifact } from './domain';
+import { chatTimelineContractFields } from './domain';
 import {
   artifactCardView,
   adjustedUnreadFilterCount,
   buildManagedThreadCreatePayload,
   buildManagedThreadMessagePayload,
   agentCapabilityAllowed,
-  buildPmaChatScopeOptions,
-  groupPmaChatScopeOptions,
-  filterPmaChatScopeGroups,
-  flattenPmaChatScopeGroupView,
+  buildChatScopeOptions,
+  groupChatScopeOptions,
+  filterChatScopeGroups,
+  flattenChatScopeGroupView,
   buildChatTranscriptCards,
   buildChatActivityCards,
-  buildPmaLiveActivity,
-  buildPmaStatusBar,
+  buildChatLiveActivity,
+  buildChatStatusBar,
   chooseActiveChatId,
   compactChatTranscriptCards,
   composeMessageWithAttachments,
   countTicketRunGroups,
   countSemanticTicketRunGroups,
-  filterPmaChats,
+  filterChats,
   filterChatEntries,
   filterArtifactsForActiveChat,
   formatRelativeTime,
   formatCompactMessageDateTime,
   isLocalChatPlaceholder,
-  isPmaChatArchived,
+  isChatArchived,
   isPrimaryProgressArtifact,
   mergeChatFacetSourceChats,
   mergeChatActivityEvents,
   mapChatTranscriptSnapshot,
-  mapChatSurfaceSnapshotToPmaChats,
-  mapChatSurfaceEventToPmaChatSummary,
+  mapChatSurfaceSnapshotToChats,
+  mapChatSurfaceEventToChatSummary,
   modelReasoningOptions,
   modelSelectorState,
-  pmaChatTransportBadges,
-  pmaChatBadgeViews,
-  showPmaAgentBadge,
-  pmaChatKind,
-  pmaChatKindLabel,
-  pmaChatHeaderScopeLine,
-  pmaChatIsAutomation,
+  chatTransportBadges,
+  chatBadgeViews,
+  showManagerAgentBadge,
+  chatKind,
+  chatKindLabel,
+  chatHeaderScopeLine,
+  chatIsAutomation,
   chatCategoryLabel,
   chatRunGroupSummaryParts,
   chatMessengerSurface,
-  pmaChatScopeLabelFromChat,
-  pmaChatScopeTagView,
+  chatScopeLabelFromChat,
+  chatScopeTagView,
   chatSurfaceFilterOptions,
   chatSurfaceFilterToken,
   mergeLocalChatPlaceholders,
@@ -61,10 +61,10 @@ import {
   summarizeVisibleLocalPlaceholderStatusCounts,
   buildChatListEntries,
   buildSemanticChatListEntries
-} from './pmaChat';
-import { resolvePmaChatSelectorsForActiveChat } from './modelPickers';
+} from './chat';
+import { resolveChatSelectorsForActiveChat } from './modelPickers';
 
-const baseChat: PmaChatSummary = {
+const baseChat: ChatSummary = {
   id: 'chat-1',
   title: 'Repo repair',
   lifecycleStatus: 'active',
@@ -103,10 +103,10 @@ const baseArtifact: SurfaceArtifact = {
 
 function timelineItem(
   id: string,
-  kind: PmaTimelineItem['kind'],
+  kind: ChatTimelineItem['kind'],
   payload: Record<string, unknown>,
   order = id
-): PmaTimelineItem {
+): ChatTimelineItem {
   return {
     id,
     kind,
@@ -116,12 +116,12 @@ function timelineItem(
     turnId: id.split(':')[1] ?? null,
     status: 'running',
     payload,
-    ...pmaTimelineContractFields(id),
+    ...chatTimelineContractFields(id),
     raw: { item_id: id, kind, payload }
   };
 }
 
-const baseProgress: PmaRunProgress = {
+const baseProgress: ChatRunProgress = {
   id: 'run-1',
   chatId: 'chat-1',
   status: 'running',
@@ -164,9 +164,9 @@ function baseArtifactCardTrace(id: string, text: string, eventIds: string[]) {
   };
 }
 
-describe('PMA chat view helpers', () => {
+describe('chat view helpers', () => {
   it('collapses ticket-flow chats sharing a worktree into one run group, even without ticket ids', () => {
-    const chats: PmaChatSummary[] = [
+    const chats: ChatSummary[] = [
       { ...baseChat, id: 'tf-1', ticketId: null, isTicketFlow: true, worktreeId: 'wt-A', repoId: 'repo-1' },
       { ...baseChat, id: 'tf-2', ticketId: null, isTicketFlow: true, worktreeId: 'wt-A', repoId: 'repo-1' },
       { ...baseChat, id: 'tf-3', ticketId: null, isTicketFlow: true, worktreeId: 'wt-A', repoId: 'repo-1' }
@@ -180,7 +180,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('counts archived ticket-flow chats with done ticket files as run progress done', () => {
-    const chats: PmaChatSummary[] = [
+    const chats: ChatSummary[] = [
       { ...baseChat, id: 'tf-1', status: 'done', ticketId: 'TICKET-001', ticketDone: true },
       { ...baseChat, id: 'tf-2', status: 'idle', ticketId: 'TICKET-002', ticketDone: true },
       { ...baseChat, id: 'tf-3', status: 'running', ticketId: 'TICKET-003', ticketDone: false }
@@ -210,7 +210,7 @@ describe('PMA chat view helpers', () => {
     const runOther = { ...baseChat, id: 'r-c', isTicketFlow: true, worktreeId: 'wt-2', repoId: 'repo-1' };
     const chats = [standalone, runA, runB, runOther];
     expect(countTicketRunGroups(chats)).toBe(2);
-    expect(filterPmaChats(chats, 'ticket_runs', '', {}).map((c) => c.id).sort()).toEqual(['r-a', 'r-b', 'r-c']);
+    expect(filterChats(chats, 'ticket_runs', '', {}).map((c) => c.id).sort()).toEqual(['r-a', 'r-b', 'r-c']);
     const entries = buildChatListEntries(chats, { groupRuns: true });
     const filtered = filterChatEntries(entries, 'ticket_runs', '', {});
     expect(filtered).toHaveLength(2);
@@ -236,7 +236,7 @@ describe('PMA chat view helpers', () => {
         updatedAt: '2026-05-04T05:00:00Z'
       }
     ];
-    const chats: PmaChatSummary[] = [
+    const chats: ChatSummary[] = [
       { ...baseChat, id: 'done-1', status: 'idle', runId: 'run-1', ticketId: 'TICKET-001', ticketDone: null, raw: { group_id: 'run:run-1' } },
       { ...baseChat, id: 'done-2', status: 'idle', runId: 'run-1', ticketId: 'TICKET-002', ticketDone: null, raw: { group_id: 'run:run-1' } },
       { ...baseChat, id: 'done-3', status: 'idle', runId: 'run-1', ticketId: 'TICKET-003', ticketDone: null, raw: { group_id: 'run:run-1' } },
@@ -266,7 +266,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('does not use legacy grouping when current semantic snapshots omit backend groups', () => {
-    const chats: PmaChatSummary[] = [
+    const chats: ChatSummary[] = [
       { ...baseChat, id: 'ticket-done', status: 'done', ticketId: 'TICKET-001', ticketDone: true, ticketStatus: 'done' },
       { ...baseChat, id: 'ticket-running', status: 'running', ticketId: 'TICKET-002', ticketDone: false, ticketStatus: 'running' }
     ];
@@ -279,7 +279,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('does not run legacy grouping when semantic snapshots omit backend groups', () => {
-    const chats: PmaChatSummary[] = [
+    const chats: ChatSummary[] = [
       { ...baseChat, id: 'ticket-done', status: 'idle', ticketId: 'TICKET-001', ticketDone: true, ticketStatus: 'done' },
       { ...baseChat, id: 'generic-done', status: 'done', ticketId: 'TICKET-002', ticketDone: null, ticketStatus: null }
     ];
@@ -309,7 +309,7 @@ describe('PMA chat view helpers', () => {
         updatedAt: '2026-05-04T05:00:00Z'
       }
     ];
-    const chats: PmaChatSummary[] = [
+    const chats: ChatSummary[] = [
       { ...baseChat, id: 'missing-backend-group-id', status: 'idle', runId: 'run-1', ticketId: 'TICKET-001', ticketDone: true, ticketStatus: 'done', raw: {} }
     ];
 
@@ -323,7 +323,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('keeps separate ticket-flow runs under the same scope when run ids differ', () => {
-    const chats: PmaChatSummary[] = [
+    const chats: ChatSummary[] = [
       { ...baseChat, id: 'run-a-ticket-1', runId: 'run-a', isTicketFlow: true, worktreeId: 'wt-1', repoId: 'repo-1' },
       { ...baseChat, id: 'run-a-ticket-2', runId: 'run-a', isTicketFlow: true, worktreeId: 'wt-1', repoId: 'repo-1' },
       { ...baseChat, id: 'run-b-ticket-1', runId: 'run-b', isTicketFlow: true, worktreeId: 'wt-1', repoId: 'repo-1' }
@@ -339,7 +339,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('keeps separate ticket-flow runs under the same worktree in separate groups when run ids are present', () => {
-    const chats: PmaChatSummary[] = [
+    const chats: ChatSummary[] = [
       { ...baseChat, id: 'run-1-a', runId: 'run-1', ticketId: 'TICKET-001', worktreeId: 'wt-1' },
       { ...baseChat, id: 'run-1-b', runId: 'run-1', ticketId: 'TICKET-002', worktreeId: 'wt-1' },
       { ...baseChat, id: 'run-2-a', runId: 'run-2', ticketId: 'TICKET-003', worktreeId: 'wt-1' }
@@ -398,16 +398,16 @@ describe('PMA chat view helpers', () => {
   });
 
   it('filters chat list by status and scoped search text', () => {
-    const chats: PmaChatSummary[] = [
+    const chats: ChatSummary[] = [
       baseChat,
       { ...baseChat, id: 'chat-2', title: 'Waiting approval', status: 'waiting', repoId: 'billing' },
       { ...baseChat, id: 'chat-3', title: 'Finished work', status: 'done', ticketId: 'TICKET-099' }
     ];
 
-    expect(filterPmaChats(chats, 'active', '')).toHaveLength(1);
-    expect(filterPmaChats(chats, 'waiting', 'billing')).toMatchObject([{ id: 'chat-2' }]);
+    expect(filterChats(chats, 'active', '')).toHaveLength(1);
+    expect(filterChats(chats, 'waiting', 'billing')).toMatchObject([{ id: 'chat-2' }]);
     const lastSeen = { 'chat-1': '2026-05-04T00:00:00Z' };
-    expect(filterPmaChats(chats, 'unread', '', lastSeen).map((c) => c.id).sort()).toEqual([
+    expect(filterChats(chats, 'unread', '', lastSeen).map((c) => c.id).sort()).toEqual([
       'chat-2',
       'chat-3'
     ]);
@@ -415,7 +415,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('filters automation-owned chats by typed backend facets', () => {
-    const automationChat: PmaChatSummary = {
+    const automationChat: ChatSummary = {
       ...baseChat,
       id: 'automation-chat',
       raw: {
@@ -432,12 +432,12 @@ describe('PMA chat view helpers', () => {
     };
     const chats = [baseChat, automationChat];
 
-    expect(pmaChatIsAutomation(automationChat)).toBe(true);
-    expect(filterPmaChats(chats, 'automation', '').map((chat) => chat.id)).toEqual(['automation-chat']);
+    expect(chatIsAutomation(automationChat)).toBe(true);
+    expect(filterChats(chats, 'automation', '').map((chat) => chat.id)).toEqual(['automation-chat']);
   });
 
   it('does not classify raw automation diagnostics as automation without typed facets', () => {
-    const diagnosticOnlyChat: PmaChatSummary = {
+    const diagnosticOnlyChat: ChatSummary = {
       ...baseChat,
       id: 'diagnostic-only-chat',
       raw: {
@@ -447,25 +447,25 @@ describe('PMA chat view helpers', () => {
       }
     };
 
-    expect(pmaChatIsAutomation(diagnosticOnlyChat)).toBe(false);
-    expect(filterPmaChats([diagnosticOnlyChat], 'automation', '')).toEqual([]);
+    expect(chatIsAutomation(diagnosticOnlyChat)).toBe(false);
+    expect(filterChats([diagnosticOnlyChat], 'automation', '')).toEqual([]);
   });
 
   it('keeps archived chats out of the working filters and exposes them through archived', () => {
-    const chats: PmaChatSummary[] = [
+    const chats: ChatSummary[] = [
       baseChat,
       { ...baseChat, id: 'chat-2', title: 'Old support thread', lifecycleStatus: 'archived', status: 'done' },
       { ...baseChat, id: 'chat-3', title: 'Waiting approval', status: 'waiting' }
     ];
 
-    expect(filterPmaChats(chats, 'all', '').map((chat) => chat.id)).toEqual(['chat-1', 'chat-3']);
-    expect(filterPmaChats(chats, 'archived', 'support').map((chat) => chat.id)).toEqual(['chat-2']);
-    expect(filterPmaChats(chats, 'unread', '').map((chat) => chat.id).sort()).toEqual(['chat-1', 'chat-3']);
+    expect(filterChats(chats, 'all', '').map((chat) => chat.id)).toEqual(['chat-1', 'chat-3']);
+    expect(filterChats(chats, 'archived', 'support').map((chat) => chat.id)).toEqual(['chat-2']);
+    expect(filterChats(chats, 'unread', '').map((chat) => chat.id).sort()).toEqual(['chat-1', 'chat-3']);
     expect(summarizeFilterCounts(chats)).toEqual({ all: 2, active: 1, waiting: 1, unread: 2, drafts: 0, archived: 1 });
   });
 
   it('keeps unread membership aligned with backend unread rows while allowing local read markers to suppress known rows', () => {
-    const chats: PmaChatSummary[] = [
+    const chats: ChatSummary[] = [
       { ...baseChat, id: 'server-unread-read-locally', unreadCount: 2, updatedAt: '2026-05-04T01:00:00Z' },
       { ...baseChat, id: 'server-unread-visible', unreadCount: 1, updatedAt: '2026-05-04T02:00:00Z' },
       { ...baseChat, id: 'locally-unread-only', unreadCount: 0, updatedAt: '2026-05-04T03:00:00Z' }
@@ -474,7 +474,7 @@ describe('PMA chat view helpers', () => {
       'server-unread-read-locally': '2026-05-04T01:00:00Z'
     };
 
-    expect(filterPmaChats(chats, 'unread', '', lastSeen).map((chat) => chat.id)).toEqual([
+    expect(filterChats(chats, 'unread', '', lastSeen).map((chat) => chat.id)).toEqual([
       'server-unread-visible'
     ]);
     expect(summarizeFilterCounts(chats, lastSeen).unread).toBe(1);
@@ -551,7 +551,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('trusts active lifecycle status over stale raw archive fields for list membership', () => {
-    const rebound: PmaChatSummary = {
+    const rebound: ChatSummary = {
       ...baseChat,
       id: 'discord-rebound-active',
       lifecycleStatus: 'active',
@@ -567,10 +567,10 @@ describe('PMA chat view helpers', () => {
       }
     };
 
-    expect(isPmaChatArchived(rebound)).toBe(false);
-    expect(filterPmaChats([rebound], 'all', '')).toEqual([rebound]);
-    expect(filterPmaChats([rebound], chatSurfaceFilterToken('discord'), '')).toEqual([rebound]);
-    expect(filterPmaChats([rebound], 'archived', '')).toEqual([]);
+    expect(isChatArchived(rebound)).toBe(false);
+    expect(filterChats([rebound], 'all', '')).toEqual([rebound]);
+    expect(filterChats([rebound], chatSurfaceFilterToken('discord'), '')).toEqual([rebound]);
+    expect(filterChats([rebound], 'archived', '')).toEqual([]);
   });
 
   it('drops archived ticket-flow chats from grouped run rows when not on the archived filter', () => {
@@ -581,7 +581,7 @@ describe('PMA chat view helpers', () => {
       worktreeId: 'wt-collab',
       repoId: 'repo-1'
     };
-    const archivedViaRaw: PmaChatSummary = {
+    const archivedViaRaw: ChatSummary = {
       ...baseChat,
       id: 'tf-archived',
       isTicketFlow: true,
@@ -591,7 +591,7 @@ describe('PMA chat view helpers', () => {
       status: 'done',
       raw: { ...baseChat.raw, lifecycle: 'archived' }
     };
-    const chats: PmaChatSummary[] = [active, archivedViaRaw];
+    const chats: ChatSummary[] = [active, archivedViaRaw];
     const entries = buildChatListEntries(chats, { groupRuns: true });
     expect(entries).toHaveLength(1);
     const filtered = filterChatEntries(entries, 'all', '', {});
@@ -628,7 +628,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('maps generic chat surface snapshots into chat-list rows', () => {
-    const chats = mapChatSurfaceSnapshotToPmaChats({
+    const chats = mapChatSurfaceSnapshotToChats({
       surfaces: [
         {
           surface_kind: 'discord',
@@ -664,7 +664,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('does not map unbound or stale surface inventory into selectable chats', () => {
-    const chats = mapChatSurfaceSnapshotToPmaChats({
+    const chats = mapChatSurfaceSnapshotToChats({
       surfaces: [
         {
           surface_kind: 'notification',
@@ -706,7 +706,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('prefers projection lifecycle over stale latest execution when thread is archived', () => {
-    const chats = mapChatSurfaceSnapshotToPmaChats({
+    const chats = mapChatSurfaceSnapshotToChats({
       surfaces: [
         {
           surface_kind: 'pma',
@@ -737,7 +737,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('prefers queued projection lifecycle over terminal runtime for sidebar status', () => {
-    const chats = mapChatSurfaceSnapshotToPmaChats({
+    const chats = mapChatSurfaceSnapshotToChats({
       surfaces: [
         {
           surface_kind: 'pma',
@@ -769,7 +769,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('maps chat surface unread activity from visible event metadata before row updates', () => {
-    const chats = mapChatSurfaceSnapshotToPmaChats({
+    const chats = mapChatSurfaceSnapshotToChats({
       surfaces: [
         {
           surface_kind: 'discord',
@@ -790,7 +790,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('reconciles generic chat snapshots with active-thread replacement by surface binding', () => {
-    const current: PmaChatSummary[] = [
+    const current: ChatSummary[] = [
       { ...baseChat, id: 'old-thread', lifecycleStatus: 'active', raw: { binding_kind: 'discord', binding_id: 'channel-1' } }
     ];
     const next = [
@@ -805,7 +805,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('applies generic chat events through the same chat-list reconciliation path', () => {
-    const current: PmaChatSummary[] = [
+    const current: ChatSummary[] = [
       {
         ...baseChat,
         id: 'thread-1',
@@ -835,7 +835,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('maps chat surface events as managed-thread projections', () => {
-    const chat = mapChatSurfaceEventToPmaChatSummary({
+    const chat = mapChatSurfaceEventToChatSummary({
       event_type: 'queue.state_changed',
       surface: { surface_kind: 'discord', surface_key: 'channel-1' },
       managed_thread_id: 'thread-1',
@@ -859,7 +859,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('accepts human channel titles that contain colons during event reconciliation', () => {
-    const current: PmaChatSummary[] = [
+    const current: ChatSummary[] = [
       {
         ...baseChat,
         id: 'thread-1',
@@ -883,7 +883,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('does not replace a chat title with a protocol id fallback from events', () => {
-    const current: PmaChatSummary[] = [
+    const current: ChatSummary[] = [
       {
         ...baseChat,
         id: 'thread-1',
@@ -907,7 +907,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('maps chat surface event thread details into metadata.agent_id', () => {
-    const chat = mapChatSurfaceEventToPmaChatSummary({
+    const chat = mapChatSurfaceEventToChatSummary({
       event_type: 'lifecycle.status_changed',
       surface: { surface_kind: 'pma', surface_key: 'thread-99' },
       managed_thread_id: 'thread-99',
@@ -931,7 +931,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('does not clear chat agent identity when reconciling status-only surface events', () => {
-    const current: PmaChatSummary[] = [
+    const current: ChatSummary[] = [
       {
         ...baseChat,
         id: 'thread-1',
@@ -955,8 +955,8 @@ describe('PMA chat view helpers', () => {
     expect(next[0]?.agentProfile).toBe('pma');
   });
 
-  it('resolvePmaChatSelectorsForActiveChat restores defaults when chat has no agent', () => {
-    const withAgent = resolvePmaChatSelectorsForActiveChat(
+  it('resolveChatSelectorsForActiveChat restores defaults when chat has no agent', () => {
+    const withAgent = resolveChatSelectorsForActiveChat(
       { ...baseChat, id: 'a', agentId: 'opencode', agentProfile: 'x', model: 'm-1', raw: {} },
       [{ id: 'codex' }, { id: 'opencode' }],
       'codex',
@@ -970,7 +970,7 @@ describe('PMA chat view helpers', () => {
       model: 'm-1'
     });
 
-    const noAgent = resolvePmaChatSelectorsForActiveChat(
+    const noAgent = resolveChatSelectorsForActiveChat(
       { ...baseChat, id: 'b', agentId: null, agentProfile: null, model: null, raw: {} },
       [{ id: 'codex' }, { id: 'opencode' }],
       'codex',
@@ -983,7 +983,7 @@ describe('PMA chat view helpers', () => {
       reasoning: ''
     });
 
-    const hermesDefault = resolvePmaChatSelectorsForActiveChat(
+    const hermesDefault = resolveChatSelectorsForActiveChat(
       { ...baseChat, id: 'c', agentId: null, agentProfile: null, model: null, raw: {} },
       [{ id: 'hermes' }],
       'hermes',
@@ -997,14 +997,14 @@ describe('PMA chat view helpers', () => {
     });
   });
 
-  it('resolvePmaChatSelectorsForActiveChat keeps a Hermes chat on Hermes even when the hub default is codex', () => {
+  it('resolveChatSelectorsForActiveChat keeps a Hermes chat on Hermes even when the hub default is codex', () => {
     // Regression: a Hermes chat opened by URL before its summary loaded would
     // resolve to the hub default agent (codex), load Codex models, and send
     // `model=gpt-5.4-mini` on every turn. The Hermes backend produces no
     // assistant output for a foreign model, so the agent silently stopped
     // responding. Once the summary is available the resolver must bind to the
     // chat's own agent, never the default.
-    const resolved = resolvePmaChatSelectorsForActiveChat(
+    const resolved = resolveChatSelectorsForActiveChat(
       { ...baseChat, id: 'hermes-chat', agentId: 'hermes', agentProfile: null, model: 'gpt-5.4-mini', raw: {} },
       [{ id: 'codex' }, { id: 'hermes' }],
       'codex',
@@ -1023,7 +1023,7 @@ describe('PMA chat view helpers', () => {
     };
     const hubChat = { ...baseChat, id: 'h1', title: 'Chat · repo', raw: {} };
     const list = [discordChat, hubChat];
-    expect(filterPmaChats(list, chatSurfaceFilterToken('discord'), '')).toEqual([discordChat]);
+    expect(filterChats(list, chatSurfaceFilterToken('discord'), '')).toEqual([discordChat]);
     expect(chatSurfaceFilterOptions(list)).toEqual([{ slug: 'discord', label: 'Discord', count: 1 }]);
   });
 
@@ -1078,13 +1078,13 @@ describe('PMA chat view helpers', () => {
       }
     };
 
-    expect(pmaChatTransportBadges(pmaAgentChat)).toEqual([]);
-    expect(pmaChatTransportBadges(codingAgentChat)).toEqual([]);
-    expect(showPmaAgentBadge(pmaAgentChat)).toBe(true);
-    expect(showPmaAgentBadge(codingAgentChat)).toBe(false);
-    expect(pmaChatBadgeViews(pmaAgentChat).map((badge) => badge.label)).toEqual(['PMA']);
-    expect(pmaChatBadgeViews(pmaAgentChat, { showPmaAgent: false })).toEqual([]);
-    expect(pmaChatBadgeViews(codingAgentChat).map((badge) => badge.label)).toEqual(['Coding agent']);
+    expect(chatTransportBadges(pmaAgentChat)).toEqual([]);
+    expect(chatTransportBadges(codingAgentChat)).toEqual([]);
+    expect(showManagerAgentBadge(pmaAgentChat)).toBe(true);
+    expect(showManagerAgentBadge(codingAgentChat)).toBe(false);
+    expect(chatBadgeViews(pmaAgentChat).map((badge) => badge.label)).toEqual(['PMA']);
+    expect(chatBadgeViews(pmaAgentChat, { showManagerAgent: false })).toEqual([]);
+    expect(chatBadgeViews(codingAgentChat).map((badge) => badge.label)).toEqual(['Coding agent']);
   });
 
   it('labels regular chat facets as user-facing chats', () => {
@@ -1107,8 +1107,8 @@ describe('PMA chat view helpers', () => {
       }
     };
 
-    expect(pmaChatTransportBadges(chat).map((badge) => badge.slug)).toEqual(['discord', 'notification']);
-    expect(pmaChatBadgeViews(chat, { agentLabel: 'Codex' }).map((badge) => badge.label)).toEqual([
+    expect(chatTransportBadges(chat).map((badge) => badge.slug)).toEqual(['discord', 'notification']);
+    expect(chatBadgeViews(chat, { agentLabel: 'Codex' }).map((badge) => badge.label)).toEqual([
       'Discord',
       'Notifications',
       'Codex'
@@ -1130,11 +1130,11 @@ describe('PMA chat view helpers', () => {
       badgeClass: 'surface-notification'
     });
     expect(chatSurfaceFilterOptions(list)).toEqual([{ slug: 'notification', label: 'Notifications', count: 1 }]);
-    expect(filterPmaChats(list, chatSurfaceFilterToken('notification'), '')).toEqual([notificationChat]);
+    expect(filterChats(list, chatSurfaceFilterToken('notification'), '')).toEqual([notificationChat]);
   });
 
   it('sorts waiting chats ahead of others then by recent updates', () => {
-    const chats: PmaChatSummary[] = [
+    const chats: ChatSummary[] = [
       { ...baseChat, id: 'a', status: 'running', updatedAt: '2026-05-04T03:00:00Z' },
       { ...baseChat, id: 'b', status: 'waiting', updatedAt: '2026-05-04T01:00:00Z' },
       { ...baseChat, id: 'c', status: 'waiting', updatedAt: '2026-05-04T02:00:00Z' }
@@ -1143,7 +1143,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('sorts chats unread first, then by recent updates', () => {
-    const chats: PmaChatSummary[] = [
+    const chats: ChatSummary[] = [
       { ...baseChat, id: 'read-new', status: 'running', updatedAt: '2026-05-04T04:00:00Z' },
       { ...baseChat, id: 'unread-old', status: 'idle', updatedAt: '2026-05-04T01:00:00Z' },
       { ...baseChat, id: 'unread-new', status: 'idle', updatedAt: '2026-05-04T03:00:00Z' },
@@ -1169,7 +1169,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('keeps local draft placeholders ahead of unread and recent persisted chats', () => {
-    const chats: PmaChatSummary[] = [
+    const chats: ChatSummary[] = [
       { ...baseChat, id: 'unread-new', status: 'idle', ticketId: null, isTicketFlow: false, updatedAt: '2026-05-04T03:00:00Z', raw: {} },
       { ...baseChat, id: 'read-new', status: 'idle', ticketId: null, isTicketFlow: false, updatedAt: '2026-05-04T04:00:00Z', raw: {} },
       {
@@ -1203,7 +1203,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('uses backend unread rows plus local read markers for filters, sort, and run-group unread totals', () => {
-    const chats: PmaChatSummary[] = [
+    const chats: ChatSummary[] = [
       { ...baseChat, id: 'backend-read', unreadCount: 0, updatedAt: '2026-05-04T05:00:00Z' },
       { ...baseChat, id: 'backend-unread-low', unreadCount: 1, updatedAt: '2026-05-04T01:00:00Z' },
       { ...baseChat, id: 'backend-unread-high', unreadCount: 3, updatedAt: '2026-05-04T02:00:00Z' }
@@ -1212,7 +1212,7 @@ describe('PMA chat view helpers', () => {
       'backend-read': '2026-05-04T05:00:00Z'
     };
 
-    expect(filterPmaChats(chats, 'unread', '', lastSeen)).toMatchObject([
+    expect(filterChats(chats, 'unread', '', lastSeen)).toMatchObject([
       { id: 'backend-unread-low' },
       { id: 'backend-unread-high' }
     ]);
@@ -1231,13 +1231,13 @@ describe('PMA chat view helpers', () => {
   });
 
   it('uses timestamp read markers instead of backend unread counts', () => {
-    const chats: PmaChatSummary[] = [
+    const chats: ChatSummary[] = [
       { ...baseChat, id: 'backend-unread', unreadCount: 2, updatedAt: '2026-05-04T01:00:00Z' },
       { ...baseChat, id: 'read-newer', unreadCount: 0, updatedAt: '2026-05-04T03:00:00Z' }
     ];
 
     expect(
-      filterPmaChats(chats, 'unread', '', {
+      filterChats(chats, 'unread', '', {
         'backend-unread': '2026-05-04T01:00:00Z',
         'read-newer': '2026-05-04T03:00:00Z'
       }).map((chat) => chat.id)
@@ -1249,31 +1249,31 @@ describe('PMA chat view helpers', () => {
   });
 
   it('formats header scope lines for PMA global, repo, and worktree chats', () => {
-    expect(pmaChatHeaderScopeLine(null)).toBe('');
-    expect(pmaChatHeaderScopeLine({ ...baseChat, repoId: null, worktreeId: null })).toBe('Hub workspace');
-    expect(pmaChatHeaderScopeLine({ ...baseChat, repoId: 'repo-1', worktreeId: null }, () => 'My Repo')).toBe('Repo - My Repo');
+    expect(chatHeaderScopeLine(null)).toBe('');
+    expect(chatHeaderScopeLine({ ...baseChat, repoId: null, worktreeId: null })).toBe('Hub workspace');
+    expect(chatHeaderScopeLine({ ...baseChat, repoId: 'repo-1', worktreeId: null }, () => 'My Repo')).toBe('Repo - My Repo');
     expect(
-      pmaChatHeaderScopeLine({ ...baseChat, repoId: 'repo-1', worktreeId: 'wt-9' }, () => 'My Repo')
+      chatHeaderScopeLine({ ...baseChat, repoId: 'repo-1', worktreeId: 'wt-9' }, () => 'My Repo')
     ).toBe('Repo - My Repo - wt-9');
   });
 
   it('builds scope tag chips with optional friendly repo/worktree labels', () => {
     expect(
-      pmaChatScopeTagView({ ...baseChat, repoId: 'repo-1', worktreeId: null }, { repoLabel: () => 'My Repo' })
+      chatScopeTagView({ ...baseChat, repoId: 'repo-1', worktreeId: null }, { repoLabel: () => 'My Repo' })
     ).toEqual({ kindKey: 'repo', kindLabel: 'Repo', detail: 'My Repo' });
     expect(
-      pmaChatScopeTagView(
+      chatScopeTagView(
         { ...baseChat, repoId: 'repo-1', worktreeId: 'wt-9' },
         { worktreeLabel: () => 'WT nine' }
       )
     ).toEqual({ kindKey: 'worktree', kindLabel: 'Worktree', detail: 'WT nine' });
-    expect(pmaChatScopeTagView({ ...baseChat, repoId: null, worktreeId: null, raw: { workspace_root: '/tmp/hub' } })).toEqual({
+    expect(chatScopeTagView({ ...baseChat, repoId: null, worktreeId: null, raw: { workspace_root: '/tmp/hub' } })).toEqual({
       kindKey: 'hub',
       kindLabel: 'Hub',
       detail: 'hub',
       detailFull: '/tmp/hub'
     });
-    expect(pmaChatScopeTagView({ ...baseChat, repoId: null, worktreeId: null, raw: {} })).toEqual({
+    expect(chatScopeTagView({ ...baseChat, repoId: null, worktreeId: null, raw: {} })).toEqual({
       kindKey: 'local',
       kindLabel: 'Local',
       detail: 'Hub workspace'
@@ -1287,7 +1287,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('prefers a requested linked chat when present', () => {
-    const chats: PmaChatSummary[] = [
+    const chats: ChatSummary[] = [
       baseChat,
       { ...baseChat, id: 'chat-2', title: 'Linked conversation', status: 'waiting' }
     ];
@@ -1521,7 +1521,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('summarizes live progress separately from transcript cards', () => {
-    const live = buildPmaLiveActivity({
+    const live = buildChatLiveActivity({
       ...baseProgress,
       elapsedSeconds: 125,
       idleSeconds: 0,
@@ -1652,7 +1652,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('builds a thin status bar from backend status fields', () => {
-    expect(buildPmaStatusBar({ ...baseProgress, elapsedSeconds: 125, queueDepth: 2 }, baseChat)).toEqual({
+    expect(buildChatStatusBar({ ...baseProgress, elapsedSeconds: 125, queueDepth: 2 }, baseChat)).toEqual({
       state: 'running',
       phase: 'testing',
       elapsedLabel: '2m 5s elapsed',
@@ -1673,7 +1673,7 @@ describe('PMA chat view helpers', () => {
 
   it('adds token usage and context remaining metadata to the status bar', () => {
     expect(
-      buildPmaStatusBar(
+      buildChatStatusBar(
         {
           ...baseProgress,
           raw: {
@@ -1731,7 +1731,7 @@ describe('PMA chat view helpers', () => {
         timelineItem('turn:one:user', 'user_message', { text: 'Create tickets' }, '001'),
         {
           ...timelineItem('turn:one:intermediate:think-1', 'intermediate', { intermediate_kind: 'thinking', text: 'Inspecting repo state.', event: { kind: 'thinking', message: 'Inspecting repo state.' } }, '002'),
-          ...pmaTimelineContractFields('turn:one:intermediate:think-1', { sourceEventIds: ['turn:one:intermediate:think-1'] })
+          ...chatTimelineContractFields('turn:one:intermediate:think-1', { sourceEventIds: ['turn:one:intermediate:think-1'] })
         },
         timelineItem('turn:one:tool:1:rg', 'tool_group', { tool_name: 'rg tickets', call: { summary: 'rg tickets' }, result: { status: 'completed', summary: '2 matches' } }, '003'),
         timelineItem('turn:one:approval:write-1', 'approval', { description: 'Allow write' }, '0035'),
@@ -2077,7 +2077,7 @@ describe('PMA chat view helpers', () => {
             call: { summary: 'Refactor pipeline' },
             result: { status: 'completed', summary: '3 tools completed' }
           }, '002'),
-          ...pmaTimelineContractFields('turn:one:tool:group:1', {
+          ...chatTimelineContractFields('turn:one:tool:group:1', {
             sourceEventIds: ['evt-51', 'evt-52', 'evt-53'],
             progressEventIds: ['evt-51', 'evt-52', 'evt-53'],
             progressItemIds: ['prog-51', 'prog-52', 'prog-53']
@@ -2380,7 +2380,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('builds managed thread creation payloads for local, repo, and worktree scopes', () => {
-    const [local, repo, worktree] = buildPmaChatScopeOptions(
+    const [local, repo, worktree] = buildChatScopeOptions(
       [
         {
           id: 'repo-1',
@@ -2452,7 +2452,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('groups scope options into repo buckets with their worktrees', () => {
-    const options = buildPmaChatScopeOptions(
+    const options = buildChatScopeOptions(
       [
         {
           id: 'repo-1',
@@ -2495,7 +2495,7 @@ describe('PMA chat view helpers', () => {
       ]
     );
 
-    const view = groupPmaChatScopeOptions(options);
+    const view = groupChatScopeOptions(options);
     expect(view.local?.id).toBe('local');
     expect(view.groups.map((group) => group.repoLabel)).toEqual(['Repo One', 'Other worktrees']);
     expect(view.groups[0].repo?.id).toBe('repo:repo-1');
@@ -2503,7 +2503,7 @@ describe('PMA chat view helpers', () => {
     expect(view.groups[1].repo).toBeNull();
     expect(view.groups[1].worktrees.map((worktree) => worktree.id)).toEqual(['worktree:worktree-orphan']);
 
-    expect(flattenPmaChatScopeGroupView(view).map((option) => option.id)).toEqual([
+    expect(flattenChatScopeGroupView(view).map((option) => option.id)).toEqual([
       'local',
       'repo:repo-1',
       'worktree:worktree-1',
@@ -2512,7 +2512,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('keeps the owning repo header visible when a query only matches a worktree', () => {
-    const options = buildPmaChatScopeOptions(
+    const options = buildChatScopeOptions(
       [
         {
           id: 'repo-1',
@@ -2543,24 +2543,24 @@ describe('PMA chat view helpers', () => {
       ]
     );
 
-    const view = groupPmaChatScopeOptions(options);
-    const filtered = filterPmaChatScopeGroups(view, 'feature');
+    const view = groupChatScopeOptions(options);
+    const filtered = filterChatScopeGroups(view, 'feature');
     expect(filtered.local).toBeNull();
     expect(filtered.groups).toHaveLength(1);
     expect(filtered.groups[0].repo?.id).toBe('repo:repo-1');
     expect(filtered.groups[0].worktrees.map((worktree) => worktree.id)).toEqual(['worktree:worktree-1']);
 
-    const repoQuery = filterPmaChatScopeGroups(view, 'Repo One');
+    const repoQuery = filterChatScopeGroups(view, 'Repo One');
     expect(repoQuery.groups[0].worktrees).toHaveLength(1);
 
-    const hubQuery = filterPmaChatScopeGroups(view, 'local');
+    const hubQuery = filterChatScopeGroups(view, 'local');
     expect(hubQuery.local?.id).toBe('local');
     expect(hubQuery.groups).toHaveLength(0);
   });
 
   it('labels existing chat scopes from durable backend fields', () => {
     expect(
-      pmaChatScopeLabelFromChat({
+      chatScopeLabelFromChat({
         ...baseChat,
         repoId: 'repo-1',
         worktreeId: null,
@@ -2571,7 +2571,7 @@ describe('PMA chat view helpers', () => {
 
   it('labels hub-scoped chats using workspace_root as Hub (not repo/worktree)', () => {
     expect(
-      pmaChatScopeLabelFromChat({
+      chatScopeLabelFromChat({
         ...baseChat,
         repoId: null,
         worktreeId: null,
@@ -2724,13 +2724,13 @@ describe('PMA chat view helpers', () => {
   });
 
   it('derives chat kind and reasoning affordances from shared thread/model metadata', () => {
-    expect(pmaChatKind(baseChat)).toBe('pma');
-    expect(pmaChatKind({ ...baseChat, chatKind: 'coding_agent', raw: { name: 'New chat' } })).toBe('coding_agent');
-    expect(pmaChatKind({ ...baseChat, raw: { name: 'New coding agent chat' } })).toBe('coding_agent');
-    expect(pmaChatKind({ ...baseChat, raw: { chat_kind: 'pma', name: 'New coding agent chat' } })).toBe('pma');
-    expect(pmaChatKind({ ...baseChat, raw: { chat_kind: 'direct_agent' } })).toBe('coding_agent');
-    expect(pmaChatKindLabel('coding_agent')).toBe('Coding agent');
-    expect(pmaChatKindLabel('pma')).toBe('Chat');
+    expect(chatKind(baseChat)).toBe('pma');
+    expect(chatKind({ ...baseChat, chatKind: 'coding_agent', raw: { name: 'New chat' } })).toBe('coding_agent');
+    expect(chatKind({ ...baseChat, raw: { name: 'New coding agent chat' } })).toBe('coding_agent');
+    expect(chatKind({ ...baseChat, raw: { chat_kind: 'pma', name: 'New coding agent chat' } })).toBe('pma');
+    expect(chatKind({ ...baseChat, raw: { chat_kind: 'direct_agent' } })).toBe('coding_agent');
+    expect(chatKindLabel('coding_agent')).toBe('Coding agent');
+    expect(chatKindLabel('pma')).toBe('Chat');
     expect(agentCapabilityAllowed({ capability_projection: { actions: { list_models: { allowed: true } } } }, 'list_models')).toBe(true);
     expect(agentCapabilityAllowed({ capability_projection: { actions: { list_models: { allowed: false } } } }, 'list_models')).toBe(false);
     expect(modelReasoningOptions({ reasoning_options: ['low', 'high', 'high'] })).toEqual(['low', 'high']);

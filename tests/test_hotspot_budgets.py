@@ -172,9 +172,9 @@ STANDARD_FILE_BUDGETS = (
         reason="Ticket 005 moved chat send/queue optimistic reconciliation out of +page.svelte.",
     ),
     FileBudget(
-        path="src/codex_autorunner/web_frontend/src/lib/application/pmaChatArchitecture.ts",
+        path="src/codex_autorunner/web_frontend/src/lib/application/chatDetailReadModel.ts",
         max_lines=360,
-        reason="Tickets 004-005 own transcript/optimistic reconciliation helpers outside +page.svelte.",
+        reason="Chat detail display derivation belongs in a focused application read model outside +page.svelte.",
     ),
 )
 
@@ -546,7 +546,7 @@ LEGACY_FUNCTION_CAPS = (
         path="src/codex_autorunner/surfaces/web/routes/pma_routes/chat_runtime.py",
         qualname="build_chat_runtime_router",
         max_lines=350,
-        reason="PMA chat runtime still has a large legacy builder, but it should not get materially larger before extraction.",
+        reason="chat runtime still has a large legacy builder, but it should not get materially larger before extraction.",
     ),
     FunctionBudget(
         path="src/codex_autorunner/adapters/discord/commands.py",
@@ -668,11 +668,10 @@ TEXT_HELPER_OWNERSHIP_RULES = (
         reason="Ticket 005 moved chat send/queue optimistic reconciliation into the application controller.",
     ),
     TextHelperOwnershipRule(
-        owner_path="src/codex_autorunner/web_frontend/src/lib/application/pmaChatArchitecture.ts",
+        owner_path="src/codex_autorunner/web_frontend/src/lib/application/chatDetailOptimistic.ts",
         helper_names=(
             "mergeTranscriptSnapshotWithPendingOptimistic",
             "transcriptRowsConfirmOptimistic",
-            "visibleChatDetailTranscriptCards",
             "buildOptimisticUserTranscriptCard",
             "buildOptimisticQueuedTurn",
             "withoutOptimisticQueuedTurn",
@@ -687,7 +686,17 @@ TEXT_HELPER_OWNERSHIP_RULES = (
         reason="Tickets 004-005 moved transcript and queue reconciliation helpers out of the route page.",
     ),
     TextHelperOwnershipRule(
-        owner_path="src/codex_autorunner/web_frontend/src/lib/viewModels/pmaChat.ts",
+        owner_path="src/codex_autorunner/web_frontend/src/lib/application/chatDetailReadModel.ts",
+        helper_names=("visibleChatDetailTranscriptCards",),
+        scan_roots=(
+            "src/codex_autorunner/web_frontend/src/lib/application",
+            "src/codex_autorunner/web_frontend/src/routes/chats",
+        ),
+        suffixes=(".ts", ".svelte"),
+        reason="Chat detail transcript filtering belongs in the display read model.",
+    ),
+    TextHelperOwnershipRule(
+        owner_path="src/codex_autorunner/web_frontend/src/lib/viewModels/chat.ts",
         helper_names=(
             "mapChatTranscriptRows",
             "mapChatTranscriptSnapshot",

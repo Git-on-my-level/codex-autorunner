@@ -1,4 +1,4 @@
-import type { PmaChatSummary } from './domain';
+import type { ChatSummary } from './domain';
 
 const STORAGE_KEYS = ['pma:lastSeen', 'car.web.chat.lastSeen.v1'];
 
@@ -48,7 +48,7 @@ export function markChatRead(
   return { ...map, [chatId]: stamp };
 }
 
-export function isChatUnread(chat: PmaChatSummary, map: ChatLastSeenMap): boolean {
+export function isChatUnread(chat: ChatSummary, map: ChatLastSeenMap): boolean {
   if (!chat.updatedAt) return false;
   const seen = map[chat.id];
   if (!seen) return true;
@@ -58,7 +58,7 @@ export function isChatUnread(chat: PmaChatSummary, map: ChatLastSeenMap): boolea
 /** Mark every chat that is unread under `baseMap` (uses each chat's `updatedAt` or now). */
 export function markAllChatsRead(
   baseMap: ChatLastSeenMap,
-  chats: PmaChatSummary[]
+  chats: ChatSummary[]
 ): ChatLastSeenMap {
   let next = baseMap;
   const now = new Date().toISOString();

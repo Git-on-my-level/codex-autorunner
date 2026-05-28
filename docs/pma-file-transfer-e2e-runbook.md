@@ -59,7 +59,7 @@ In the web UI, switch PMA to manual mode to open the docs editor. Use "Save" to 
 ### 1. Upload File → File Visible in Inbox
 
 1. Open the web UI at `http://<hub-root>/`
-2. Navigate to the PMA chat tab (Hub → PMA)
+2. Navigate to the chat tab (Hub → PMA)
 3. Locate the file upload area (near the chat input)
 4. Click "Upload" or drag-and-drop a test file
 5. **Expected:**
@@ -84,7 +84,7 @@ Response should include the file in `inbox` array.
 
 ### 2. Agent References Uploaded File
 
-1. In the PMA chat, send a message asking the agent to read the uploaded file:
+1. In the chat, send a message asking the agent to read the uploaded file:
    ```
    Read the file <filename> from the PMA inbox and tell me its contents.
    ```
@@ -99,7 +99,7 @@ Response should include the file in `inbox` array.
 
 ### 3. Agent Writes Outbox File → UI Detects → Download Works
 
-1. In the PMA chat, ask the agent to write a file:
+1. In the chat, ask the agent to write a file:
    ```
    Create response.txt with "Hello from agent" and send it to the current artifact delivery target.
    ```
@@ -272,7 +272,7 @@ cat <hub_root>/.codex-autorunner/filebox/outbox/telegram-output.txt
 
 ### 2. File Produced via Web PMA Sendable via Telegram
 
-1. In the web PMA chat, ask the agent to write a file:
+1. In the web chat, ask the agent to write a file:
    ```
    Create web-produced.txt with "Cross-surface test from web" and send it to the current artifact delivery target.
    ```

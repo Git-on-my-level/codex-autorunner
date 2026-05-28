@@ -4,7 +4,7 @@ import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
 import TicketViews from './TicketViews.svelte';
 import { mockArtifact, mockChatSummary, mockRunProgress, mockTicketDetail, mockTicketSummary } from '$lib/viewModels/mockData';
-import { pmaTimelineContractFields } from '$lib/viewModels/domain';
+import { chatTimelineContractFields } from '$lib/viewModels/domain';
 import { buildTicketDetailViewModel, buildTicketListViewModel } from '$lib/viewModels/ticket';
 
 const codexAgent = {
@@ -293,7 +293,7 @@ Users can browse tickets.
             turnId: 'turn-1',
             status: 'done',
             payload: { text: 'Ticket implementation is in progress.' },
-            ...pmaTimelineContractFields('assistant-1'),
+            ...chatTimelineContractFields('assistant-1'),
             raw: {}
           }
         ]
@@ -323,7 +323,7 @@ Users can browse tickets.
     expect(body).toContain('running');
     expect(body).not.toContain('Ticket contract loaded');
     expect(body).not.toContain('Preview ready');
-    expect(body).not.toContain('Linked PMA chat history');
+    expect(body).not.toContain('Linked chat history');
     expect(body).not.toContain('Ticket implementation is in progress.');
   });
 
@@ -403,7 +403,7 @@ Users can browse tickets.
     expect(body).not.toContain('Surfaced artifacts');
   });
 
-  it('renders ticket-flow worker activity separately from linked PMA chat history', () => {
+  it('renders ticket-flow worker activity separately from linked chat history', () => {
     const detail = buildTicketDetailViewModel(mockTicketDetail, {
       tickets: [mockTicketSummary],
       runs: [mockRunProgress],
@@ -457,7 +457,7 @@ Users can browse tickets.
 
     expect(body).not.toContain('No artifacts surfaced');
     expect(body).not.toContain('Screenshots, previews, files, and test summaries will appear after PMA work produces them.');
-    expect(body).not.toContain('No linked PMA chat');
+    expect(body).not.toContain('No linked chat');
     expect(body).not.toContain('A ticket-linked conversation appears here after PMA starts discussing this ticket.');
     expect(body).not.toContain('Raw logs/debug');
   });

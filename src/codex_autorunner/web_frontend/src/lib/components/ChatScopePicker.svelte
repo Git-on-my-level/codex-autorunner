@@ -5,9 +5,9 @@
    * other picker rows.
    */
   import {
-    type PmaChatScopeOption,
-    groupPmaChatScopeOptions
-  } from '$lib/viewModels/pmaChat';
+    type ChatScopeOption,
+    groupChatScopeOptions
+  } from '$lib/viewModels/chat';
   import type { DropdownSelectGroup } from './DropdownSelect';
   import DropdownSelect from './DropdownSelect.svelte';
 
@@ -17,14 +17,14 @@
     onChange = undefined,
     disabled = false
   }: {
-    scopeOptions?: PmaChatScopeOption[];
+    scopeOptions?: ChatScopeOption[];
     value?: string;
     onChange?: (() => void) | undefined;
     /** When true the picker is read-only — used by deep-linked "+ New chat" flows where the scope is fixed by the entry route. */
     disabled?: boolean;
   } = $props();
 
-  const groupedAll = $derived(groupPmaChatScopeOptions(scopeOptions));
+  const groupedAll = $derived(groupChatScopeOptions(scopeOptions));
   const selectGroups = $derived.by<DropdownSelectGroup[]>(() => {
     const groups: DropdownSelectGroup[] = [];
     if (groupedAll.local) {

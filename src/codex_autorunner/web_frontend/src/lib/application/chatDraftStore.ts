@@ -1,4 +1,4 @@
-import type { PmaChatSummary } from '$lib/viewModels/domain';
+import type { ChatSummary } from '$lib/viewModels/domain';
 
 export const CHAT_DRAFT_STORAGE_KEY = 'car.webHub.chatDrafts.v1';
 
@@ -6,7 +6,7 @@ export type ChatDraftRecord = {
   chatId: string;
   text: string;
   updatedAt: string;
-  chatSnapshot?: PmaChatSummary | null;
+  chatSnapshot?: ChatSummary | null;
 };
 
 export type ChatDraftRecordMap = Record<string, ChatDraftRecord>;
@@ -58,7 +58,7 @@ export function setChatDraftText(
   records: ChatDraftRecordMap,
   chatId: string | null | undefined,
   text: string,
-  chatSnapshot?: PmaChatSummary | null,
+  chatSnapshot?: ChatSummary | null,
   updatedAt = new Date().toISOString()
 ): ChatDraftRecordMap {
   const normalizedChatId = chatId?.trim();

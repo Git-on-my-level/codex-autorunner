@@ -1,9 +1,9 @@
 import type {
   ContextspaceDocument,
   DashboardSummary,
-  PmaChatMessage,
-  PmaChatSummary,
-  PmaRunProgress,
+  ChatMessage,
+  ChatSummary,
+  ChatRunProgress,
   RepoSummary,
   SurfaceArtifact,
   TicketDetail,
@@ -21,7 +21,7 @@ export const mockArtifact: SurfaceArtifact = {
   raw: {}
 };
 
-export const mockRunProgress: PmaRunProgress = {
+export const mockRunProgress: ChatRunProgress = {
   id: 'run-1',
   chatId: 'chat-1',
   status: 'running',
@@ -43,7 +43,7 @@ export const mockRunProgress: PmaRunProgress = {
   raw: {}
 };
 
-export const mockChatSummary: PmaChatSummary = {
+export const mockChatSummary: ChatSummary = {
   id: 'chat-1',
   title: 'Hub rewrite foundation',
   lifecycleStatus: 'active',
@@ -60,7 +60,7 @@ export const mockChatSummary: PmaChatSummary = {
   raw: {}
 };
 
-export const mockChatMessage: PmaChatMessage = {
+export const mockChatMessage: ChatMessage = {
   id: 'msg-1',
   chatId: 'chat-1',
   role: 'assistant',

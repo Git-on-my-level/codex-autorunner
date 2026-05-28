@@ -288,7 +288,6 @@ Users can inspect tickets.
     expect(detail.timeline.map((item) => item.title)).toContain('waiting');
     expect(detail.artifacts[0]).toMatchObject({ kind: 'preview_url' });
     expect(detail.linkedChatId).toBe('chat-1');
-    expect(detail.actions.map((action) => action.label)).not.toContain('Open PMA chat');
     expect(detail.actions.map((action) => action.label)).toContain('Open chat');
     expect(detail.actions.map((action) => action.label)).toContain('Continue run');
     expect(detail.actions.find((action) => action.label === 'Raw logs/debug')?.secondary).toBe(true);

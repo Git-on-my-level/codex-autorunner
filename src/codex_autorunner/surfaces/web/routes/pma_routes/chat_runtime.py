@@ -36,8 +36,8 @@ from .....core.sse import format_sse
 from .....core.state import load_state
 from .....core.text_utils import _normalize_optional_text
 from ...schemas import (
+    ManagedThreadChatRequest,
     ManagedThreadResetRequest,
-    PmaChatRequest,
     PmaHistoryCompactRequest,
     PmaNewSessionRequest,
     PmaSessionResetRequest,
@@ -203,13 +203,13 @@ async def _resolve_terminal_queue_item_result(
             return {
                 "status": "error",
                 "detail": str(getattr(queued_item, "error", "") or "").strip()
-                or "PMA chat failed",
+                or "Managed thread failed",
             }
         if state == QueueItemState.CANCELLED:
             return {
                 "status": "error",
                 "detail": str(getattr(queued_item, "error", "") or "").strip()
-                or "PMA chat cancelled",
+                or "Managed thread cancelled",
             }
         break
     return None
@@ -445,7 +445,7 @@ def build_chat_runtime_router(
         return {"active": active, "current": current, "last_result": last_result}
 
     @router.post("/chat")
-    async def pma_chat(request: Request, payload: PmaChatRequest):
+    async def pma_chat(request: Request, payload: ManagedThreadChatRequest):
         context = get_pma_request_context(request)
         pma_config = _get_pma_config(request)
         message = (payload.message or "").strip()
@@ -534,7 +534,7 @@ def build_chat_runtime_router(
                 result_future=result_future,
             )
         except Exception:
-            logger.exception("PMA chat error")
+            logger.exception("Managed thread chat error")
             return {
                 "status": "error",
                 "detail": "An error occurred processing your request",
@@ -548,7 +548,7 @@ def build_chat_runtime_router(
     async def pma_interrupt(request: Request) -> dict[str, Any]:
         runtime = get_runtime_state()
         return await _interrupt_active(
-            runtime, request, reason="PMA chat interrupted", source="user_request"
+            runtime, request, reason="Managed thread interrupted", source="user_request"
         )
 
     @router.post("/stop")

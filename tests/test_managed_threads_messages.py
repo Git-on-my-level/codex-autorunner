@@ -356,7 +356,7 @@ def test_global_first_send_uses_hub_genesis_after_worktree_discord_chat_and_keep
             json={
                 "message": "Investigate notification routing",
                 "agent": "codex",
-                "name": "New PMA chat",
+                "name": "New chat",
                 "scope_urn": "hub",
                 "origin": "web",
                 "scope_source": "default_hub",
@@ -1356,7 +1356,7 @@ def test_send_message_does_not_report_ok_when_turn_already_interrupted(
     assert message_resp.status_code == 200
     payload = message_resp.json()
     assert payload["status"] == "interrupted"
-    assert payload["error"] == "PMA chat interrupted"
+    assert payload["error"] == "chat interrupted"
 
     store = ManagedThreadStore(hub_env.hub_root)
     turn = store.get_turn(managed_thread_id, payload["managed_turn_id"])

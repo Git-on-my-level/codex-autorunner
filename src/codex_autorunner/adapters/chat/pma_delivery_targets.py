@@ -1,4 +1,4 @@
-"""Shared PMA chat-surface delivery target projection."""
+"""Shared managed thread-surface delivery target projection."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from ...core.text_utils import _normalize_optional_text
 
 
 @dataclass(frozen=True)
-class PmaChatSurfaceBinding:
+class ChatSurfaceBinding:
     surface_key: str
     workspace_path: str | None = None
     repo_id: str | None = None
@@ -21,7 +21,7 @@ class PmaChatSurfaceBinding:
 
 
 @dataclass(frozen=True)
-class PmaChatDeliveryTargetCandidate:
+class ChatDeliveryTargetCandidate:
     surface_key: str
     workspace_root: str | None = None
 
@@ -29,14 +29,14 @@ class PmaChatDeliveryTargetCandidate:
 def select_explicit_pma_target(
     *,
     surface_key: str | None,
-    bindings: tuple[PmaChatSurfaceBinding, ...],
-) -> PmaChatDeliveryTargetCandidate | None:
+    bindings: tuple[ChatSurfaceBinding, ...],
+) -> ChatDeliveryTargetCandidate | None:
     normalized_surface_key = _normalize_optional_text(surface_key)
     if normalized_surface_key is None:
         return None
     for binding in bindings:
         if binding.surface_key == normalized_surface_key:
-            return PmaChatDeliveryTargetCandidate(surface_key=normalized_surface_key)
+            return ChatDeliveryTargetCandidate(surface_key=normalized_surface_key)
     return None
 
 
@@ -44,15 +44,15 @@ def select_bound_pma_targets(
     *,
     workspace_root: str | None,
     repo_id: str | None,
-    bindings: tuple[PmaChatSurfaceBinding, ...],
+    bindings: tuple[ChatSurfaceBinding, ...],
     repo_id_by_workspace: Mapping[str, str],
-) -> tuple[PmaChatDeliveryTargetCandidate, ...]:
+) -> tuple[ChatDeliveryTargetCandidate, ...]:
     normalized_workspace_root = normalize_workspace_path(workspace_root)
     if normalized_workspace_root is None:
         return ()
     normalized_repo_id = _normalize_optional_text(repo_id)
     seen_surface_keys: set[str] = set()
-    candidates: list[PmaChatDeliveryTargetCandidate] = []
+    candidates: list[ChatDeliveryTargetCandidate] = []
     for binding in sorted(bindings, key=lambda item: item.surface_key):
         if binding.is_primary_pma:
             continue
@@ -72,7 +72,7 @@ def select_bound_pma_targets(
             continue
         seen_surface_keys.add(binding.surface_key)
         candidates.append(
-            PmaChatDeliveryTargetCandidate(
+            ChatDeliveryTargetCandidate(
                 surface_key=binding.surface_key,
                 workspace_root=workspace_root,
             )
@@ -83,13 +83,13 @@ def select_bound_pma_targets(
 def select_primary_pma_target(
     *,
     repo_id: str | None,
-    bindings: tuple[PmaChatSurfaceBinding, ...],
+    bindings: tuple[ChatSurfaceBinding, ...],
     repo_id_by_workspace: Mapping[str, str],
-) -> PmaChatDeliveryTargetCandidate | None:
+) -> ChatDeliveryTargetCandidate | None:
     normalized_repo_id = _normalize_optional_text(repo_id)
     if normalized_repo_id is None:
         return None
-    candidates: list[tuple[str, str, PmaChatDeliveryTargetCandidate]] = []
+    candidates: list[tuple[str, str, ChatDeliveryTargetCandidate]] = []
     for binding in bindings:
         if not binding.is_primary_pma:
             continue
@@ -117,7 +117,7 @@ def select_primary_pma_target(
             (
                 _normalize_optional_text(binding.updated_at) or "",
                 binding.surface_key,
-                PmaChatDeliveryTargetCandidate(
+                ChatDeliveryTargetCandidate(
                     surface_key=binding.surface_key,
                     workspace_root=workspace_root,
                 ),
@@ -130,8 +130,8 @@ def select_primary_pma_target(
 
 
 __all__ = [
-    "PmaChatDeliveryTargetCandidate",
-    "PmaChatSurfaceBinding",
+    "ChatDeliveryTargetCandidate",
+    "ChatSurfaceBinding",
     "select_bound_pma_targets",
     "select_explicit_pma_target",
     "select_primary_pma_target",

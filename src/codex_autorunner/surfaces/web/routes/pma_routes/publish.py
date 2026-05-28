@@ -16,8 +16,8 @@ from .....adapters.chat.turn_metrics import format_turn_footer
 from .....core.chat_bindings import (
     resolve_chat_state_path as resolve_configured_chat_state_path,
 )
+from .....core.chat_delivery import deliver_pma_notification
 from .....core.logging_utils import log_event
-from .....core.pma_chat_delivery import deliver_pma_notification
 from .....core.pma_domain.models import PublishNoticeContext
 from .....core.pma_domain.publish_policy import build_publish_notice_message
 from .....core.ports.run_event import TokenUsage

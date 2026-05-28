@@ -1,5 +1,5 @@
 import { writable, type Readable } from 'svelte/store';
-import type { PmaQueuedTurn } from '$lib/api/client';
+import type { ChatQueuedTurn } from '$lib/api/client';
 import { chatFacetRequestIsEmpty, normalizeChatFacetRequest } from '$lib/api/readModelContracts';
 import type {
   ChatArtifactSummary,
@@ -30,11 +30,11 @@ import type {
   WorktreeTopology
 } from '$lib/api/readModelContracts';
 import {
-  type PmaRunProgress,
+  type ChatRunProgress,
   type SurfaceArtifact,
   type TicketSummary
 } from '$lib/viewModels/domain';
-import type { ChatTranscriptCard } from '$lib/viewModels/pmaChat';
+import type { ChatTranscriptCard } from '$lib/viewModels/chat';
 
 export type EntityKind =
   | 'chat'
@@ -146,9 +146,9 @@ export type ReadModelEntityState = {
   chatDetails: Record<string, ChatDetailProjection>;
   timelines: Record<string, TimelineProjection>;
   chatTranscripts: Record<string, { cardsById: Record<string, ChatTranscriptCard>; order: string[] }>;
-  pmaProgress: Record<string, PmaRunProgress>;
-  pmaQueues: Record<string, PmaQueuedTurn[]>;
-  pmaArtifacts: Record<string, SurfaceArtifact[]>;
+  chatProgress: Record<string, ChatRunProgress>;
+  chatQueues: Record<string, ChatQueuedTurn[]>;
+  surfaceArtifacts: Record<string, SurfaceArtifact[]>;
   readMarkers: Record<string, string>;
   artifacts: Record<string, ChatArtifactSummary>;
   repos: Record<string, RepoTopology>;
@@ -162,8 +162,8 @@ export type ReadModelEntityState = {
   ticketOrderByOwner: Record<string, string[]>;
   ticketSiblings: Record<string, TicketQueueSibling[]>;
   runs: Record<string, unknown>;
-  pmaRuns: Record<string, PmaRunProgress>;
-  pmaRunOrderByOwner: Record<string, string[]>;
+  chatRuns: Record<string, ChatRunProgress>;
+  chatRunOrderByOwner: Record<string, string[]>;
   repoDetails: Record<string, RepoWorktreeDetailSnapshot>;
   worktreeDetails: Record<string, RepoWorktreeDetailSnapshot>;
   agents: Record<string, unknown>;
@@ -215,7 +215,7 @@ export const emptyChatFacetRequest: ChatFacetRequest = {
   agentKinds: []
 };
 
-export const PMA_LIVE_PROGRESS_EVENT_LIMIT = 80;
+export const LIVE_PROGRESS_EVENT_LIMIT = 80;
 
 export function createInitialReadModelState(): ReadModelEntityState {
   return {
@@ -232,9 +232,9 @@ export function createInitialReadModelState(): ReadModelEntityState {
     chatDetails: {},
     timelines: {},
     chatTranscripts: {},
-    pmaProgress: {},
-    pmaQueues: {},
-    pmaArtifacts: {},
+    chatProgress: {},
+    chatQueues: {},
+    surfaceArtifacts: {},
     readMarkers: {},
     artifacts: {},
     repos: {},
@@ -248,8 +248,8 @@ export function createInitialReadModelState(): ReadModelEntityState {
     ticketOrderByOwner: {},
     ticketSiblings: {},
     runs: {},
-    pmaRuns: {},
-    pmaRunOrderByOwner: {},
+    chatRuns: {},
+    chatRunOrderByOwner: {},
     repoDetails: {},
     worktreeDetails: {},
     agents: {},
@@ -446,7 +446,7 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
       order: orderChatTimelineItems(snapshot.timeline).map((item) => item.itemId),
       windowLimit: snapshot.timelineWindow.limit
     };
-    next.pmaQueues[snapshot.thread.chatId] = snapshot.queue.queuedTurnIds.map((id, index) => ({
+    next.chatQueues[snapshot.thread.chatId] = snapshot.queue.queuedTurnIds.map((id, index) => ({
       managedTurnId: id,
       position: index + 1,
       state: 'queued',
@@ -562,24 +562,24 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     this.commit(next);
   }
 
-  setPmaProgress(chatId: string, progress: PmaRunProgress | null): void {
+  setChatProgress(chatId: string, progress: ChatRunProgress | null): void {
     const next = cloneState(this.state);
-    if (progress) next.pmaProgress[chatId] = withBoundedPmaProgressEvents(progress);
-    else delete next.pmaProgress[chatId];
+    if (progress) next.chatProgress[chatId] = withBoundedChatProgressEvents(progress);
+    else delete next.chatProgress[chatId];
     bump(next, 'run', chatId);
     this.commit(next);
   }
 
-  setPmaQueue(chatId: string, queuedTurns: PmaQueuedTurn[]): void {
+  setChatQueue(chatId: string, queuedTurns: ChatQueuedTurn[]): void {
     const next = cloneState(this.state);
-    next.pmaQueues[chatId] = [...queuedTurns];
+    next.chatQueues[chatId] = [...queuedTurns];
     bump(next, 'run', chatId);
     this.commit(next);
   }
 
-  setPmaArtifacts(chatId: string, artifacts: SurfaceArtifact[]): void {
+  setSurfaceArtifacts(chatId: string, artifacts: SurfaceArtifact[]): void {
     const next = cloneState(this.state);
-    next.pmaArtifacts[chatId] = [...artifacts];
+    next.surfaceArtifacts[chatId] = [...artifacts];
     for (const artifact of artifacts) bump(next, 'artifact', artifact.id);
     this.commit(next);
   }
@@ -727,11 +727,11 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     this.commit(next);
   }
 
-  replaceScopedRuns(ownerKey: string, runs: PmaRunProgress[]): void {
+  replaceScopedRuns(ownerKey: string, runs: ChatRunProgress[]): void {
     const next = cloneState(this.state);
-    next.pmaRunOrderByOwner[ownerKey] = runs.map((run) => run.id);
+    next.chatRunOrderByOwner[ownerKey] = runs.map((run) => run.id);
     for (const run of runs) {
-      next.pmaRuns[run.id] = run;
+      next.chatRuns[run.id] = run;
       bump(next, 'run', run.id);
     }
     this.commit(next);
@@ -968,9 +968,9 @@ function cloneState(state: ReadModelEntityState): ReadModelEntityState {
     chatDetails: { ...state.chatDetails },
     timelines: { ...state.timelines },
     chatTranscripts: { ...state.chatTranscripts },
-    pmaProgress: { ...state.pmaProgress },
-    pmaQueues: { ...state.pmaQueues },
-    pmaArtifacts: { ...state.pmaArtifacts },
+    chatProgress: { ...state.chatProgress },
+    chatQueues: { ...state.chatQueues },
+    surfaceArtifacts: { ...state.surfaceArtifacts },
     readMarkers: { ...state.readMarkers },
     artifacts: { ...state.artifacts },
     repos: { ...state.repos },
@@ -984,8 +984,8 @@ function cloneState(state: ReadModelEntityState): ReadModelEntityState {
     ticketOrderByOwner: { ...state.ticketOrderByOwner },
     ticketSiblings: { ...state.ticketSiblings },
     runs: { ...state.runs },
-    pmaRuns: { ...state.pmaRuns },
-    pmaRunOrderByOwner: { ...state.pmaRunOrderByOwner },
+    chatRuns: { ...state.chatRuns },
+    chatRunOrderByOwner: { ...state.chatRunOrderByOwner },
     repoDetails: { ...state.repoDetails },
     worktreeDetails: { ...state.worktreeDetails },
     agents: { ...state.agents },
@@ -1235,9 +1235,9 @@ function retainedChatIndexRowIds(state: ReadModelEntityState): Set<string> {
     if (detail.thread) retained.add(chatId);
   }
   for (const chatId of Object.keys(state.chatTranscripts)) retained.add(chatId);
-  for (const chatId of Object.keys(state.pmaProgress)) retained.add(chatId);
-  for (const chatId of Object.keys(state.pmaQueues)) retained.add(chatId);
-  for (const chatId of Object.keys(state.pmaArtifacts)) {
+  for (const chatId of Object.keys(state.chatProgress)) retained.add(chatId);
+  for (const chatId of Object.keys(state.chatQueues)) retained.add(chatId);
+  for (const chatId of Object.keys(state.surfaceArtifacts)) {
     if (chatId !== '__global__') retained.add(chatId);
   }
   for (const mutation of Object.values(state.optimistic)) {
@@ -1463,8 +1463,8 @@ function transcriptCardTimestamp(card: ChatTranscriptCard): string | null {
   return null;
 }
 
-function withBoundedPmaProgressEvents(progress: PmaRunProgress): PmaRunProgress {
-  const events = progress.events.filter((event) => !isDebugOnlyProgressArtifact(event)).slice(-PMA_LIVE_PROGRESS_EVENT_LIMIT);
+function withBoundedChatProgressEvents(progress: ChatRunProgress): ChatRunProgress {
+  const events = progress.events.filter((event) => !isDebugOnlyProgressArtifact(event)).slice(-LIVE_PROGRESS_EVENT_LIMIT);
   return events.length === progress.events.length ? progress : { ...progress, events };
 }
 

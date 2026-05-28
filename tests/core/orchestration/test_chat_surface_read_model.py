@@ -2370,7 +2370,7 @@ def test_chat_index_uses_provider_title_before_visible_seed(tmp_path: Path) -> N
     _seed_thread(
         hub_root,
         thread_id="thread-provider-title",
-        display_name="New PMA chat",
+        display_name="New chat",
         last_message_preview="First visible request",
         metadata={"provider_conversation_title": "Native runtime title"},
     )
@@ -2587,7 +2587,7 @@ def test_chat_read_model_contract_matrix_documents_shared_semantics(
     _seed_thread(
         hub_root,
         thread_id="thread-pma",
-        display_name="Web PMA chat",
+        display_name="Web chat",
         last_message_preview="Web visible request",
     )
     _seed_execution(
@@ -2668,7 +2668,7 @@ def test_chat_read_model_contract_matrix_documents_shared_semantics(
         "external_unbound": external_rows["surface:discord:guild-external"],
     }
 
-    assert matrix["web_pma"]["title"] == "Web PMA chat"
+    assert matrix["web_pma"]["title"] == "Web chat"
     assert matrix["web_pma"]["last_visible_message_at"] == "2026-05-11T00:01:00Z"
     assert matrix["web_pma"]["last_sort_activity_at"] == "2026-05-11T00:01:00Z"
     assert matrix["discord_bound"]["title"] == "Discord deploy triage"

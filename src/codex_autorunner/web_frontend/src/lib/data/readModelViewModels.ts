@@ -9,11 +9,11 @@ import {
   mapRepoSummary,
   mapWorktreeSummary,
   normalizeWorkStatus,
-  pmaLifecycleTokenIsActive,
-  pmaLifecycleTokenIsArchived,
-  pmaChatArchivedFromRawSignals,
-  type PmaChatSummary,
-  type PmaRunProgress,
+  chatLifecycleTokenIsActive,
+  chatLifecycleTokenIsArchived,
+  chatArchivedFromRawSignals,
+  type ChatSummary,
+  type ChatRunProgress,
   type RepoSummary,
   type SurfaceArtifact,
   type TicketSummary,
@@ -21,8 +21,8 @@ import {
   type WorkStatus
 } from '$lib/viewModels/domain';
 import { normalizeManagedThreadChatKind } from '$lib/viewModels/managedThreadChatKind';
-import type { PmaQueuedTurn } from '$lib/api/client';
-import type { ChatTranscriptCard } from '$lib/viewModels/pmaChat';
+import type { ChatQueuedTurn } from '$lib/api/client';
+import type { ChatTranscriptCard } from '$lib/viewModels/chat';
 import { selectChatIndexWindowView, type ChatIndexWindowRequest, type ReadModelEntityState } from './readModelStore';
 
 type JsonRecord = Record<string, unknown>;
@@ -40,7 +40,7 @@ export function syntheticProjectionCursor(source: string, sequence = Date.now())
   };
 }
 
-export function pmaChatSummaryToChatIndexRow(chat: PmaChatSummary): ChatIndexRow {
+export function chatSummaryToChatIndexRow(chat: ChatSummary): ChatIndexRow {
   const status = chatIndexStatus(chat);
   return {
     chatId: chat.id,
@@ -133,7 +133,7 @@ export function legacyChatIndexRecordToChatIndexRow(raw: JsonRecord): ChatIndexR
   };
 }
 
-export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary {
+export function chatIndexRowToChatSummary(row: ChatIndexRow): ChatSummary {
   const title = row.displayTitle ?? row.title;
   const raw: JsonRecord = {
     row,
@@ -226,11 +226,11 @@ function isTicketRunGroup(group: ChatIndexGroup): group is TicketRunGroup {
   return group.kind === 'ticket_run_group';
 }
 
-export function selectPmaChats(state: ReadModelEntityState, request?: ChatIndexWindowRequest): PmaChatSummary[] {
+export function selectChats(state: ReadModelEntityState, request?: ChatIndexWindowRequest): ChatSummary[] {
   if (request) {
-    return selectChatIndexWindowView(state, request).rows.map(chatIndexRowToPmaChatSummary);
+    return selectChatIndexWindowView(state, request).rows.map(chatIndexRowToChatSummary);
   }
-  return state.chatOrder.map((id) => state.chats[id]).filter(Boolean).map(chatIndexRowToPmaChatSummary);
+  return state.chatOrder.map((id) => state.chats[id]).filter(Boolean).map(chatIndexRowToChatSummary);
 }
 
 export function selectChatTranscript(state: ReadModelEntityState, chatId: string | null): ChatTranscriptCard[] {
@@ -244,16 +244,18 @@ export function selectChatTranscript(state: ReadModelEntityState, chatId: string
   return ordered;
 }
 
-export function selectPmaProgress(state: ReadModelEntityState, chatId: string | null): PmaRunProgress | null {
-  return chatId ? state.pmaProgress[chatId] ?? null : null;
+export function selectChatProgress(state: ReadModelEntityState, chatId: string | null): ChatRunProgress | null {
+  return chatId ? state.chatProgress[chatId] ?? null : null;
 }
 
-export function selectPmaQueue(state: ReadModelEntityState, chatId: string | null): PmaQueuedTurn[] {
-  return chatId ? state.pmaQueues[chatId] ?? [] : [];
+export function selectChatQueue(state: ReadModelEntityState, chatId: string | null): ChatQueuedTurn[] {
+  return chatId ? state.chatQueues[chatId] ?? [] : [];
 }
 
-export function selectPmaArtifacts(state: ReadModelEntityState, chatId: string | null): SurfaceArtifact[] {
-  return chatId ? state.pmaArtifacts[chatId] ?? state.pmaArtifacts.__global__ ?? [] : state.pmaArtifacts.__global__ ?? [];
+export function selectChatArtifacts(state: ReadModelEntityState, chatId: string | null): SurfaceArtifact[] {
+  return chatId
+    ? state.surfaceArtifacts[chatId] ?? state.surfaceArtifacts.__global__ ?? []
+    : state.surfaceArtifacts.__global__ ?? [];
 }
 
 export function selectReadMarkers(state: ReadModelEntityState): Record<string, string> {
@@ -268,8 +270,8 @@ export function selectTicketSummaries(state: ReadModelEntityState, ownerKey: str
   return (state.ticketOrderByOwner[ownerKey] ?? []).map((id) => state.ticketSummaries[id]).filter(Boolean);
 }
 
-export function selectPmaRuns(state: ReadModelEntityState, ownerKey: string): PmaRunProgress[] {
-  return (state.pmaRunOrderByOwner[ownerKey] ?? []).map((id) => state.pmaRuns[id]).filter(Boolean);
+export function selectChatRuns(state: ReadModelEntityState, ownerKey: string): ChatRunProgress[] {
+  return (state.chatRunOrderByOwner[ownerKey] ?? []).map((id) => state.chatRuns[id]).filter(Boolean);
 }
 
 export function selectTicketListView(
@@ -281,8 +283,8 @@ export function selectTicketListView(
   return buildTicketListViewModel(
     {
       tickets: selectTicketSummaries(state, ownerKey),
-      runs: selectPmaRuns(state, ownerKey),
-      chats: selectPmaChats(state),
+      runs: selectChatRuns(state, ownerKey),
+      chats: selectChats(state),
       artifacts: [] as SurfaceArtifact[]
     },
     owner,
@@ -290,7 +292,7 @@ export function selectTicketListView(
   );
 }
 
-export function pmaChatCounters(chats: PmaChatSummary[]): ChatIndexCounters {
+export function chatCounters(chats: ChatSummary[]): ChatIndexCounters {
   return {
     total: chats.length,
     waiting: chats.filter((chat) => chat.status === 'waiting').length,
@@ -374,11 +376,11 @@ function legacyChatIndexStatus(
   return 'idle';
 }
 
-function chatIndexStatus(chat: PmaChatSummary): ChatIndexRow['status'] {
+function chatIndexStatus(chat: ChatSummary): ChatIndexRow['status'] {
   const effective = chatEffectiveStatus(chat.raw.effective_status ?? chat.raw.effectiveStatus ?? chat.status);
   if (effective) return effective;
-  if (pmaLifecycleTokenIsArchived(chat.lifecycleStatus)) return 'archived';
-  if (!pmaLifecycleTokenIsActive(chat.lifecycleStatus) && pmaChatArchivedFromRawSignals(chat.raw)) return 'archived';
+  if (chatLifecycleTokenIsArchived(chat.lifecycleStatus)) return 'archived';
+  if (!chatLifecycleTokenIsActive(chat.lifecycleStatus) && chatArchivedFromRawSignals(chat.raw)) return 'archived';
   if (chat.status === 'waiting') return 'waiting';
   if (chat.status === 'running') return 'running';
   if (chat.status === 'failed' || chat.status === 'blocked' || chat.status === 'invalid') return 'failed';

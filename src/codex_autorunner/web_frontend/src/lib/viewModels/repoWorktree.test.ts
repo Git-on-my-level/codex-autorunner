@@ -41,7 +41,7 @@ describe('repo/worktree view models', () => {
       openTickets: 1,
       totalTickets: 1,
       doneTickets: 0,
-      pmaChatHref: '/chats?new=repo:repo-1&kind=pma',
+      chatHref: '/chats?new=repo:repo-1&kind=pma',
       codingAgentChatHref: '/chats?new=repo:repo-1&kind=agent',
       signalWaiting: 0,
       signalFailed: 0,
@@ -50,7 +50,7 @@ describe('repo/worktree view models', () => {
         {
           id: 'worktree-1',
           href: '/repos/repo-1/worktrees/worktree-1',
-          pmaChatHref: '/chats?new=worktree:worktree-1&kind=pma',
+          chatHref: '/chats?new=worktree:worktree-1&kind=pma',
           codingAgentChatHref: '/chats?new=worktree:worktree-1&kind=agent',
           status: 'running',
           activeRuns: 1,
@@ -215,7 +215,7 @@ describe('repo/worktree view models', () => {
     expect(vm.rows.map((row) => row.id)).toEqual(['repo-1', 'orphan-worktree']);
     expect(vm.rows[0]).toMatchObject({
       id: 'repo-1',
-      pmaChatHref: '/chats?new=repo:repo-1&kind=pma',
+      chatHref: '/chats?new=repo:repo-1&kind=pma',
       codingAgentChatHref: '/chats?new=repo:repo-1&kind=agent',
       signalWaiting: 0,
       signalFailed: 0,
@@ -223,7 +223,7 @@ describe('repo/worktree view models', () => {
       childWorktrees: [
         {
           id: 'worktree-1',
-          pmaChatHref: '/chats?new=worktree:worktree-1&kind=pma',
+          chatHref: '/chats?new=worktree:worktree-1&kind=pma',
           codingAgentChatHref: '/chats?new=worktree:worktree-1&kind=agent'
         }
       ]
@@ -233,7 +233,7 @@ describe('repo/worktree view models', () => {
       kind: 'worktree',
       repoHref: '/repos/missing-repo',
       ticketHref: '/repos/missing-repo/worktrees/orphan-worktree/tickets',
-      pmaChatHref: '/chats?new=worktree:orphan-worktree&kind=pma',
+      chatHref: '/chats?new=worktree:orphan-worktree&kind=pma',
       codingAgentChatHref: '/chats?new=worktree:orphan-worktree&kind=agent',
       signalWaiting: 0,
       signalFailed: 0,
@@ -261,7 +261,7 @@ describe('repo/worktree view models', () => {
       href: '/repos/repo-1/worktrees/worktree-1',
       ticketHref: '/repos/repo-1/worktrees/worktree-1/tickets',
       repoHref: '/repos/repo-1',
-      pmaChatHref: '/chats?new=worktree:worktree-1&kind=pma',
+      chatHref: '/chats?new=worktree:worktree-1&kind=pma',
       codingAgentChatHref: '/chats?new=worktree:worktree-1&kind=agent',
       signalWaiting: 0,
       signalFailed: 0,
@@ -356,7 +356,7 @@ describe('repo/worktree view models', () => {
       ticketHref: '/repos/repo-1/tickets/TICKET-110',
       chatHref: '/chats/chat-1'
     });
-    expect(vm.links.map((link) => link.label)).not.toContain('Open PMA chat');
+    expect(vm.links.map((link) => link.label)).not.toContain('Open chat');
     expect(vm.ticketIndexHref).toBe('/repos/repo-1/tickets');
     expect(vm.contextspaceHref).toBe('/repos/repo-1/contextspace');
     expect(vm.contextspace.find((doc) => doc.id === 'spec')).toMatchObject({

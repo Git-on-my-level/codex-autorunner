@@ -349,7 +349,7 @@ async def execute_queue_item(
 
     interrupt_event = await runtime.get_interrupt_event()
     if interrupt_event.is_set():
-        result = {"status": "interrupted", "detail": "PMA chat interrupted"}
+        result = {"status": "interrupted", "detail": "Managed thread interrupted"}
         return await _finalize_queue_result_payload(result)
 
     async def _meta(thread_id: str, turn_id: str) -> None:

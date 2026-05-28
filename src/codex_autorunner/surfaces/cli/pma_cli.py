@@ -616,7 +616,7 @@ def pma_interrupt(
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = hub_root_path_option(),
 ):
-    """Interrupt a running PMA chat."""
+    """Interrupt a running managed thread."""
     hub_root = resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
@@ -656,9 +656,9 @@ def pma_interrupt(
     else:
         response = PmaInterruptResponse.from_dict(data)
         if response.interrupted:
-            typer.echo(f"PMA chat interrupted (agent={response.agent})")
+            typer.echo(f"Managed thread interrupted (agent={response.agent})")
         else:
-            typer.echo("No active PMA chat to interrupt")
+            typer.echo("No active managed thread to interrupt")
             if response.detail:
                 typer.echo(f"Detail: {response.detail}")
 
@@ -710,7 +710,7 @@ def pma_active(
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = hub_root_path_option(),
 ):
-    """Show active PMA chat status."""
+    """Show active managed thread status."""
     hub_root = resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)

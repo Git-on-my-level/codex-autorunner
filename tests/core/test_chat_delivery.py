@@ -9,16 +9,16 @@ import pytest
 from codex_autorunner.adapters.discord.state import DiscordStateStore
 from codex_autorunner.adapters.telegram.state import TelegramStateStore, topic_key
 from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.core.chat_delivery import (
+    deliver_pma_notification,
+    notify_preferred_bound_chat_for_workspace,
+    notify_primary_pma_chat_for_repo,
+)
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import OrchestrationBindingStore
 from codex_autorunner.core.orchestration.chat_surface_events import (
     SQLiteChatSurfaceEventJournal,
-)
-from codex_autorunner.core.pma_chat_delivery import (
-    deliver_pma_notification,
-    notify_preferred_bound_chat_for_workspace,
-    notify_primary_pma_chat_for_repo,
 )
 from codex_autorunner.core.pma_notification_store import (
     PmaNotificationStore,

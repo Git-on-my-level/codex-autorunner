@@ -10,17 +10,17 @@ from ...core.chat_bindings import (
     resolve_repo_id_by_workspace_path,
     resolve_telegram_state_path,
 )
-from ...core.pma_chat_delivery import PmaChatDeliveryIntent
+from ...core.chat_delivery import ChatDeliveryIntent
 from ...core.pma_domain.models import PmaDeliveryAttempt
 from ...core.text_utils import _normalize_optional_text
 from ...core.time_utils import now_iso
 from ..chat.pma_delivery import (
-    PmaChatDeliveryAdapter,
-    PmaChatDeliveryAdapterResult,
-    PmaChatDeliveryRecord,
+    ChatDeliveryAdapter,
+    ChatDeliveryAdapterResult,
+    ChatDeliveryRecord,
 )
 from ..chat.pma_delivery_targets import (
-    PmaChatSurfaceBinding,
+    ChatSurfaceBinding,
     select_bound_pma_targets,
     select_explicit_pma_target,
     select_primary_pma_target,
@@ -52,8 +52,8 @@ def _notification_record(
     surface_key: str,
     delivery_record_id: str,
     workspace_root: Optional[str],
-) -> PmaChatDeliveryRecord:
-    return PmaChatDeliveryRecord(
+) -> ChatDeliveryRecord:
+    return ChatDeliveryRecord(
         delivery_mode=attempt.delivery_mode,
         surface_kind="telegram",
         surface_key=surface_key,
@@ -66,10 +66,10 @@ async def _telegram_surface_bindings_and_targets(
     store: TelegramStateStore,
     topics: Mapping[str, TelegramTopicRecord],
 ) -> tuple[
-    tuple[PmaChatSurfaceBinding, ...],
+    tuple[ChatSurfaceBinding, ...],
     dict[str, tuple[int, Optional[int]]],
 ]:
-    projected: list[PmaChatSurfaceBinding] = []
+    projected: list[ChatSurfaceBinding] = []
     parsed_targets: dict[str, tuple[int, Optional[int]]] = {}
     for surface_key in sorted(topics):
         topic = topics[surface_key]
@@ -82,7 +82,7 @@ async def _telegram_surface_bindings_and_targets(
             continue
         parsed_targets[surface_key] = (chat_id, thread_id)
         projected.append(
-            PmaChatSurfaceBinding(
+            ChatSurfaceBinding(
                 surface_key=surface_key,
                 workspace_path=_normalize_optional_text(
                     getattr(topic, "workspace_path", None)
@@ -100,19 +100,19 @@ async def _telegram_surface_bindings_and_targets(
     return tuple(projected), parsed_targets
 
 
-class TelegramPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
+class TelegramChatDeliveryAdapter(ChatDeliveryAdapter):
     @property
     def surface_kind(self) -> str:
         return "telegram"
 
     async def deliver_pma_attempt(
         self,
-        intent: PmaChatDeliveryIntent,
+        intent: ChatDeliveryIntent,
         *,
         attempt: PmaDeliveryAttempt,
         hub_root: Path,
         raw_config: Mapping[str, Any],
-    ) -> PmaChatDeliveryAdapterResult:
+    ) -> ChatDeliveryAdapterResult:
         if attempt.route == "explicit":
             return await self._deliver_explicit(
                 intent,
@@ -134,7 +134,7 @@ class TelegramPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
                 hub_root=hub_root,
                 raw_config=raw_config,
             )
-        return PmaChatDeliveryAdapterResult(
+        return ChatDeliveryAdapterResult(
             route=attempt.route,
             targets=0,
             published=0,
@@ -142,17 +142,15 @@ class TelegramPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
 
     async def _deliver_explicit(
         self,
-        intent: PmaChatDeliveryIntent,
+        intent: ChatDeliveryIntent,
         *,
         attempt: PmaDeliveryAttempt,
         hub_root: Path,
         raw_config: Mapping[str, Any],
-    ) -> PmaChatDeliveryAdapterResult:
+    ) -> ChatDeliveryAdapterResult:
         topic_surface_key = _normalize_optional_text(attempt.target.surface_key)
         if topic_surface_key is None:
-            return PmaChatDeliveryAdapterResult(
-                route="explicit", targets=0, published=0
-            )
+            return ChatDeliveryAdapterResult(route="explicit", targets=0, published=0)
         created_at = now_iso()
         store = TelegramStateStore(resolve_telegram_state_path(hub_root, raw_config))
         try:
@@ -165,7 +163,7 @@ class TelegramPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
                 bindings=bindings,
             )
             if target is None:
-                return PmaChatDeliveryAdapterResult(
+                return ChatDeliveryAdapterResult(
                     route="explicit",
                     targets=0,
                     published=0,
@@ -184,7 +182,7 @@ class TelegramPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
                 workspace_root=None,
             )
             if await store.get_outbox(record_id) is not None:
-                return PmaChatDeliveryAdapterResult(
+                return ChatDeliveryAdapterResult(
                     route="explicit",
                     targets=1,
                     published=0,
@@ -206,7 +204,7 @@ class TelegramPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
                     ),
                 )
             )
-            return PmaChatDeliveryAdapterResult(
+            return ChatDeliveryAdapterResult(
                 route="explicit",
                 targets=1,
                 published=1,
@@ -217,12 +215,12 @@ class TelegramPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
 
     async def _deliver_bound(
         self,
-        intent: PmaChatDeliveryIntent,
+        intent: ChatDeliveryIntent,
         *,
         attempt: PmaDeliveryAttempt,
         hub_root: Path,
         raw_config: Mapping[str, Any],
-    ) -> PmaChatDeliveryAdapterResult:
+    ) -> ChatDeliveryAdapterResult:
         workspace_root = attempt.workspace_root
         repo_id_by_workspace = resolve_repo_id_by_workspace_path(hub_root, raw_config)
         created_at = now_iso()
@@ -239,7 +237,7 @@ class TelegramPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
                 bindings=bindings,
                 repo_id_by_workspace=repo_id_by_workspace,
             )
-            delivery_records: list[PmaChatDeliveryRecord] = []
+            delivery_records: list[ChatDeliveryRecord] = []
             for target in targets:
                 surface_key = target.surface_key
                 chat_id, thread_id = parsed_targets[surface_key]
@@ -276,7 +274,7 @@ class TelegramPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
                     )
                 )
                 published += 1
-            return PmaChatDeliveryAdapterResult(
+            return ChatDeliveryAdapterResult(
                 route="bound",
                 targets=len(targets),
                 published=published,
@@ -287,12 +285,12 @@ class TelegramPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
 
     async def _deliver_primary_pma(
         self,
-        intent: PmaChatDeliveryIntent,
+        intent: ChatDeliveryIntent,
         *,
         attempt: PmaDeliveryAttempt,
         hub_root: Path,
         raw_config: Mapping[str, Any],
-    ) -> PmaChatDeliveryAdapterResult:
+    ) -> ChatDeliveryAdapterResult:
         repo_id_by_workspace = resolve_repo_id_by_workspace_path(hub_root, raw_config)
         created_at = now_iso()
         store = TelegramStateStore(resolve_telegram_state_path(hub_root, raw_config))
@@ -322,7 +320,7 @@ class TelegramPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
                     workspace_root=target.workspace_root,
                 )
                 if await store.get_outbox(record_id) is not None:
-                    return PmaChatDeliveryAdapterResult(
+                    return ChatDeliveryAdapterResult(
                         route="primary_pma",
                         targets=1,
                         published=0,
@@ -344,7 +342,7 @@ class TelegramPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
                         ),
                     )
                 )
-                return PmaChatDeliveryAdapterResult(
+                return ChatDeliveryAdapterResult(
                     route="primary_pma",
                     targets=1,
                     published=1,
@@ -352,11 +350,11 @@ class TelegramPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
                 )
         finally:
             await store.close()
-        return PmaChatDeliveryAdapterResult(
+        return ChatDeliveryAdapterResult(
             route="primary_pma",
             targets=0,
             published=0,
         )
 
 
-__all__ = ["TelegramPmaChatDeliveryAdapter"]
+__all__ = ["TelegramChatDeliveryAdapter"]

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import type { SurfaceArtifact } from '$lib/viewModels/domain';
-  import { artifactCardView } from '$lib/viewModels/pmaChat';
+  import { artifactCardView } from '$lib/viewModels/chat';
 
   let { artifact }: { artifact: SurfaceArtifact } = $props();
 

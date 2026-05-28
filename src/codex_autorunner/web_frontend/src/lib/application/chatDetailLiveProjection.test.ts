@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ApiError, ApiResult, PmaThreadQueue } from '$lib/api/client';
+import type { ApiError, ApiResult, ChatThreadQueue } from '$lib/api/client';
 import type { TranscriptStreamOptions } from '$lib/api/streaming';
 import { ReadModelEntityStore } from '$lib/data/readModelStore';
 import {
@@ -7,9 +7,9 @@ import {
   type ChatDetailLiveProjectionApi,
   type ChatDetailLiveProjectionDeps
 } from '$lib/application/chatDetailLiveProjection';
-import { buildOptimisticUserTranscriptCard } from '$lib/application/pmaChatArchitecture';
-import type { PmaChatSummary } from '$lib/viewModels/domain';
-import type { ChatTranscriptCard, ChatTranscriptSnapshot } from '$lib/viewModels/pmaChat';
+import { buildOptimisticUserTranscriptCard } from '$lib/application/chatDetailOptimistic';
+import type { ChatSummary } from '$lib/viewModels/domain';
+import type { ChatTranscriptCard, ChatTranscriptSnapshot } from '$lib/viewModels/chat';
 
 const now = '2026-05-18T01:02:03.000Z';
 
@@ -28,7 +28,7 @@ describe('ChatDetailLiveProjection', () => {
 
     const snapshot = store.snapshot();
     expect(snapshot.chatTranscripts['chat-1'].order).toEqual(['assistant-1', 'optimistic:user:client-1']);
-    expect(snapshot.pmaQueues['chat-1'].map((turn) => turn.managedTurnId)).toEqual(['turn-2']);
+    expect(snapshot.chatQueues['chat-1'].map((turn) => turn.managedTurnId)).toEqual(['turn-2']);
     expect(projection.snapshot().loadingActive).toBe(false);
   });
 
@@ -51,8 +51,8 @@ describe('ChatDetailLiveProjection', () => {
 
     const snapshot = store.snapshot();
     expect(snapshot.chatTranscripts['chat-1'].order).toEqual(['assistant-1']);
-    expect(snapshot.pmaProgress['chat-1'].id).toBe('turn-1');
-    expect(snapshot.pmaProgress['chat-1'].elapsedSeconds).toBe(7);
+    expect(snapshot.chatProgress['chat-1'].id).toBe('turn-1');
+    expect(snapshot.chatProgress['chat-1'].elapsedSeconds).toBe(7);
   });
 
   it('schedules one bounded repair snapshot after interrupted streams', async () => {
@@ -169,7 +169,7 @@ describe('ChatDetailLiveProjection', () => {
     await Promise.resolve();
 
     expect(api.getQueueCalls).toBe(1);
-    expect(store.snapshot().pmaQueues['chat-1'].map((turn) => turn.managedTurnId)).toEqual([
+    expect(store.snapshot().chatQueues['chat-1'].map((turn) => turn.managedTurnId)).toEqual([
       'queued-after-terminal'
     ]);
   });
@@ -177,7 +177,7 @@ describe('ChatDetailLiveProjection', () => {
   it('clears projection data and surfaces an error when the managed thread is missing', async () => {
     const store = new ReadModelEntityStore();
     store.replaceChatTranscript('chat-1', [messageCard('chat-1', 'old', 'assistant', 'old')]);
-    store.setPmaQueue('chat-1', [queuedTurn('old-turn')]);
+    store.setChatQueue('chat-1', [queuedTurn('old-turn')]);
     const missing = missingThreadError();
     const projection = projectionFixture(
       store,
@@ -190,7 +190,7 @@ describe('ChatDetailLiveProjection', () => {
     await projection.refresh('chat-1');
 
     expect(store.snapshot().chatTranscripts['chat-1'].order).toEqual([]);
-    expect(store.snapshot().pmaQueues['chat-1']).toEqual([]);
+    expect(store.snapshot().chatQueues['chat-1']).toEqual([]);
     expect(projection.snapshot().activeError).toBe(missing);
   });
 
@@ -278,9 +278,9 @@ function projectionFixture(
 
 function apiFixture(options: {
   transcriptRows?: ChatTranscriptCard[];
-  queuedTurns?: PmaThreadQueue['queuedTurns'];
+  queuedTurns?: ChatThreadQueue['queuedTurns'];
   transcriptResult?: ApiResult<ChatTranscriptSnapshot>;
-  queueResult?: ApiResult<PmaThreadQueue>;
+  queueResult?: ApiResult<ChatThreadQueue>;
 } = {}): ChatDetailLiveProjectionApi & { getTranscriptCalls: number; getQueueCalls: number } {
   return {
     getTranscriptCalls: 0,
@@ -415,7 +415,7 @@ function rawProgress(chatId: string, turnId: string, overrides: Record<string, u
   };
 }
 
-function queuedTurn(id: string): PmaThreadQueue['queuedTurns'][number] {
+function queuedTurn(id: string): ChatThreadQueue['queuedTurns'][number] {
   return {
     managedTurnId: id,
     position: 1,
@@ -430,7 +430,7 @@ function queuedTurn(id: string): PmaThreadQueue['queuedTurns'][number] {
   };
 }
 
-function chatSummary(id: string): PmaChatSummary {
+function chatSummary(id: string): ChatSummary {
   return {
     id,
     title: id,

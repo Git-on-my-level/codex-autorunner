@@ -577,7 +577,7 @@ async def test_send_message_promotes_first_message_to_car_owned_title(
     thread = service.create_thread_target(
         "codex",
         workspace_root,
-        display_name="New PMA chat",
+        display_name="New chat",
     )
 
     await service.send_message(
@@ -610,7 +610,7 @@ async def test_provider_title_updates_generic_car_title_and_metadata(
     thread = service.create_thread_target(
         "codex",
         workspace_root,
-        display_name="New PMA chat",
+        display_name="New chat",
     )
 
     await service.send_message(

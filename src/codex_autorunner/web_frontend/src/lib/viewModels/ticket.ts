@@ -1,15 +1,15 @@
-import type { PmaChatSummary, PmaRunProgress, PmaTimelineItem, SurfaceArtifact, TicketDetail, TicketSummary, WorkStatus } from './domain';
+import type { ChatSummary, ChatRunProgress, ChatTimelineItem, SurfaceArtifact, TicketDetail, TicketSummary, WorkStatus } from './domain';
 import {
   buildManagedThreadCreatePayload,
   formatRelativeTime,
-  pmaChatKind,
-  pmaChatKindLabel,
+  chatKind,
+  chatKindLabel,
   progressPercent,
   statusLabel,
-  type PmaChatKind,
+  type ChatKind,
   type ManagedThreadCreatePayload,
-  type PmaChatScopeOption
-} from './pmaChat';
+  type ChatScopeOption
+} from './chat';
 import { chatRoute, repoRoute, repoTicketRoute, worktreeRoute, worktreeTicketRoute } from './routes';
 import {
   aliasesOverlap,
@@ -23,10 +23,10 @@ export type TicketFilter = 'all' | 'needs_attention' | 'active' | 'waiting' | 'f
 
 export type TicketSourceData = {
   tickets: TicketSummary[];
-  runs: PmaRunProgress[];
-  chats: PmaChatSummary[];
+  runs: ChatRunProgress[];
+  chats: ChatSummary[];
   artifacts: SurfaceArtifact[];
-  timeline?: PmaTimelineItem[];
+  timeline?: ChatTimelineItem[];
 };
 
 export type TicketWorkerActivityItem = {
@@ -173,7 +173,7 @@ export type TicketLinkedChat = {
   agentId: string | null;
   model: string | null;
   href: string;
-  kind: PmaChatKind;
+  kind: ChatKind;
   kindLabel: string;
   updatedAt: string | null;
 };
@@ -304,13 +304,13 @@ function ticketMatchesOwner(ticket: TicketSummary, owner: Exclude<TicketOwnerSco
   return scope.kind === owner.kind && scope.id === owner.id;
 }
 
-function chatMatchesOwner(chat: PmaChatSummary, owner: Exclude<TicketOwnerScope, null>): boolean {
+function chatMatchesOwner(chat: ChatSummary, owner: Exclude<TicketOwnerScope, null>): boolean {
   return owner.kind === 'repo'
     ? chat.repoId === owner.id && !chat.worktreeId
     : chat.worktreeId === owner.id;
 }
 
-function pickCurrentChatId(chats: PmaChatSummary[], currentTicketId: string | null): string | null {
+function pickCurrentChatId(chats: ChatSummary[], currentTicketId: string | null): string | null {
   if (!currentTicketId) return null;
   const matches = chats.filter((chat) => chat.ticketId === currentTicketId);
   if (matches.length === 0) return null;
@@ -562,7 +562,7 @@ function stringField(raw: Record<string, unknown>, key: string): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
-export function ticketRepairChatScope(ticket: TicketDetailViewModel): PmaChatScopeOption {
+export function ticketRepairChatScope(ticket: TicketDetailViewModel): ChatScopeOption {
   const parentRepoId =
     stringField(ticket.raw, 'repo_id') ??
     stringField(ticket.raw, 'base_repo_id') ??
@@ -608,7 +608,7 @@ export function buildTicketRepairPrompt(ticket: TicketDetailViewModel): string {
   return `Please repair this CAR ticket frontmatter and lint the ticket queue.\n\nHub root: ${hubRoot}\nWorkspace root: ${workspaceRoot}\nTicket path: ${ticketPath}\nAbsolute ticket path: ${workspaceRoot}/${ticketPath}\n\nValidation errors:\n${errors}\n\nRequirements:\n- Edit only the ticket file unless linting reveals directly related ticket metadata issues.\n- Fix the YAML frontmatter so the ticket can run.\n- Preserve the ticket body content.\n- Run: car tickets lint --repo "${workspaceRoot}"\n- Report exactly what changed and the lint result.`;
 }
 
-export function mergeTicketRunProgress(runs: PmaRunProgress[], progress: PmaRunProgress | null): PmaRunProgress[] {
+export function mergeTicketRunProgress(runs: ChatRunProgress[], progress: ChatRunProgress | null): ChatRunProgress[] {
   if (!progress) return runs;
   const index = runs.findIndex((run) => run.id === progress.id);
   if (index === -1) return [progress, ...runs];
@@ -687,22 +687,22 @@ export function rowRelativeTime(row: { updatedAt?: string | null; createdAt?: st
 
 type TicketLookup = {
   ticketAliasesById: Map<string, Set<string>>;
-  runsByAlias: Map<string, PmaRunProgress[]>;
+  runsByAlias: Map<string, ChatRunProgress[]>;
   runOrder: Map<string, number>;
-  chatsByAlias: Map<string, PmaChatSummary[]>;
-  chatById: Map<string, PmaChatSummary>;
+  chatsByAlias: Map<string, ChatSummary[]>;
+  chatById: Map<string, ChatSummary>;
 };
 
 function buildTicketLookup(source: TicketSourceData): TicketLookup {
   const ticketAliasesById = new Map(source.tickets.map((ticket) => [ticket.id, ticketAliases(ticket)]));
-  const runsByAlias = new Map<string, PmaRunProgress[]>();
+  const runsByAlias = new Map<string, ChatRunProgress[]>();
   const runOrder = new Map<string, number>();
   source.runs.forEach((run, index) => {
     runOrder.set(run.id, index);
     for (const alias of ticketAliasesFromRun(run)) appendMapList(runsByAlias, alias, run);
   });
-  const chatsByAlias = new Map<string, PmaChatSummary[]>();
-  const chatById = new Map<string, PmaChatSummary>();
+  const chatsByAlias = new Map<string, ChatSummary[]>();
+  const chatById = new Map<string, ChatSummary>();
   for (const chat of source.chats) {
     chatById.set(chat.id, chat);
     for (const alias of ticketAliasesFromChat(chat)) appendMapList(chatsByAlias, alias, chat);
@@ -716,7 +716,7 @@ function appendMapList<T>(map: Map<string, T[]>, key: string, value: T): void {
   else map.set(key, [value]);
 }
 
-function ticketAliasesFromChat(chat: PmaChatSummary): Set<string> {
+function ticketAliasesFromChat(chat: ChatSummary): Set<string> {
   const aliases = new Set<string>();
   for (const value of [
     chat.ticketId,
@@ -792,7 +792,7 @@ function compactJson(value: Record<string, unknown>): string | null {
   }
 }
 
-function findQueueRun(runs: PmaRunProgress[], owner: Exclude<TicketOwnerScope, null>): TicketQueueRun | null {
+function findQueueRun(runs: ChatRunProgress[], owner: Exclude<TicketOwnerScope, null>): TicketQueueRun | null {
   const matchingRuns = runs.filter((run) => runMatchesOwner(run, owner) && !isPendingStopRequestedRun(run));
   return (
     matchingRuns.find((run) => run.status === 'running') ??
@@ -802,7 +802,7 @@ function findQueueRun(runs: PmaRunProgress[], owner: Exclude<TicketOwnerScope, n
   );
 }
 
-function isPendingStopRequestedRun(run: PmaRunProgress): boolean {
+function isPendingStopRequestedRun(run: ChatRunProgress): boolean {
   const rawStatus = stringFromRaw(run.raw, ['status']) ?? run.status;
   const stopRequested = booleanFromRaw(run.raw, ['stop_requested']);
   return String(rawStatus).trim().toLowerCase() === 'pending' && stopRequested === true;
@@ -822,7 +822,7 @@ function findQueueRunFromRows(rows: TicketListRow[]): TicketQueueRun | null {
 
 function buildQueueActions(
   queueRun: TicketQueueRun | null,
-  runs: PmaRunProgress[],
+  runs: ChatRunProgress[],
   actionManifest: SurfaceActionManifest | null
 ): TicketQueueAction[] {
   const manifestActions = actionsFromManifest(actionManifest);
@@ -882,7 +882,7 @@ function orderQueueActions(actions: TicketQueueAction[]): TicketQueueAction[] {
     .filter((action): action is TicketQueueAction => Boolean(action));
 }
 
-function runMatchesOwner(run: PmaRunProgress, owner: Exclude<TicketOwnerScope, null>): boolean {
+function runMatchesOwner(run: ChatRunProgress, owner: Exclude<TicketOwnerScope, null>): boolean {
   const raw = run.raw;
   const resourceKind = stringFromRaw(raw, ['resource_kind', 'state.resource_kind', 'input_data.resource_kind']);
   const resourceId = stringFromRaw(raw, ['resource_id', 'state.resource_id', 'input_data.resource_id']);
@@ -967,7 +967,7 @@ function rowMatchesWorkspaceFilter(row: TicketListRow, workspaceFilter: string):
 
 function buildTimeline(
   detail: TicketDetail,
-  run: PmaRunProgress | null,
+  run: ChatRunProgress | null,
   artifacts: SurfaceArtifact[],
   chatHref: string | null
 ): TicketTimelineItem[] {
@@ -1055,8 +1055,8 @@ function finishSection(section: TicketContractSection): TicketContractSection {
   return { ...section, body: section.body.trim() };
 }
 
-function linkedChatToVm(chat: PmaChatSummary): TicketLinkedChat {
-  const kind = pmaChatKind(chat);
+function linkedChatToVm(chat: ChatSummary): TicketLinkedChat {
+  const kind = chatKind(chat);
   return {
     id: chat.id,
     title: chat.title,
@@ -1065,14 +1065,14 @@ function linkedChatToVm(chat: PmaChatSummary): TicketLinkedChat {
     model: chat.model,
     href: chatRoute(chat.id),
     kind,
-    kindLabel: pmaChatKindLabel(kind),
+    kindLabel: chatKindLabel(kind),
     updatedAt: chat.updatedAt
   };
 }
 
-function findTicketRun(ticket: TicketSummary, runs: PmaRunProgress[], lookup: TicketLookup | null = null): PmaRunProgress | null {
+function findTicketRun(ticket: TicketSummary, runs: ChatRunProgress[], lookup: TicketLookup | null = null): ChatRunProgress | null {
   if (lookup) {
-    const candidates = new Map<string, PmaRunProgress>();
+    const candidates = new Map<string, ChatRunProgress>();
     for (const alias of lookup.ticketAliasesById.get(ticket.id) ?? ticketAliases(ticket)) {
       for (const run of lookup.runsByAlias.get(alias) ?? []) candidates.set(run.id, run);
     }
@@ -1084,13 +1084,13 @@ function findTicketRun(ticket: TicketSummary, runs: PmaRunProgress[], lookup: Ti
   return runs.find((run) => aliasesOverlap(aliases, ticketAliasesFromRun(run))) ?? null;
 }
 
-function findTicketChat(ticket: TicketSummary, chats: PmaChatSummary[], run: PmaRunProgress | null, lookup: TicketLookup | null = null): PmaChatSummary | null {
+function findTicketChat(ticket: TicketSummary, chats: ChatSummary[], run: ChatRunProgress | null, lookup: TicketLookup | null = null): ChatSummary | null {
   return findTicketChats(ticket, chats, run, lookup)[0] ?? null;
 }
 
-function findTicketChats(ticket: TicketSummary, chats: PmaChatSummary[], run: PmaRunProgress | null, lookup: TicketLookup | null = null): PmaChatSummary[] {
+function findTicketChats(ticket: TicketSummary, chats: ChatSummary[], run: ChatRunProgress | null, lookup: TicketLookup | null = null): ChatSummary[] {
   if (lookup) {
-    const matchedById = new Map<string, PmaChatSummary>();
+    const matchedById = new Map<string, ChatSummary>();
     if (run?.chatId) {
       const runChat = lookup.chatById.get(run.chatId);
       if (runChat) matchedById.set(runChat.id, runChat);
@@ -1111,7 +1111,7 @@ function findTicketChats(ticket: TicketSummary, chats: PmaChatSummary[], run: Pm
   return orderTicketChats(matched, run);
 }
 
-function orderTicketChats(chats: PmaChatSummary[], run: PmaRunProgress | null): PmaChatSummary[] {
+function orderTicketChats(chats: ChatSummary[], run: ChatRunProgress | null): ChatSummary[] {
   // Active run's chat first, then by recency, with the active chat retained as the canonical primary.
   return chats.sort((a, b) => {
     const aRun = run?.chatId === a.id ? 0 : 1;
@@ -1129,7 +1129,7 @@ function numericTicketAlias(value: string): string | null {
   return /^\d+$/.test(value) ? `TICKET-${value.padStart(3, '0')}` : null;
 }
 
-function syntheticChat(ticket: TicketDetail, run: PmaRunProgress): PmaChatSummary {
+function syntheticChat(ticket: TicketDetail, run: ChatRunProgress): ChatSummary {
   return {
     id: ticket.chatKey ?? ticket.id,
     title: ticket.title,

@@ -1,4 +1,4 @@
-import type { ApiError, ApiResult, JsonRecord, PmaThreadQueue } from '$lib/api/client';
+import type { ApiError, ApiResult, JsonRecord, ChatThreadQueue } from '$lib/api/client';
 import {
   openChatTranscriptEventSource,
   shouldUseChatTranscriptStream,
@@ -8,15 +8,15 @@ import {
 } from '$lib/api/streaming';
 import type { ReadModelEntityStore } from '$lib/data/readModelStore';
 import {
-  mergePmaProgressUpdate,
   mergeTranscriptSnapshotWithPendingOptimistic
-} from '$lib/application/pmaChatArchitecture';
-import { mapPmaRunProgress, type PmaChatSummary, type PmaRunProgress } from '$lib/viewModels/domain';
+} from '$lib/application/chatDetailOptimistic';
+import { mergeChatProgressUpdate } from '$lib/application/chatDetailProgress';
+import { mapChatRunProgress, type ChatSummary, type ChatRunProgress } from '$lib/viewModels/domain';
 import {
   mapChatTranscriptRows,
   type ChatTranscriptCard,
   type ChatTranscriptSnapshot
-} from '$lib/viewModels/pmaChat';
+} from '$lib/viewModels/chat';
 
 export type ChatDetailStreamState = 'idle' | 'connecting' | 'connected' | 'interrupted';
 
@@ -29,7 +29,7 @@ export type ChatDetailLiveProjectionState = {
 
 export type ChatDetailLiveProjectionApi = {
   getTranscript: (chatId: string, request?: { limit?: number }) => Promise<ApiResult<ChatTranscriptSnapshot>>;
-  getQueue: (chatId: string) => Promise<ApiResult<PmaThreadQueue>>;
+  getQueue: (chatId: string) => Promise<ApiResult<ChatThreadQueue>>;
 };
 
 export type ChatDetailLiveProjectionOptions = {
@@ -42,7 +42,7 @@ export type ChatDetailLiveProjectionOptions = {
 export type ChatDetailLiveProjectionDeps = {
   api: ChatDetailLiveProjectionApi;
   readModelStore: ReadModelEntityStore;
-  getChatSummary: (chatId: string) => PmaChatSummary | null;
+  getChatSummary: (chatId: string) => ChatSummary | null;
   onStateChange?: (state: ChatDetailLiveProjectionState) => void;
   openStream?: (chatId: string, options: TranscriptStreamOptions) => StreamSubscription;
   shouldUseStream?: typeof shouldUseChatTranscriptStream;
@@ -60,7 +60,7 @@ const DEFAULT_REPAIR_DELAY_MS = 900;
 export class ChatDetailLiveProjection {
   private readonly api: ChatDetailLiveProjectionApi;
   private readonly readModelStore: ReadModelEntityStore;
-  private readonly getChatSummary: (chatId: string) => PmaChatSummary | null;
+  private readonly getChatSummary: (chatId: string) => ChatSummary | null;
   private readonly onStateChange: ((state: ChatDetailLiveProjectionState) => void) | undefined;
   private readonly openStream: (chatId: string, options: TranscriptStreamOptions) => StreamSubscription;
   private readonly shouldUseStream: typeof shouldUseChatTranscriptStream;
@@ -156,10 +156,10 @@ export class ChatDetailLiveProjection {
     const queueTask = this.api.getQueue(chatId).then((result) => {
       if (!this.isCurrent(chatId, refreshSeq)) return;
       if (result.ok) {
-        this.readModelStore.setPmaQueue(chatId, result.data.queuedTurns);
+        this.readModelStore.setChatQueue(chatId, result.data.queuedTurns);
       } else if (isMissingManagedThreadError(result.error)) {
         missingThreadError = result.error;
-        this.readModelStore.setPmaQueue(chatId, []);
+        this.readModelStore.setChatQueue(chatId, []);
       }
     });
 
@@ -179,9 +179,9 @@ export class ChatDetailLiveProjection {
     const result = await this.api.getQueue(chatId);
     if (this.activeChatId !== chatId || refreshSeq !== this.activeQueueRefreshSeq) return;
     if (result.ok) {
-      this.readModelStore.setPmaQueue(chatId, result.data.queuedTurns);
+      this.readModelStore.setChatQueue(chatId, result.data.queuedTurns);
     } else if (isMissingManagedThreadError(result.error)) {
-      this.readModelStore.setPmaQueue(chatId, []);
+      this.readModelStore.setChatQueue(chatId, []);
     }
   }
 
@@ -244,7 +244,7 @@ export class ChatDetailLiveProjection {
       this.replaceTranscriptPreservingPendingOptimistic(chatId, rows);
       const status = event.payload.status;
       if (status && typeof status === 'object' && !Array.isArray(status)) {
-        const nextProgress = mapPmaRunProgress(status as JsonRecord);
+        const nextProgress = mapChatRunProgress(status as JsonRecord);
         this.updateProgress(nextProgress);
         if (nextProgress.terminal && nextProgress.id && transcriptHasAssistantMessageForTurn(rows, nextProgress.id)) {
           this.refreshedTerminalTurnId = nextProgress.id;
@@ -260,7 +260,7 @@ export class ChatDetailLiveProjection {
     if (event.kind === 'transcript_patch') {
       const status = event.payload.status;
       if (!status || typeof status !== 'object' || Array.isArray(status)) return;
-      const nextProgress = mapPmaRunProgress(status as JsonRecord);
+      const nextProgress = mapChatRunProgress(status as JsonRecord);
       this.updateProgress(nextProgress);
       if (nextProgress.terminal && nextProgress.id && this.refreshedTerminalTurnId !== nextProgress.id) {
         this.refreshedTerminalTurnId = nextProgress.id;
@@ -329,21 +329,21 @@ export class ChatDetailLiveProjection {
     this.setState({ streamState: 'idle' });
   }
 
-  private updateProgress(nextProgress: PmaRunProgress): void {
+  private updateProgress(nextProgress: ChatRunProgress): void {
     const chatId = nextProgress.chatId ?? this.activeChatId;
     if (!chatId) return;
-    this.readModelStore.setPmaProgress(
+    this.readModelStore.setChatProgress(
       chatId,
-      mergePmaProgressUpdate(this.currentProgress(chatId), nextProgress, this.now())
+      mergeChatProgressUpdate(this.currentProgress(chatId), nextProgress, this.now())
     );
   }
 
-  private currentProgress(chatId: string): PmaRunProgress | null {
-    return this.readModelStore.snapshot().pmaProgress[chatId] ?? null;
+  private currentProgress(chatId: string): ChatRunProgress | null {
+    return this.readModelStore.snapshot().chatProgress[chatId] ?? null;
   }
 
   private currentQueueDepth(chatId: string): number {
-    return this.readModelStore.snapshot().pmaQueues[chatId]?.length ?? 0;
+    return this.readModelStore.snapshot().chatQueues[chatId]?.length ?? 0;
   }
 
   private replaceTranscriptPreservingPendingOptimistic(chatId: string, rows: ChatTranscriptCard[]): void {

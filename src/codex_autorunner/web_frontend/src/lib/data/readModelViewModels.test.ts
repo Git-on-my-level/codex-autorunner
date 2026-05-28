@@ -2,15 +2,15 @@ import { describe, expect, it } from 'vitest';
 import type { ChatIndexRow, RepoWorktreeRuntimeSnapshot, RepoWorktreeTopologySnapshot } from '$lib/api/readModelContracts';
 import { ReadModelEntityStore } from './readModelStore';
 import {
-  chatIndexRowToPmaChatSummary,
+  chatIndexRowToChatSummary,
   legacyChatIndexRecordToChatIndexRow,
-  pmaChatSummaryToChatIndexRow,
-  selectPmaChats,
+  chatSummaryToChatIndexRow,
+  selectChats,
   selectRepoSummaries,
   selectTicketRunGroups,
   selectWorktreeSummaries
 } from './readModelViewModels';
-import { chatSurfaceFilterToken, filterPmaChats } from '$lib/viewModels/pmaChat';
+import { chatSurfaceFilterToken, filterChats } from '$lib/viewModels/chat';
 import { buildRepoWorktreeIndexViewModel } from '$lib/viewModels/repoWorktree';
 
 const now = '2026-05-11T12:00:00Z';
@@ -27,11 +27,11 @@ describe('read model view-model selectors', () => {
       lastActivityAt: now
     };
     expect(row.status).toBe('archived');
-    const summary = chatIndexRowToPmaChatSummary(row);
+    const summary = chatIndexRowToChatSummary(row);
     expect(summary.lifecycleStatus).toBe('archived');
   });
 
-  it('maps chat rows to existing PMA chat summaries', () => {
+  it('maps chat rows to existing chat summaries', () => {
     const row: ChatIndexRow = {
       chatId: 'chat-1',
       surface: 'discord',
@@ -83,7 +83,7 @@ describe('read model view-model selectors', () => {
       }
     };
 
-    const summary = chatIndexRowToPmaChatSummary(row);
+    const summary = chatIndexRowToChatSummary(row);
     expect(summary.id).toBe('chat-1');
     expect(summary.status).toBe('waiting');
     expect(summary.chatKind).toBe('coding_agent');
@@ -94,13 +94,13 @@ describe('read model view-model selectors', () => {
     expect(summary.isTicketFlow).toBe(true);
     expect(summary.raw.surface_kind).toBe('discord');
     expect(summary.raw.agent_profile).toBe('m4-pma');
-    expect(pmaChatSummaryToChatIndexRow(summary).chatKind).toBe('coding_agent');
-    expect(pmaChatSummaryToChatIndexRow(summary).agentProfile).toBe('m4-pma');
-    expect(pmaChatSummaryToChatIndexRow(summary).chatId).toBe('chat-1');
-    expect(pmaChatSummaryToChatIndexRow(summary).unreadCount).toBe(2);
-    expect(pmaChatSummaryToChatIndexRow(summary).runtime?.stage).toBe('effective');
-    expect(pmaChatSummaryToChatIndexRow(summary).modelSource).toBe('effective.canonical_model_label');
-    expect(pmaChatSummaryToChatIndexRow(summary).facets?.category).toBe('ticket_run');
+    expect(chatSummaryToChatIndexRow(summary).chatKind).toBe('coding_agent');
+    expect(chatSummaryToChatIndexRow(summary).agentProfile).toBe('m4-pma');
+    expect(chatSummaryToChatIndexRow(summary).chatId).toBe('chat-1');
+    expect(chatSummaryToChatIndexRow(summary).unreadCount).toBe(2);
+    expect(chatSummaryToChatIndexRow(summary).runtime?.stage).toBe('effective');
+    expect(chatSummaryToChatIndexRow(summary).modelSource).toBe('effective.canonical_model_label');
+    expect(chatSummaryToChatIndexRow(summary).facets?.category).toBe('ticket_run');
   });
 
   it('trusts backend display titles for chat-bound rows', () => {
@@ -124,7 +124,7 @@ describe('read model view-model selectors', () => {
       }
     };
 
-    expect(chatIndexRowToPmaChatSummary(row).title).toBe('Personal Workspace / #car-1');
+    expect(chatIndexRowToChatSummary(row).title).toBe('Personal Workspace / #car-1');
   });
 
   it('does not infer titles from surface bindings when display title is available', () => {
@@ -154,7 +154,7 @@ describe('read model view-model selectors', () => {
       }
     };
 
-    expect(chatIndexRowToPmaChatSummary(row).title).toBe('Latest Telegram message');
+    expect(chatIndexRowToChatSummary(row).title).toBe('Latest Telegram message');
   });
 
   it('keeps active rebound chat-index rows visible despite stale raw surface archive fields', () => {
@@ -191,15 +191,15 @@ describe('read model view-model selectors', () => {
       ]
     };
 
-    const summary = chatIndexRowToPmaChatSummary(row);
+    const summary = chatIndexRowToChatSummary(row);
 
     expect(summary.lifecycleStatus).toBe('active');
-    expect(pmaChatSummaryToChatIndexRow(summary).status).toBe('running');
-    expect(filterPmaChats([summary], 'all', '').map((chat) => chat.id)).toEqual(['discord-rebound-active']);
-    expect(filterPmaChats([summary], chatSurfaceFilterToken('discord'), '').map((chat) => chat.id)).toEqual([
+    expect(chatSummaryToChatIndexRow(summary).status).toBe('running');
+    expect(filterChats([summary], 'all', '').map((chat) => chat.id)).toEqual(['discord-rebound-active']);
+    expect(filterChats([summary], chatSurfaceFilterToken('discord'), '').map((chat) => chat.id)).toEqual([
       'discord-rebound-active'
     ]);
-    expect(filterPmaChats([summary], 'archived', '').map((chat) => chat.id)).toEqual([]);
+    expect(filterChats([summary], 'archived', '').map((chat) => chat.id)).toEqual([]);
   });
 
   it('uses backend effective status before raw lifecycle detail', () => {
@@ -214,10 +214,10 @@ describe('read model view-model selectors', () => {
 
     expect(row.status).toBe('idle');
     expect(row.effectiveStatus).toBe('idle');
-    expect(chatIndexRowToPmaChatSummary(row).status).toBe('idle');
+    expect(chatIndexRowToChatSummary(row).status).toBe('idle');
   });
 
-  it('preserves unread counts through PMA chat row conversion', () => {
+  it('preserves unread counts through chat row conversion', () => {
     const row: ChatIndexRow = {
       chatId: 'chat-1',
       surface: 'pma',
@@ -227,13 +227,13 @@ describe('read model view-model selectors', () => {
       lastActivityAt: now
     };
 
-    const summary = chatIndexRowToPmaChatSummary(row);
+    const summary = chatIndexRowToChatSummary(row);
 
-    expect(pmaChatSummaryToChatIndexRow(summary).unreadCount).toBe(3);
+    expect(chatSummaryToChatIndexRow(summary).unreadCount).toBe(3);
   });
 
   it('flags generic ticket-flow rows as ticket flows for grouping', () => {
-    const summary = chatIndexRowToPmaChatSummary({
+    const summary = chatIndexRowToChatSummary({
       chatId: 'chat-ticket-flow',
       surface: 'pma',
       title: 'ticket-flow:hermes@m4-pma',
@@ -260,7 +260,7 @@ describe('read model view-model selectors', () => {
   });
 
   it('derives worktree ids from legacy resource owner fields', () => {
-    const summary = chatIndexRowToPmaChatSummary(
+    const summary = chatIndexRowToChatSummary(
       legacyChatIndexRecordToChatIndexRow({
         row_id: 'row-1',
         surface: 'discord',
@@ -302,10 +302,10 @@ describe('read model view-model selectors', () => {
     expect(row.lastActivityAt).toBe('2026-05-11T00:01:00Z');
     expect(row.lastVisibleMessageAt).toBe('2026-05-11T00:01:00Z');
     expect(row.lastLifecycleUpdateAt).toBe('2026-05-11T00:05:00Z');
-    const summary = chatIndexRowToPmaChatSummary(row);
+    const summary = chatIndexRowToChatSummary(row);
     expect(summary.updatedAt).toBe('2026-05-11T00:01:00Z');
     expect(summary.raw.debug).toEqual(row.debug);
-    expect(pmaChatSummaryToChatIndexRow(summary).debug).toEqual(row.debug);
+    expect(chatSummaryToChatIndexRow(summary).debug).toEqual(row.debug);
   });
 
   it('selects chat and repo/worktree summaries from normalized state', () => {
@@ -374,7 +374,7 @@ describe('read model view-model selectors', () => {
       }
     } satisfies RepoWorktreeRuntimeSnapshot);
 
-    expect(selectPmaChats(store.snapshot())[0].status).toBe('running');
+    expect(selectChats(store.snapshot())[0].status).toBe('running');
     expect(selectRepoSummaries(store.snapshot())[0].activeRuns).toBe(1);
     expect(selectRepoSummaries(store.snapshot())[0].raw.worktree_setup_commands).toEqual(['make setup']);
     expect(selectRepoSummaries(store.snapshot())[0].raw.is_pinned).toBe(true);
@@ -477,7 +477,7 @@ describe('read model view-model selectors', () => {
       window: { limit: 50, totalIsExact: true }
     }, request);
 
-    const summary = selectPmaChats(store.snapshot(), request)[0];
+    const summary = selectChats(store.snapshot(), request)[0];
     expect(summary.ticketDone).toBe(true);
     expect(summary.ticketStatus).toBe('done');
     expect(selectTicketRunGroups(store.snapshot(), request)[0].doneCount).toBe(3);

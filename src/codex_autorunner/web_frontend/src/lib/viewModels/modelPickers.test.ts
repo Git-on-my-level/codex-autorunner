@@ -12,7 +12,7 @@ import {
   modelRecordForValue,
   pickerReasoningOptions,
   resolveAgentModelSelection,
-  resolvePmaChatSelectorsForActiveChat
+  resolveChatSelectorsForActiveChat
 } from './modelPickers';
 
 describe('model picker helpers', () => {
@@ -140,7 +140,7 @@ describe('model picker helpers', () => {
       { id: 'zai-coding-plan/glm-5v-turbo', label: 'GLM 5V Turbo' }
     ];
     const rememberedModel = 'zai-coding-plan/glm-5v-turbo';
-    const resolved = resolvePmaChatSelectorsForActiveChat(
+    const resolved = resolveChatSelectorsForActiveChat(
       {
         id: 'chat-zai',
         title: 'Existing Z.ai chat',

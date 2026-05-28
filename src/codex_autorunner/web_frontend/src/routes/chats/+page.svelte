@@ -19,7 +19,7 @@
     type ChatFileBoxScope,
     type FileBoxName,
     type JsonRecord,
-    type PmaQueuedTurn
+    type ChatQueuedTurn
   } from '$lib/api/client';
   import {
     invalidateReadModelTags,
@@ -27,10 +27,10 @@
     readModelEntityTags,
     type ChatIndexWindowRequest,
     selectChatIndexWindowView,
-    selectPmaArtifacts,
-    selectPmaChats,
-    selectPmaProgress,
-    selectPmaQueue,
+    selectChatArtifacts,
+    selectChats,
+    selectChatProgress,
+    selectChatQueue,
     selectChatTranscript,
     selectTicketRunGroups,
     selectReadMarkers
@@ -41,12 +41,9 @@
     ChatFacetScopeKind,
     ChatFacetTransport
   } from '$lib/api/readModelContracts';
-  import {
-    buildChatDetailDisplayReadModel,
-    isOptimisticQueuedTurn,
-    progressWithLiveElapsed,
-    type ChatTranscriptListItem
-  } from '$lib/application/pmaChatArchitecture';
+  import { buildChatDetailDisplayReadModel, type ChatTranscriptListItem } from '$lib/application/chatDetailReadModel';
+  import { isOptimisticQueuedTurn } from '$lib/application/chatDetailOptimistic';
+  import { progressWithLiveElapsed } from '$lib/application/chatDetailProgress';
   import { createChatSendController } from '$lib/application/chatSendController';
   import {
     loadChatDraftRecords,
@@ -57,10 +54,7 @@
     type ChatDraftRecordMap
   } from '$lib/application/chatDraftStore';
   import { connectionStore } from '$lib/runtime/connectionStore.svelte';
-  import {
-    createChatDetailLiveProjection,
-    type ChatDetailLiveProjectionState
-  } from '$lib/application/chatDetailLiveProjection';
+  import { createChatDetailLiveProjection, type ChatDetailLiveProjectionState } from '$lib/application/chatDetailLiveProjection';
   import {
     chatListVirtualKey as chatListVirtualKeyForPins,
     chatSummaryForSessionId,
@@ -75,10 +69,7 @@
     togglePinnedChatId,
     type ChatDetailSessionState
   } from '$lib/application/chatDetailSession';
-  import {
-    createChatDetailPageController,
-    type ChatDetailPageSupportData
-  } from '$lib/application/chatDetailPageController';
+  import { createChatDetailPageController, type ChatDetailPageSupportData } from '$lib/application/chatDetailPageController';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import {
     buildChatsListHref,
@@ -106,8 +97,8 @@
     chatRoute
   } from '$lib/viewModels/routes';
   import type {
-    PmaChatSummary,
-    PmaRunProgress,
+    ChatSummary,
+    ChatRunProgress,
     ArtifactDelivery,
     SurfaceArtifact
   } from '$lib/viewModels/domain';
@@ -115,29 +106,29 @@
     adjustedUnreadFilterCount,
     buildSemanticChatListEntries,
     chatRunGroupSummaryParts,
-    buildPmaChatScopeOptions,
-    buildPmaLiveActivity,
+    buildChatScopeOptions,
+    buildChatLiveActivity,
     buildManagedThreadMessagePayload,
     countSemanticTicketRunGroups,
     filterChatEntries,
-    filterPmaChats,
+    filterChats,
     formatBytes,
     formatRelativeTime,
-    isPmaChatArchived,
-    localPmaChatScopeOption,
+    isChatArchived,
+    localChatScopeOption,
     mergeChatFacetSourceChats,
     mergeLocalChatPlaceholders,
     CHAT_FILTER_ORDER,
     CHAT_EXTERNAL_TRANSPORT_FILTERS,
     CHAT_TICKET_RUNS_FILTER,
-    pmaChatKind,
-    pmaChatKindLabel,
-    pmaChatHeaderScopeLine,
-    pmaChatBadgeViews,
-    pmaChatFacets,
+    chatKind,
+    chatKindLabel,
+    chatHeaderScopeLine,
+    chatBadgeViews,
+    chatFacets,
     chatCategoryLabel,
     chatTransportLabel,
-    pmaChatScopeTagView,
+    chatScopeTagView,
     progressPercent,
     visibleLocalChatPlaceholders as selectVisibleLocalChatPlaceholders,
     removePendingAttachment,
@@ -148,9 +139,9 @@
     type ChatStatusFilter,
     type ChatListEntry,
     type ChatRunGroup,
-    type PmaChatScopeOption,
-    type PmaChatScopeSource
-  } from '$lib/viewModels/pmaChat';
+    type ChatScopeOption,
+    type ChatScopeSource
+  } from '$lib/viewModels/chat';
   import {
     loadLastSeenMap,
     isChatUnread,
@@ -169,7 +160,7 @@
     modelLabel,
     pickerReasoningOptions,
     resolveAgentModelSelection,
-    resolvePmaChatSelectorsForActiveChat,
+    resolveChatSelectorsForActiveChat,
     stringField
   } from '$lib/viewModels/modelPickers';
   import { getLastModelForAgent, persistLastModelForAgent } from '$lib/viewModels/lastModelByAgent';
@@ -192,10 +183,10 @@
   // Unsent new chats are page-local only: `localDraftChat` drives the composer until
   // the first send creates the managed thread. They are intentionally omitted from
   // the sidebar index (`chats`) so leaving the flow does not surface a draft row.
-  let localDraftChat = $state<PmaChatSummary | null>(null);
+  let localDraftChat = $state<ChatSummary | null>(null);
   let agents = $state<JsonRecord[]>([]);
   let models = $state<JsonRecord[]>([]);
-  let scopeOptions = $state<PmaChatScopeOption[]>(buildPmaChatScopeOptions([], []));
+  let scopeOptions = $state<ChatScopeOption[]>(buildChatScopeOptions([], []));
   let pendingAttachments = $state<PendingAttachment[]>([]);
   let configuredDefaultAgentId = $state<string | undefined>(undefined);
   let configuredDefaultProfile = $state('');
@@ -213,7 +204,7 @@
   let selectedReasoning = $state('');
   let selectedProfile = $state('');
   let selectedScopeId = $state('local');
-  let selectedScopeSource = $state<PmaChatScopeSource>('default_hub');
+  let selectedScopeSource = $state<ChatScopeSource>('default_hub');
   let newChatKind = $state<'pma' | 'agent'>('pma');
   /** True when the scope picker should be locked. Set when entering chats via a
    *  non-local `?new=` deep-link from a repo or worktree page — the caller has
@@ -247,46 +238,46 @@
   const lastSeenMap = $derived<ChatLastSeenMap>(selectReadMarkers(readModelState) as ChatLastSeenMap);
   const currentChatIndexRequest = $derived<ChatIndexWindowRequest>(chatIndexRequestForCurrentFilters());
   const ticketRunGroupRequest = $derived<ChatIndexWindowRequest>(chatTicketRunGroupRequestForFilters());
-  const persistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState, currentChatIndexRequest));
-  const facetPersistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState, { filter: 'all', limit: 50 }));
+  const persistedChats = $derived<ChatSummary[]>(selectChats(readModelState, currentChatIndexRequest));
+  const facetPersistedChats = $derived<ChatSummary[]>(selectChats(readModelState, { filter: 'all', limit: 50 }));
   const backendTicketRunGroups = $derived(selectTicketRunGroups(readModelState, ticketRunGroupRequest));
   const currentTicketRunGroups = $derived(
     categoryFilter === 'ticket_run'
       ? selectTicketRunGroups(readModelState, currentChatIndexRequest)
       : backendTicketRunGroups
   );
-  const committedChatPlaceholders = $derived<PmaChatSummary[]>([]);
-  const visibleLocalChatPlaceholders = $derived<PmaChatSummary[]>(
+  const committedChatPlaceholders = $derived<ChatSummary[]>([]);
+  const visibleLocalChatPlaceholders = $derived<ChatSummary[]>(
     selectVisibleLocalChatPlaceholders(persistedChats, committedChatPlaceholders)
   );
-  const chats = $derived<PmaChatSummary[]>(
+  const chats = $derived<ChatSummary[]>(
     mergeLocalChatPlaceholders(persistedChats, committedChatPlaceholders)
   );
-  const persistedFacetChats = $derived<PmaChatSummary[]>(
+  const persistedFacetChats = $derived<ChatSummary[]>(
     mergeChatFacetSourceChats(facetPersistedChats, persistedChats)
   );
-  const facetChats = $derived<PmaChatSummary[]>(
+  const facetChats = $derived<ChatSummary[]>(
     mergeChatFacetSourceChats(facetPersistedChats, persistedChats, committedChatPlaceholders)
   );
-  const draftChats = $derived<PmaChatSummary[]>(
+  const draftChats = $derived<ChatSummary[]>(
     sortedChatDraftRecords(chatDraftRecords).map(draftRecordChatSummary)
   );
-  const filteredDraftChats = $derived<PmaChatSummary[]>(
+  const filteredDraftChats = $derived<ChatSummary[]>(
     filterDraftChatsForCurrentFilters(draftChats)
   );
-  const chatListSourceChats = $derived<PmaChatSummary[]>(
+  const chatListSourceChats = $derived<ChatSummary[]>(
     statusFilter === 'drafts' ? filteredDraftChats : categoryFilter === 'ticket_run' ? facetChats : chats
   );
   const activeChatId = $derived<string | null>(readModelState.activeChatId);
 
-  function chatSummaryForId(chatId: string | null): PmaChatSummary | null {
+  function chatSummaryForId(chatId: string | null): ChatSummary | null {
     return chatSummaryForSessionId(chatId, chats, localDraftChat)
-      ?? (chatId ? selectPmaChats(readModelState).find((chat) => chat.id === chatId) ?? null : null);
+      ?? (chatId ? selectChats(readModelState).find((chat) => chat.id === chatId) ?? null : null);
   }
 
-  function filterDraftChatsForCurrentFilters(source: PmaChatSummary[]): PmaChatSummary[] {
-    return filterPmaChats(source, 'drafts', search, lastSeenMap).filter((chat) => {
-      const facets = pmaChatFacets(chat);
+  function filterDraftChatsForCurrentFilters(source: ChatSummary[]): ChatSummary[] {
+    return filterChats(source, 'drafts', search, lastSeenMap).filter((chat) => {
+      const facets = chatFacets(chat);
       if (categoryFilter && facets?.category !== categoryFilter) return false;
       if (transportFilter && !facets?.transports.includes(transportFilter)) return false;
       if (scopeKindFilter && facets?.scopeKind !== scopeKindFilter) return false;
@@ -294,9 +285,9 @@
     });
   }
 
-  function draftRecordChatSummary(record: ChatDraftRecord): PmaChatSummary {
+  function draftRecordChatSummary(record: ChatDraftRecord): ChatSummary {
     const known =
-      selectPmaChats(readModelState).find((chat) => chat.id === record.chatId) ??
+      selectChats(readModelState).find((chat) => chat.id === record.chatId) ??
       (localDraftChat?.id === record.chatId ? localDraftChat : null) ??
       record.chatSnapshot ??
       null;
@@ -335,11 +326,11 @@
     };
   }
   const transcriptCards = $derived<ChatTranscriptCard[]>(selectChatTranscript(readModelState, activeChatId));
-  const progress = $derived<PmaRunProgress | null>(selectPmaProgress(readModelState, activeChatId));
-  const artifacts = $derived<SurfaceArtifact[]>(selectPmaArtifacts(readModelState, activeChatId));
+  const progress = $derived<ChatRunProgress | null>(selectChatProgress(readModelState, activeChatId));
+  const artifacts = $derived<SurfaceArtifact[]>(selectChatArtifacts(readModelState, activeChatId));
   const inboxArtifacts = $derived(artifacts.filter((artifact) => String(artifact.raw.box ?? '').toLowerCase() === 'inbox'));
   const outboxArtifacts = $derived(artifacts.filter((artifact) => String(artifact.raw.box ?? '').toLowerCase() === 'outbox'));
-  const queuedTurns = $derived<PmaQueuedTurn[]>(selectPmaQueue(readModelState, activeChatId));
+  const queuedTurns = $derived<ChatQueuedTurn[]>(selectChatQueue(readModelState, activeChatId));
   let draft = $state('');
   let loadingChats = $state(true);
   let loadingMoreChats = $state(false);
@@ -605,7 +596,7 @@
     )
   );
   const ticketRunGroupCount = $derived(countSemanticTicketRunGroups(backendTicketRunGroups, facetChats));
-  const localChatPlaceholderCount = $derived(visibleLocalChatPlaceholders.filter((chat) => !isPmaChatArchived(chat)).length);
+  const localChatPlaceholderCount = $derived(visibleLocalChatPlaceholders.filter((chat) => !isChatArchived(chat)).length);
   const activeChatCount = $derived(readModelState.chatCounters.total + localChatPlaceholderCount);
   const hasUsableChatIndex = $derived(Boolean(readModelState.chatIndexCursor || readModelState.chatOrder.length > 0));
   const hasSelectedChatWindow = $derived(Boolean(selectedChatWindow));
@@ -664,7 +655,7 @@
     return chatListVirtualKeyForPins(entry, pinnedChatIds);
   }
 
-  function pinAwareChatRowKey(chat: PmaChatSummary): string {
+  function pinAwareChatRowKey(chat: ChatSummary): string {
     return pinAwareChatRowKeyForPins(chat, pinnedChatIds);
   }
 
@@ -701,7 +692,7 @@
     }
   }
   const displayedProgress = $derived(progressWithLiveElapsed(progress, clockNowMs));
-  const liveActivity = $derived(buildPmaLiveActivity(displayedProgress));
+  const liveActivity = $derived(buildChatLiveActivity(displayedProgress));
   const chatDetailDisplay = $derived(
     buildChatDetailDisplayReadModel({
       transcriptCards,
@@ -718,7 +709,7 @@
   );
   const activeCards = $derived<ChatTranscriptCard[]>(chatDetailDisplay.activeCards);
   const statusBar = $derived(chatDetailDisplay.statusBar);
-  const selectedScope = $derived(scopeOptions.find((scope) => scope.id === selectedScopeId) ?? localPmaChatScopeOption());
+  const selectedScope = $derived(scopeOptions.find((scope) => scope.id === selectedScopeId) ?? localChatScopeOption());
   const selectedAgentRecord = $derived(agentRecordForId(agents, selectedAgent));
   const hermesProfileChoices = $derived(agentProfileEntriesForRecord(selectedAgentRecord));
   const selectedAgentCanListModels = $derived(agentCanListModels(selectedAgentRecord));
@@ -727,8 +718,8 @@
   const showModelSelector = $derived(Boolean(activeChat && selectedAgentCanListModels && (loadingModels || models.length > 0)));
   const showEffortSelector = $derived(Boolean(showModelSelector && reasoningOptions.length > 0));
   const canStartCodingAgentChat = $derived(selectedScope.kind !== 'local');
-  const activeChatKind = $derived(pmaChatKind(activeChat));
-  const activeChatKindLabel = $derived(pmaChatKindLabel(activeChatKind));
+  const activeChatKind = $derived(chatKind(activeChat));
+  const activeChatKindLabel = $derived(chatKindLabel(activeChatKind));
   // Single source of truth for the chat's agent display name. Reads from the
   // picker, which is kept in sync with chat.agentId by syncSelectorsToActiveChat
   // and falls back to the user's configured default. This is the same value
@@ -782,11 +773,11 @@
   const transcriptListItems = $derived<ChatTranscriptListItem[]>(chatDetailDisplay.transcriptListItems);
   const srStatusAnnouncement = $derived(chatDetailDisplay.statusAnnouncement);
   const srAlertAnnouncement = $derived(chatDetailDisplay.alertAnnouncement);
-  const activeChatBadges = $derived(pmaChatBadgeViews(activeChat, { showPmaAgent: false }));
+  const activeChatBadges = $derived(chatBadgeViews(activeChat, { showManagerAgent: false }));
   const activeSharedFileCount = $derived(activeSurfaceDeliveries.length);
   const activeRepoIngress = $derived(repoIngressForChat(activeChat));
   const createChatLabel = $derived(creating ? 'Creating...' : '+ New');
-  const headerScopeLine = $derived(pmaChatHeaderScopeLine(activeChat, repoLabelForRepoId));
+  const headerScopeLine = $derived(chatHeaderScopeLine(activeChat, repoLabelForRepoId));
   /** Omit connected “Live · …” — redundant with the turn-status pill on the scope row. */
   const showStreamHealthAside = $derived(chatDetailDisplay.showStreamHealthAside);
   const showStatusBar = $derived(chatDetailDisplay.showStatusBar);
@@ -819,7 +810,7 @@
     return opt?.label ?? null;
   }
 
-  function chatRepoGlyphLabel(chat: PmaChatSummary): string {
+  function chatRepoGlyphLabel(chat: ChatSummary): string {
     if (chat.repoId) {
       const opt = scopeOptions.find((scope) => scope.kind === 'repo' && scope.resourceId === chat.repoId);
       return opt?.label ?? chat.repoId;
@@ -832,7 +823,7 @@
   }
 
   /** Label used with `repoAccent` / `repoInitials` for list scope coloring (repo, worktree, or hub basename). */
-  function chatListScopeAccentLabel(chat: PmaChatSummary, scopeTags: ReturnType<typeof pmaChatScopeTagView>): string | null {
+  function chatListScopeAccentLabel(chat: ChatSummary, scopeTags: ReturnType<typeof chatScopeTagView>): string | null {
     if (chat.repoId || chat.worktreeId) return chatRepoGlyphLabel(chat);
     if (scopeTags.kindKey === 'hub') return scopeTags.detail;
     return null;
@@ -995,7 +986,7 @@
       .filter((item) => item.count > 0 || scopeKindFilter === item.key);
   }
 
-  function composerRecipientLabel(chat: PmaChatSummary | null): string {
+  function composerRecipientLabel(chat: ChatSummary | null): string {
     if (!chat) return 'Chat';
     if (chat.repoId) {
       const repoLabel = repoLabelForRepoId(chat.repoId);
@@ -1008,7 +999,7 @@
     return 'Chat';
   }
 
-  function chatHasLocalDraft(chat: PmaChatSummary): boolean {
+  function chatHasLocalDraft(chat: ChatSummary): boolean {
     return Boolean(chatDraftRecords[chat.id]?.text.trim());
   }
 
@@ -1017,7 +1008,7 @@
     return keys.some((key) => record[key] === true);
   }
 
-  function runtimeModelIsExplicitlyUnknown(chat: PmaChatSummary): boolean {
+  function runtimeModelIsExplicitlyUnknown(chat: ChatSummary): boolean {
     if (chat.model) return false;
     return Boolean(
       chat.modelSource ||
@@ -1026,13 +1017,13 @@
     );
   }
 
-  function chatModelMetaLabel(chat: PmaChatSummary): string | null {
+  function chatModelMetaLabel(chat: ChatSummary): string | null {
     const model = chat.model?.trim();
     if (model) return model;
     return runtimeModelIsExplicitlyUnknown(chat) ? 'model unknown' : null;
   }
 
-  function chatModelMetaTitle(chat: PmaChatSummary): string | undefined {
+  function chatModelMetaTitle(chat: ChatSummary): string | undefined {
     const parts = [
       chat.modelSource ? `model: ${chat.modelSource}` : null,
       chat.runtimeSource ? `runtime: ${chat.runtimeSource}` : null
@@ -1040,7 +1031,7 @@
     return parts.length > 0 ? parts.join(' · ') : undefined;
   }
 
-  function activeChatRuntimeConfigLabel(chat: PmaChatSummary): string {
+  function activeChatRuntimeConfigLabel(chat: ChatSummary): string {
     const parts = [
       agentDisplayForChat(agents, chat) || chat.agentId || activeChatKindLabel,
       chatModelMetaLabel(chat),
@@ -1229,7 +1220,7 @@
       typeof defaultAgent === 'string' && defaultAgent.trim() ? defaultAgent.trim().toLowerCase() : undefined;
     configuredDefaultProfile = defaultProfile;
     if (!activeChat?.agentId) {
-      const resolved = resolvePmaChatSelectorsForActiveChat(
+      const resolved = resolveChatSelectorsForActiveChat(
         activeChat,
         agents,
         configuredDefaultAgentId,
@@ -1520,7 +1511,7 @@
     }
   }
 
-  function fileBoxScopeForChat(chat: PmaChatSummary | null): ChatFileBoxScope {
+  function fileBoxScopeForChat(chat: ChatSummary | null): ChatFileBoxScope {
     return chat?.repoId ? { kind: 'repo', repoId: chat.repoId } : { kind: 'hub' };
   }
 
@@ -1535,8 +1526,8 @@
       composeError = result.error;
       return null;
     }
-    if (activeChatId) readModelEntityStore.setPmaArtifacts(activeChatId, result.data);
-    if (!activeChatId || scope.kind === 'hub') readModelEntityStore.setPmaArtifacts('__global__', result.data);
+    if (activeChatId) readModelEntityStore.setSurfaceArtifacts(activeChatId, result.data);
+    if (!activeChatId || scope.kind === 'hub') readModelEntityStore.setSurfaceArtifacts('__global__', result.data);
     if (!options.quiet) showCommandNotice(result.data.length ? `Files refreshed (${result.data.length}).` : 'No files yet.');
     return result.data.length;
   }
@@ -1640,7 +1631,7 @@
   }
 
   function artifactDeliveriesForActiveSurface(
-    chat: PmaChatSummary | null,
+    chat: ChatSummary | null,
     deliveries: ArtifactDelivery[]
   ): ArtifactDelivery[] {
     if (!chat) return [];
@@ -1739,7 +1730,7 @@
     syncedSelectorKey = chat?.agentId ? `${activeChatId}|${chat.agentId}` : null;
     const scopeId = scopeIdForChat(chat);
     if (scopeId) selectedScopeId = scopeId;
-    const resolved = resolvePmaChatSelectorsForActiveChat(
+    const resolved = resolveChatSelectorsForActiveChat(
       chat,
       agents,
       configuredDefaultAgentId,
@@ -1789,7 +1780,7 @@
     persistCurrentNewChatPreference();
   }
 
-  function firstScopedScopeOption(): PmaChatScopeOption | null {
+  function firstScopedScopeOption(): ChatScopeOption | null {
     return scopeOptions.find((scope) => scope.kind !== 'local') ?? null;
   }
 
@@ -1830,7 +1821,7 @@
       : 'New chat';
   }
 
-  function newDraftChatSummary(): PmaChatSummary {
+  function newDraftChatSummary(): ChatSummary {
     const now = new Date().toISOString();
     const scope = selectedScope;
     const chatKind = newChatKind === 'agent' && canStartCodingAgentChat ? 'coding_agent' : 'pma';
@@ -1859,21 +1850,21 @@
     };
   }
 
-  function worktreeScopeOption(worktreeId: string): Extract<PmaChatScopeOption, { kind: 'worktree' }> | null {
+  function worktreeScopeOption(worktreeId: string): Extract<ChatScopeOption, { kind: 'worktree' }> | null {
     return scopeOptions.find(
-      (scope): scope is Extract<PmaChatScopeOption, { kind: 'worktree' }> =>
+      (scope): scope is Extract<ChatScopeOption, { kind: 'worktree' }> =>
         scope.kind === 'worktree' && scope.resourceId === worktreeId
     ) ?? null;
   }
 
-  function scopeIdForChat(chat: PmaChatSummary | null | undefined): string | null {
+  function scopeIdForChat(chat: ChatSummary | null | undefined): string | null {
     if (!chat) return null;
     if (chat.worktreeId) return `worktree:${chat.worktreeId}`;
     if (chat.repoId) return `repo:${chat.repoId}`;
     return 'local';
   }
 
-  function repoIngressForChat(chat: PmaChatSummary | null): { href: string; label: string; detail: string } | null {
+  function repoIngressForChat(chat: ChatSummary | null): { href: string; label: string; detail: string } | null {
     if (!chat) return null;
     if (chat.worktreeId) {
       const repoId = chat.repoId ?? stringField(chat.raw, 'repo_id') ?? stringField(chat.raw, 'parent_repo_id');
@@ -1991,11 +1982,11 @@
     await chatSendController.interruptWithDraft(canInterruptWithDraft);
   }
 
-  async function cancelQueuedTurn(turn: PmaQueuedTurn, options: { confirmed?: boolean } = {}): Promise<void> {
+  async function cancelQueuedTurn(turn: ChatQueuedTurn, options: { confirmed?: boolean } = {}): Promise<void> {
     await chatSendController.cancelQueuedTurn(turn, options);
   }
 
-  async function interruptWithQueuedTurn(turn: PmaQueuedTurn): Promise<void> {
+  async function interruptWithQueuedTurn(turn: ChatQueuedTurn): Promise<void> {
     await chatSendController.interruptWithQueuedTurn(turn);
   }
 
@@ -2566,15 +2557,15 @@
       </div>
     {/if}
 
-    {#snippet chatRow(chat: import('$lib/viewModels/domain').PmaChatSummary, nested: boolean)}
-      {@const scopeTags = pmaChatScopeTagView(chat, {
+    {#snippet chatRow(chat: import('$lib/viewModels/domain').ChatSummary, nested: boolean)}
+      {@const scopeTags = chatScopeTagView(chat, {
         repoLabel: repoLabelForRepoId,
         worktreeLabel: (wid) => worktreeScopeOption(wid)?.label ?? null
       })}
       {@const listScopeAccent = chatListScopeAccentLabel(chat, scopeTags)}
       {@const listScopeAccentHex = listScopeAccent ? repoAccent(listScopeAccent) : null}
       {@const listAgentLabel = agentDisplayForChat(agents, chat)}
-      {@const listBadges = pmaChatBadgeViews(chat, { agentLabel: listAgentLabel })}
+      {@const listBadges = chatBadgeViews(chat, { agentLabel: listAgentLabel })}
       <div
         class:active={chat.id === activeChatId}
         class:nested
@@ -2636,7 +2627,7 @@
           {#if !nested}
             <span class="chat-row-tags" role="list" aria-label="Chat tags">
               <span class={`chat-scope-kind-tag ${scopeTags.kindKey}`}>{scopeTags.kindLabel}</span>
-              {#if isPmaChatArchived(chat)}
+              {#if isChatArchived(chat)}
                 <span class="chat-scope-kind-tag retired">Retired</span>
               {/if}
               {#if chatHasLocalDraft(chat)}
@@ -2881,13 +2872,13 @@
           </p>
         {/if}
       </div>
-      {#if activeChat && (showStreamHealthAside || !isPmaChatArchived(activeChat) || activeSharedFileCount > 0 || inboxArtifacts.length > 0 || outboxArtifacts.length > 0)}
+      {#if activeChat && (showStreamHealthAside || !isChatArchived(activeChat) || activeSharedFileCount > 0 || inboxArtifacts.length > 0 || outboxArtifacts.length > 0)}
         {@const filesItem = {
           label: `Files${activeSharedFileCount > 0 ? ` (${activeSharedFileCount})` : ''}`,
           onSelect: () => void openFileDrawer(),
           ariaLabel: 'Open chat files'
         } satisfies OverflowMenuItem}
-        {@const overflowItems = !isPmaChatArchived(activeChat)
+        {@const overflowItems = !isChatArchived(activeChat)
           ? [
               filesItem,
               {

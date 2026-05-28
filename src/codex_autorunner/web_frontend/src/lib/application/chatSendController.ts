@@ -1,14 +1,14 @@
-import type { ApiError, PmaQueuedTurn, WebApiClient } from '$lib/api/client';
+import type { ApiError, ChatQueuedTurn, WebApiClient } from '$lib/api/client';
 import type { ReadModelEntityState, ReadModelEntityStore } from '$lib/data/readModelStore';
-import { selectPmaQueue } from '$lib/data/readModelViewModels';
-import type { PmaRunProgress, PmaChatSummary } from '$lib/viewModels/domain';
+import { selectChatQueue } from '$lib/data/readModelViewModels';
+import type { ChatRunProgress, ChatSummary } from '$lib/viewModels/domain';
 import {
   composeMessageWithAttachments,
   type DocumentFileIntentPayload,
   type PendingAttachment,
-  type PmaChatScopeOption,
-  type PmaChatScopeSource
-} from '$lib/viewModels/pmaChat';
+  type ChatScopeOption,
+  type ChatScopeSource
+} from '$lib/viewModels/chat';
 import {
   buildOptimisticQueuedTurn,
   buildOptimisticUserTranscriptCard,
@@ -17,14 +17,14 @@ import {
   queueContainsCommittedClientTurn,
   transcriptContainsCommittedUserRow,
   withoutOptimisticQueuedTurn
-} from './pmaChatArchitecture';
+} from './chatDetailOptimistic';
 import {
-  executePmaChatCommandPlan,
+  executeChatCommandPlan,
   planInterruptExistingChat,
   planQueueExistingChat,
   planSendExistingChat,
   planStartAndSendChat
-} from './pmaChatCommands';
+} from './chatCommands';
 import type { ChatDetailSessionState } from './chatDetailSession';
 
 export type ChatSendBusyPolicy = 'queue' | 'interrupt' | null;
@@ -51,18 +51,18 @@ export type ChatSendControllerDeps = {
     | 'upsertChatTranscriptCards'
     | 'removeOptimisticChatTranscriptCards'
     | 'failOptimisticMutation'
-    | 'setPmaQueue'
+    | 'setChatQueue'
   >;
   getActiveChatId: () => string | null;
-  getActiveChat: () => PmaChatSummary | null;
-  getDisplayedProgress: () => PmaRunProgress | null;
+  getActiveChat: () => ChatSummary | null;
+  getDisplayedProgress: () => ChatRunProgress | null;
   getDraft: () => string;
   setDraft: (value: string, chatId?: string | null) => void;
   getPendingAttachments: () => PendingAttachment[];
   setPendingAttachments: (value: PendingAttachment[], chatId?: string | null) => void;
   getComposerEditVersion: () => number;
-  getSelectedScope: () => PmaChatScopeOption;
-  getSelectedScopeSource: () => PmaChatScopeSource;
+  getSelectedScope: () => ChatScopeOption;
+  getSelectedScopeSource: () => ChatScopeSource;
   getSelectedAgent: () => string;
   getSelectedProfile: () => string;
   getSelectedModel: () => string;
@@ -72,7 +72,7 @@ export type ChatSendControllerDeps = {
   newChatDisplayName: () => string;
   readSessionState: () => ChatDetailSessionState;
   writeSessionState: (state: ChatDetailSessionState) => void;
-  getLocalDraftChat: () => PmaChatSummary | null;
+  getLocalDraftChat: () => ChatSummary | null;
   invalidateChatMutation: (chatId: string) => Promise<void>;
   refreshActive: (chatId: string, options: { quiet?: boolean }) => Promise<void>;
   setSending: (value: boolean) => void;
@@ -92,8 +92,8 @@ export type ChatSendConfirmationOptions = {
 export type ChatSendController = {
   sendMessage: (busyPolicy?: ChatSendBusyPolicy) => Promise<void>;
   interruptWithDraft: (canInterrupt: boolean) => Promise<void>;
-  cancelQueuedTurn: (turn: PmaQueuedTurn, options?: { confirmed?: boolean }) => Promise<void>;
-  interruptWithQueuedTurn: (turn: PmaQueuedTurn) => Promise<void>;
+  cancelQueuedTurn: (turn: ChatQueuedTurn, options?: { confirmed?: boolean }) => Promise<void>;
+  interruptWithQueuedTurn: (turn: ChatQueuedTurn) => Promise<void>;
   clearQueue: (options?: { confirmed?: boolean }) => Promise<boolean>;
 };
 
@@ -103,13 +103,13 @@ export function createChatSendController(deps: ChatSendControllerDeps): ChatSend
   const isoNow = () => now().toISOString();
   const optimisticClientTurnId = () => `optimistic:user:${now().getTime()}:${randomId()}`;
 
-  function selectQueue(chatId: string): PmaQueuedTurn[] {
-    return selectPmaQueue(deps.readModelStore.snapshot() as ReadModelEntityState, chatId);
+  function selectQueue(chatId: string): ChatQueuedTurn[] {
+    return selectChatQueue(deps.readModelStore.snapshot() as ReadModelEntityState, chatId);
   }
 
   function pushOptimisticQueuedTurn(chatId: string, text: string, clientTurnId: string): void {
     const current = selectQueue(chatId);
-    deps.readModelStore.setPmaQueue(chatId, [
+    deps.readModelStore.setChatQueue(chatId, [
       ...current,
       buildOptimisticQueuedTurn(text, clientTurnId, current.length + 1, isoNow())
     ]);
@@ -123,7 +123,7 @@ export function createChatSendController(deps: ChatSendControllerDeps): ChatSend
     const current = selectQueue(chatId);
     const next = withoutOptimisticQueuedTurn(current, clientTurnId);
     if (next.length === current.length) return;
-    deps.readModelStore.setPmaQueue(chatId, next);
+    deps.readModelStore.setChatQueue(chatId, next);
   }
 
   function transcriptHasBackendUserRow(chatId: string, clientTurnId: string): boolean {
@@ -285,7 +285,7 @@ export function createChatSendController(deps: ChatSendControllerDeps): ChatSend
               clientTurnId: optimisticId
             });
 
-    const result = await executePmaChatCommandPlan(deps.api, commandPlan);
+    const result = await executeChatCommandPlan(deps.api, commandPlan);
     if (result.ok) {
       const committedChatId = targetIsNewChat ? result.data.chatId : targetChatId;
       if (!committedChatId) {
@@ -325,7 +325,7 @@ export function createChatSendController(deps: ChatSendControllerDeps): ChatSend
     deps.setSending(false);
   }
 
-  async function cancelQueuedTurn(turn: PmaQueuedTurn, options: { confirmed?: boolean } = {}): Promise<void> {
+  async function cancelQueuedTurn(turn: ChatQueuedTurn, options: { confirmed?: boolean } = {}): Promise<void> {
     const activeChatId = deps.getActiveChatId();
     if (!activeChatId || !turn.managedTurnId || isOptimisticQueuedTurn(turn)) return;
     if (!options.confirmed) {
@@ -340,7 +340,7 @@ export function createChatSendController(deps: ChatSendControllerDeps): ChatSend
     deps.setComposeError(null);
     const result = await deps.api.pma.cancelQueuedTurn(activeChatId, turn.managedTurnId);
     if (result.ok) {
-      deps.readModelStore.setPmaQueue(
+      deps.readModelStore.setChatQueue(
         activeChatId,
         selectQueue(activeChatId).filter((item) => item.managedTurnId !== turn.managedTurnId)
       );
@@ -350,7 +350,7 @@ export function createChatSendController(deps: ChatSendControllerDeps): ChatSend
     }
   }
 
-  async function interruptWithQueuedTurn(turn: PmaQueuedTurn): Promise<void> {
+  async function interruptWithQueuedTurn(turn: ChatQueuedTurn): Promise<void> {
     const chatId = deps.getActiveChatId();
     if (!chatId || !turn.prompt.trim() || isOptimisticQueuedTurn(turn)) return;
     deps.setComposeError(null);
@@ -359,7 +359,7 @@ export function createChatSendController(deps: ChatSendControllerDeps): ChatSend
       deps.setComposeError(cancelResult.error);
       return;
     }
-    deps.readModelStore.setPmaQueue(
+    deps.readModelStore.setChatQueue(
       chatId,
       selectQueue(chatId).filter((item) => item.managedTurnId !== turn.managedTurnId)
     );
@@ -369,7 +369,7 @@ export function createChatSendController(deps: ChatSendControllerDeps): ChatSend
     ]);
     const activeChat = deps.getActiveChat();
     const profileForSend = activeChat?.agentProfile?.trim() || deps.getSelectedProfile().trim() || '';
-    const result = await executePmaChatCommandPlan(
+    const result = await executeChatCommandPlan(
       deps.api,
       planInterruptExistingChat(chatId, turn.prompt, {
         model: turn.model ?? deps.getSelectedModel(),
@@ -405,7 +405,7 @@ export function createChatSendController(deps: ChatSendControllerDeps): ChatSend
     deps.setComposeError(null);
     const result = await deps.api.pma.clearQueue(activeChatId);
     if (result.ok) {
-      deps.readModelStore.setPmaQueue(activeChatId, []);
+      deps.readModelStore.setChatQueue(activeChatId, []);
       await deps.refreshActive(activeChatId, { quiet: true });
       return true;
     } else {

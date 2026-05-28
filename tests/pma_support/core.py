@@ -1176,7 +1176,7 @@ async def test_pma_interrupt_route_interrupts_running_turn(hub_env) -> None:
 
         assert chat_resp.status_code == 200
         assert chat_resp.json()["status"] == "interrupted"
-        assert chat_resp.json()["detail"] == "PMA chat interrupted"
+        assert chat_resp.json()["detail"] == "chat interrupted"
 
         with anyio.fail_after(2):
             while True:

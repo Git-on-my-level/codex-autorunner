@@ -1179,7 +1179,7 @@ class FilesCommands(FileBoxCommandsMixin, TelegramCommandSupportMixin):
                                 conversation_key=_artifact_conversation_key_from_topic(
                                     topic_key
                                 ),
-                                scope_label="hub PMA artifact target for this Telegram PMA chat",
+                                scope_label="hub PMA artifact target for this Telegram managed thread",
                                 user_upload_inbox=pma_inbox,
                                 extra_agent_lines=(
                                     f"Max file size: {self._config.media.max_file_bytes} bytes.",

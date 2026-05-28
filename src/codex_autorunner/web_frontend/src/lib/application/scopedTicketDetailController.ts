@@ -17,7 +17,7 @@ import {
   type ReadModelEntityStore,
   type ScopedTicketSessionApi
 } from '$lib/data';
-import { buildManagedThreadMessagePayload } from '$lib/viewModels/pmaChat';
+import { buildManagedThreadMessagePayload } from '$lib/viewModels/chat';
 import {
   buildTicketRepairChatCreatePayload,
   buildTicketRepairPrompt,

@@ -488,7 +488,7 @@ __all__ = [
     "PmaAutomationTimerCancelRequest",
     "PmaAutomationTimerCreateRequest",
     "PmaAutomationTimerTouchRequest",
-    "PmaChatRequest",
+    "ManagedThreadChatRequest",
     "PmaHistoryCompactRequest",
     "ManagedThreadBulkRetireRequest",
     "ManagedThreadCompactRequest",
@@ -1089,7 +1089,7 @@ class ManagedThreadForkRequest(Payload):
     name: Optional[str] = None
 
 
-class PmaChatRequest(Payload):
+class ManagedThreadChatRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     message: Optional[str] = None

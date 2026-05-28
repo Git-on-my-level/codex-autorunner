@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { PmaChatSummary, PmaRunProgress, RepoSummary, TicketSummary, WorktreeSummary } from './domain';
+import type { ChatSummary, ChatRunProgress, RepoSummary, TicketSummary, WorktreeSummary } from './domain';
 import { buildRepoWorktreeDetailViewModel, buildRepoWorktreeIndexViewModel } from './repoWorktree';
 import { buildSettingsViewModel } from './settings';
 import { buildTicketListViewModel } from './ticket';
@@ -87,8 +87,8 @@ function syntheticHubSource(config: {
   const repos: RepoSummary[] = [];
   const worktrees: WorktreeSummary[] = [];
   const tickets: TicketSummary[] = [];
-  const chats: PmaChatSummary[] = [];
-  const runs: PmaRunProgress[] = [];
+  const chats: ChatSummary[] = [];
+  const runs: ChatRunProgress[] = [];
   for (let repoIndex = 0; repoIndex < config.repoCount; repoIndex += 1) {
     const repoId = `repo-${repoIndex}`;
     repos.push(repo(repoId, repoIndex));
@@ -109,8 +109,8 @@ function addWorkspaceRows(
   worktreeId: string | null,
   config: { ticketsPerWorkspace: number; chatsPerWorkspace: number; runsPerWorkspace: number },
   tickets: TicketSummary[],
-  chats: PmaChatSummary[],
-  runs: PmaRunProgress[]
+  chats: ChatSummary[],
+  runs: ChatRunProgress[]
 ): void {
   for (let ticketIndex = 0; ticketIndex < config.ticketsPerWorkspace; ticketIndex += 1) {
     const ticketId = `${id}-ticket-${ticketIndex}`;
@@ -205,7 +205,7 @@ function chat(
   repoId: string,
   worktreeId: string | null,
   index: number
-): PmaChatSummary {
+): ChatSummary {
   return {
     id,
     title: `Chat ${id}`,
@@ -233,7 +233,7 @@ function run(
   worktreeId: string | null,
   chatId: string,
   index: number
-): PmaRunProgress {
+): ChatRunProgress {
   return {
     id,
     chatId,

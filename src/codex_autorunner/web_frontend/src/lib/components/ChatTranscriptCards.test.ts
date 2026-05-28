@@ -1,7 +1,7 @@
 import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
 import ChatTranscriptCards from './ChatTranscriptCards.svelte';
-import type { ChatTranscriptCard } from '$lib/viewModels/pmaChat';
+import type { ChatTranscriptCard } from '$lib/viewModels/chat';
 
 const baseTrace = {
   turnId: 'turn-1',

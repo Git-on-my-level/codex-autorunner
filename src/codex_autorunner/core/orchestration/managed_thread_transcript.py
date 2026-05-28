@@ -26,7 +26,8 @@ def build_managed_thread_transcript(
     This is the ownership boundary for durable chat transcript rendering.
     Runtime progress is intentionally projected separately: noisy intermediate,
     tool, approval, and live tail rows must not be converted into transcript
-    cards here.
+    cards here. Commentary is the exception because it is user-facing progress
+    narration on the web surface and should remain visible after completion.
     """
 
     clamped_limit = min(max(1, int(limit or 1)), MAX_MANAGED_THREAD_TIMELINE_LIMIT)
@@ -173,7 +174,14 @@ def _timeline_item_to_transcript_rows(item: Mapping[str, Any]) -> list[dict[str,
         ]
 
     if kind == "intermediate":
-        return []
+        commentary = _commentary_intermediate_row(
+            item_id=item_id,
+            payload=payload,
+            managed_turn_id=managed_turn_id,
+            order_key=order_key,
+            timestamp=timestamp,
+        )
+        return [commentary] if commentary is not None else []
 
     if kind == "tool_group":
         return []
@@ -328,10 +336,77 @@ def _message_role(row: Mapping[str, Any]) -> Optional[str]:
     return str(role) if role is not None else None
 
 
+def _commentary_intermediate_row(
+    *,
+    item_id: str,
+    payload: Mapping[str, Any],
+    managed_turn_id: Optional[str],
+    order_key: str,
+    timestamp: Optional[str],
+) -> Optional[dict[str, Any]]:
+    if not _is_commentary_intermediate(payload):
+        return None
+    progress_item = _mapping(payload.get("progress_item"))
+    event = _mapping(payload.get("event"))
+    text = (
+        _optional_text(payload.get("text"))
+        or _optional_text(payload.get("summary"))
+        or _optional_text(progress_item.get("summary"))
+        or _optional_text(event.get("summary"))
+    )
+    if text is None:
+        return None
+    return {
+        "kind": "intermediate",
+        "id": item_id,
+        "title": "commentary",
+        "text": text,
+        "event_ids": _unique_strings(
+            _string_list(payload.get("event_ids"))
+            + _string_list(event.get("event_ids"))
+        ),
+        "progress_source_ids": _unique_strings(
+            _string_list(payload.get("progress_source_ids"))
+            + _string_list(progress_item.get("event_ids"))
+            + _string_list(progress_item.get("item_id"))
+        ),
+        "detail": _json_detail(event or payload),
+        "turn_id": managed_turn_id,
+        "order_key": order_key,
+        "timestamp": timestamp,
+    }
+
+
+def _is_commentary_intermediate(payload: Mapping[str, Any]) -> bool:
+    return _optional_text(payload.get("intermediate_kind")) == "commentary"
+
+
 def _artifact_list(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [dict(item) for item in value if isinstance(item, Mapping)]
+
+
+def _string_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if not isinstance(value, list):
+        return []
+    items: list[str] = []
+    for item in value:
+        candidate = _optional_text(item)
+        if candidate is not None and candidate not in items:
+            items.append(candidate)
+    return items
+
+
+def _unique_strings(values: Iterable[str]) -> list[str]:
+    items: list[str] = []
+    for value in values:
+        if value and value not in items:
+            items.append(value)
+    return items
 
 
 def _capsule_ref_list(value: Any) -> list[dict[str, Any]]:

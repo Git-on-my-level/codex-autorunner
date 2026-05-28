@@ -40,7 +40,7 @@ describe('mapThreadSummary', () => {
   it('maps hub-scoped thread', () => {
     const vm = mapThreadSummary({
       managed_thread_id: 'thread-hub',
-      name: 'New PMA chat',
+      name: 'New chat',
       agent: 'codex',
       status: 'idle'
     });
@@ -115,7 +115,7 @@ describe('mapThreadSummary', () => {
     const vm = mapThreadSummary({
       managed_thread_id: 'thread-excerpt',
       display_title: 'Please fix the login bug',
-      name: 'New PMA chat',
+      name: 'New chat',
       first_message_excerpt: 'Please fix the login bug',
       agent: 'codex',
       status: 'idle'
@@ -154,7 +154,7 @@ describe('mapThreadSummary', () => {
     const vm = mapThreadSummary({
       managed_thread_id: 'thread-generic',
       display_title: 'Chat · my-repo',
-      name: 'New PMA chat',
+      name: 'New chat',
       repo_id: 'my-repo',
       agent: 'codex',
       status: 'idle'

@@ -8,12 +8,12 @@ import {
 } from '$lib/api/client';
 import type { RepoWorktreeDetailSnapshot, TicketDetailSnapshot } from '$lib/api/readModelContracts';
 import {
-  mapPmaChatSummary,
-  mapPmaRunProgress,
+  mapChatSummary,
+  mapChatRunProgress,
   mapTicketDetail,
   mapTicketSummary,
-  type PmaChatSummary,
-  type PmaRunProgress,
+  type ChatSummary,
+  type ChatRunProgress,
   type SurfaceArtifact,
   type TicketDetail,
   type TicketSummary
@@ -36,7 +36,7 @@ import {
 } from '$lib/viewModels/ticket';
 import { cachedTickets, rememberTickets } from '$lib/viewModels/ticketCache';
 import { readModelEntityStore, type ReadModelEntityState, type ReadModelEntityStore } from './readModelStore';
-import { scopedOwnerKey, selectPmaRuns, selectTicketSummaries } from './readModelViewModels';
+import { scopedOwnerKey, selectChatRuns, selectTicketSummaries } from './readModelViewModels';
 
 export type ScopedTicketSessionApi = {
   requestJson<T>(path: string, options?: unknown): Promise<ApiResult<T>>;
@@ -57,7 +57,7 @@ export type ScopedTicketListSession =
       ownerScope: Exclude<TicketOwnerScope, null>;
       ownerKey: string;
       tickets: TicketSummary[];
-      runs: PmaRunProgress[];
+      runs: ChatRunProgress[];
       actionManifest: SurfaceActionManifest | null;
       sectionIssues: PartialPageIssue[];
       parentRepoId: string | null;
@@ -78,8 +78,8 @@ export type ScopedTicketDetailSession =
       owner: ScopedTicketQueueOwner;
       ticketDetail: TicketDetail;
       tickets: TicketSummary[];
-      runs: PmaRunProgress[];
-      chats: PmaChatSummary[];
+      runs: ChatRunProgress[];
+      chats: ChatSummary[];
       dispatches: JsonRecord[];
       detail: TicketDetailViewModel;
       currentRunId: string | null;
@@ -112,7 +112,7 @@ export async function loadScopedTicketListSession(
       ? legacyWorktreeRedirectPath(options.currentPath, config.resourceId, parentRepoId)
       : null;
   const tickets = detail.data.ticketQueue.map(mapTicketSummary);
-  const runs = detail.data.runQueue.map(mapPmaRunProgress);
+  const runs = detail.data.runQueue.map(mapChatRunProgress);
   hydrateScopedTicketQueue(options.store ?? readModelEntityStore, ownerKey, owner, tickets, runs);
 
   const manifest = await loadScopedActionManifest(api, { ...config, parentRepoId: config.parentRepoId ?? parentRepoId });
@@ -182,15 +182,15 @@ export async function loadScopedTicketDetailSession(
   const ownerKey = scopedOwnerKey(resolvedScope);
   const owner = ownerFromScope(resolvedScope);
   const tickets = snapshot.data.ticketQueue.map(mapTicketSummary);
-  const runs = snapshot.data.runQueue.map(mapPmaRunProgress);
-  const chats = snapshot.data.chatQueue.map(mapPmaChatSummary);
+  const runs = snapshot.data.runQueue.map(mapChatRunProgress);
+  const chats = snapshot.data.chatQueue.map(mapChatSummary);
   hydrateScopedTicketQueue(store, ownerKey, owner, tickets, runs);
 
   const state = options.readModelState ?? store.snapshot();
   const ticketList = selectTicketSummaries(state, ownerKey);
-  const pmaRuns = selectPmaRuns(state, ownerKey);
+  const chatRuns = selectChatRuns(state, ownerKey);
   const ticketDetail = mapTicketDetail(ticketRecord);
-  const source = { tickets: ticketList, runs: pmaRuns, chats, artifacts: [] as SurfaceArtifact[] };
+  const source = { tickets: ticketList, runs: chatRuns, chats, artifacts: [] as SurfaceArtifact[] };
   const detail = buildTicketDetailViewModel(ticketDetail, source);
 
   return {
@@ -200,7 +200,7 @@ export async function loadScopedTicketDetailSession(
     owner,
     ticketDetail,
     tickets: ticketList,
-    runs: pmaRuns,
+    runs: chatRuns,
     chats,
     dispatches: snapshot.data.dispatches ?? [],
     detail,
@@ -225,7 +225,7 @@ function hydrateScopedTicketQueue(
   ownerKey: string,
   owner: ScopedTicketQueueOwner,
   tickets: TicketSummary[],
-  runs: PmaRunProgress[]
+  runs: ChatRunProgress[]
 ): void {
   rememberTickets(owner, tickets);
   store.replaceScopedTicketSummaries(ownerKey, tickets);

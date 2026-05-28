@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { PmaRunProgress, SurfaceArtifact } from '$lib/viewModels/domain';
-import type { ChatTranscriptCard } from '$lib/viewModels/pmaChat';
+import type { ChatRunProgress, SurfaceArtifact } from '$lib/viewModels/domain';
+import type { ChatTranscriptCard } from '$lib/viewModels/chat';
 import { ReadModelEntityStore, type ReadModelEntityState } from './readModelStore';
 
 const runProfile = process.env.RUN_WEB_STORE_PROFILE === '1';
@@ -29,7 +29,7 @@ describeProfile('manual read model store profile', () => {
     const samples: number[] = [];
     for (let i = 0; i < iterations; i += 1) {
       const start = performance.now();
-      store.setPmaProgress('chat-0', progress(i));
+      store.setChatProgress('chat-0', progress(i));
       samples.push(performance.now() - start);
     }
 
@@ -71,9 +71,9 @@ function legacyDeepCloneState(state: ReadModelEntityState): ReadModelEntityState
     chatDetails: legacyCloneRecord(state.chatDetails),
     timelines: legacyCloneRecord(state.timelines),
     chatTranscripts: legacyCloneRecord(state.chatTranscripts),
-    pmaProgress: { ...state.pmaProgress },
-    pmaQueues: legacyCloneRecord(state.pmaQueues),
-    pmaArtifacts: legacyCloneRecord(state.pmaArtifacts),
+    chatProgress: { ...state.chatProgress },
+    chatQueues: legacyCloneRecord(state.chatQueues),
+    surfaceArtifacts: legacyCloneRecord(state.surfaceArtifacts),
     readMarkers: { ...state.readMarkers },
     artifacts: { ...state.artifacts },
     repos: { ...state.repos },
@@ -86,8 +86,8 @@ function legacyDeepCloneState(state: ReadModelEntityState): ReadModelEntityState
     ticketOrderByOwner: legacyCloneRecord(state.ticketOrderByOwner),
     ticketSiblings: legacyCloneRecord(state.ticketSiblings),
     runs: { ...state.runs },
-    pmaRuns: { ...state.pmaRuns },
-    pmaRunOrderByOwner: legacyCloneRecord(state.pmaRunOrderByOwner),
+    chatRuns: { ...state.chatRuns },
+    chatRunOrderByOwner: legacyCloneRecord(state.chatRunOrderByOwner),
     repoDetails: legacyCloneRecord(state.repoDetails),
     worktreeDetails: legacyCloneRecord(state.worktreeDetails),
     agents: { ...state.agents },
@@ -146,7 +146,7 @@ function cardsForChat(chatId: string, count: number): ChatTranscriptCard[] {
   return cards;
 }
 
-function progress(index: number): PmaRunProgress {
+function progress(index: number): ChatRunProgress {
   const events: SurfaceArtifact[] = [];
   for (let i = 0; i < 8; i += 1) {
     events.push({

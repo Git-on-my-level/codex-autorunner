@@ -1,12 +1,12 @@
 import type { ApiError } from '$lib/api/client';
-import type { PmaChatSummary } from '$lib/viewModels/domain';
+import type { ChatSummary } from '$lib/viewModels/domain';
 import {
   isLocalChatPlaceholder,
-  isPmaChatArchived,
-  pmaChatBindingKey,
+  isChatArchived,
+  chatBindingKey,
   type ChatListEntry,
   type ChatRunGroup
-} from '$lib/viewModels/pmaChat';
+} from '$lib/viewModels/chat';
 import {
   markAllChatsRead,
   markChatRead,
@@ -24,7 +24,7 @@ export type BrowserStorageAdapter = Pick<Storage, 'getItem' | 'setItem'>;
 export type ChatDetailSessionState = {
   activeChatId: string | null;
   detailMode: ChatDetailMode;
-  localDraftChat: PmaChatSummary | null;
+  localDraftChat: ChatSummary | null;
   loadingActive: boolean;
   activeError: ApiError | null;
 };
@@ -39,12 +39,12 @@ export type ChatDetailSelectionCommand = {
 
 export type ChatDetailActivationInput = {
   detailId: string | null;
-  chats: PmaChatSummary[];
+  chats: ChatSummary[];
   hasCachedDetail: (chatId: string) => boolean;
 };
 
 export type ChatDetailRequestedRowsInput = {
-  loadedChats: PmaChatSummary[];
+  loadedChats: ChatSummary[];
   requestedChatId: string | null;
   hasCachedDetail: (chatId: string) => boolean;
 };
@@ -69,9 +69,9 @@ export function initialChatDetailSessionState(): ChatDetailSessionState {
 
 export function chatSummaryForSessionId(
   chatId: string | null,
-  chats: PmaChatSummary[],
-  localDraftChat: PmaChatSummary | null
-): PmaChatSummary | null {
+  chats: ChatSummary[],
+  localDraftChat: ChatSummary | null
+): ChatSummary | null {
   if (!chatId) return null;
   if (localDraftChat?.id === chatId) return localDraftChat;
   return chats.find((chat) => chat.id === chatId) ?? null;
@@ -177,33 +177,33 @@ export function activateRequestedChatFromRows(
 }
 
 export function archivedFilterForSelectedChat(
-  chats: PmaChatSummary[],
+  chats: ChatSummary[],
   selectedChatId: string | null
 ): 'archived' | null {
   const selected = chats.find((chat) => chat.id === selectedChatId) ?? null;
-  return selected && isPmaChatArchived(selected) ? 'archived' : null;
+  return selected && isChatArchived(selected) ? 'archived' : null;
 }
 
 export function replacementForArchivedActiveChat(
-  previousChats: PmaChatSummary[],
-  nextChats: PmaChatSummary[],
+  previousChats: ChatSummary[],
+  nextChats: ChatSummary[],
   activeChatId: string | null
 ): string | null {
   if (!activeChatId) return null;
   const previousActive = previousChats.find((chat) => chat.id === activeChatId) ?? null;
-  const previousBinding = pmaChatBindingKey(previousActive);
+  const previousBinding = chatBindingKey(previousActive);
   if (!previousBinding) return null;
   const nextActive = nextChats.find((chat) => chat.id === activeChatId) ?? null;
-  if (nextActive && !isPmaChatArchived(nextActive)) return null;
+  if (nextActive && !isChatArchived(nextActive)) return null;
   const replacement = nextChats.find(
-    (chat) => chat.id !== activeChatId && pmaChatBindingKey(chat) === previousBinding && !isPmaChatArchived(chat)
+    (chat) => chat.id !== activeChatId && chatBindingKey(chat) === previousBinding && !isChatArchived(chat)
   );
   return replacement?.id ?? null;
 }
 
 export function clearCommittedDraftPlaceholderIfPersisted(
   state: ChatDetailSessionState,
-  persistedChats: PmaChatSummary[]
+  persistedChats: ChatSummary[]
 ): ChatDetailSessionState {
   if (!state.localDraftChat) return state;
   return persistedChats.some((chat) => chat.id === state.localDraftChat?.id)
@@ -213,7 +213,7 @@ export function clearCommittedDraftPlaceholderIfPersisted(
 
 export function startLocalDraftChat(
   state: ChatDetailSessionState,
-  draftChat: PmaChatSummary
+  draftChat: ChatSummary
 ): ChatDetailSessionState {
   return {
     ...state,
@@ -228,8 +228,8 @@ export function startLocalDraftChat(
 export function markSessionChatRead(
   markers: ChatLastSeenMap,
   chatId: string | null,
-  chats: PmaChatSummary[],
-  localDraftChat: PmaChatSummary | null,
+  chats: ChatSummary[],
+  localDraftChat: ChatSummary | null,
   store: ChatDetailReadMarkerStore = browserReadMarkerStore,
   fallbackStamp = new Date().toISOString()
 ): ChatLastSeenMap {
@@ -242,17 +242,17 @@ export function markSessionChatRead(
 
 export function markVisibleChatsRead(
   markers: ChatLastSeenMap,
-  chats: PmaChatSummary[],
+  chats: ChatSummary[],
   store: ChatDetailReadMarkerStore = browserReadMarkerStore
 ): ChatLastSeenMap {
-  const next = markAllChatsRead(markers, chats.filter((chat) => !isPmaChatArchived(chat)));
+  const next = markAllChatsRead(markers, chats.filter((chat) => !isChatArchived(chat)));
   if (next !== markers) store.save(next);
   return next;
 }
 
 export function markChatGroupRead(
   markers: ChatLastSeenMap,
-  chats: PmaChatSummary[],
+  chats: ChatSummary[],
   store: ChatDetailReadMarkerStore = browserReadMarkerStore,
   fallbackStamp = new Date().toISOString()
 ): ChatLastSeenMap {
@@ -304,7 +304,7 @@ export function chatListVirtualKey(entry: ChatListEntry, pinned: PinnedChatMap):
   return `chat:${entry.chat.id}:${pinned[entry.chat.id] ? 1 : 0}`;
 }
 
-export function pinAwareChatRowKey(chat: PmaChatSummary, pinned: PinnedChatMap): string {
+export function pinAwareChatRowKey(chat: ChatSummary, pinned: PinnedChatMap): string {
   return `${chat.id}:${pinned[chat.id] ? 1 : 0}`;
 }
 
@@ -355,7 +355,7 @@ function noDetailCommand(state: ChatDetailSessionState): ChatDetailSelectionComm
 }
 
 function chooseActiveChatId(
-  chats: PmaChatSummary[],
+  chats: ChatSummary[],
   currentChatId: string | null,
   requestedChatId: string | null
 ): string | null {

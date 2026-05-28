@@ -1,19 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
 import { WebApiClient } from '$lib/api/client';
-import { localPmaChatScopeOption } from '$lib/viewModels/pmaChat';
+import { localChatScopeOption } from '$lib/viewModels/chat';
 import {
-  executePmaChatCommandPlan,
+  executeChatCommandPlan,
   planForkChat,
   planInterruptExistingChat,
   planQueueExistingChat,
   planSendExistingChat,
   planStartAndSendChat,
   planStartChat
-} from './pmaChatCommands';
+} from './chatCommands';
 
-describe('PMA chat command plans', () => {
+describe('chat command plans', () => {
   it('plans start chat as the only command that creates a thread', () => {
-    expect(planStartChat(localPmaChatScopeOption(), 'hermes', 'planning', 'gpt-5.2')).toEqual({
+    expect(planStartChat(localChatScopeOption(), 'hermes', 'planning', 'gpt-5.2')).toEqual({
       kind: 'StartChat',
       body: {
         agent: 'hermes',
@@ -24,7 +24,7 @@ describe('PMA chat command plans', () => {
         scope_urn: 'hub'
       }
     });
-    expect(planStartChat(localPmaChatScopeOption(), 'codex', '', '', 'New coding agent chat', 'coding_agent')).toMatchObject({
+    expect(planStartChat(localChatScopeOption(), 'codex', '', '', 'New coding agent chat', 'coding_agent')).toMatchObject({
       body: {
         agent: 'codex',
         chat_kind: 'coding_agent',
@@ -58,7 +58,7 @@ describe('PMA chat command plans', () => {
 
   it('plans draft first sends as a single start-and-send command', () => {
     expect(
-      planStartAndSendChat('chat-new', localPmaChatScopeOption(), 'hermes', 'planning', '', 'Hello', {
+      planStartAndSendChat('chat-new', localChatScopeOption(), 'hermes', 'planning', '', 'Hello', {
         reasoning: 'high',
         clientTurnId: 'client-1'
       })
@@ -122,7 +122,7 @@ describe('PMA chat command plans', () => {
 
     expect(
       planStartAndSendChat('chat-new',
-        localPmaChatScopeOption(),
+        localChatScopeOption(),
         'codex',
         '',
         '',
@@ -163,7 +163,7 @@ describe('PMA chat command plans', () => {
   });
 });
 
-describe('PMA chat command execution', () => {
+describe('chat command execution', () => {
   it('sends existing-chat follow-ups only to the messages endpoint', async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -174,7 +174,7 @@ describe('PMA chat command execution', () => {
     }) as unknown as typeof fetch;
     const client = new WebApiClient(fetcher);
 
-    const result = await executePmaChatCommandPlan(client, planSendExistingChat('thread-1', 'Continue'));
+    const result = await executeChatCommandPlan(client, planSendExistingChat('thread-1', 'Continue'));
 
     expect(result.ok).toBe(true);
     expect(fetcher).toHaveBeenCalledTimes(1);
@@ -191,8 +191,8 @@ describe('PMA chat command execution', () => {
     ) as unknown as typeof fetch;
     const client = new WebApiClient(fetcher);
 
-    await executePmaChatCommandPlan(client, planStartChat(localPmaChatScopeOption(), 'codex'));
-    await executePmaChatCommandPlan(client, planForkChat('thread-1', { name: 'Forked chat' }));
+    await executeChatCommandPlan(client, planStartChat(localChatScopeOption(), 'codex'));
+    await executeChatCommandPlan(client, planForkChat('thread-1', { name: 'Forked chat' }));
 
     expect(fetcher).toHaveBeenCalledWith('/hub/pma/threads', expect.objectContaining({ method: 'POST' }));
     expect(fetcher).toHaveBeenCalledWith(
@@ -210,9 +210,9 @@ describe('PMA chat command execution', () => {
     ) as unknown as typeof fetch;
     const client = new WebApiClient(fetcher);
 
-    const result = await executePmaChatCommandPlan(
+    const result = await executeChatCommandPlan(
       client,
-      planStartAndSendChat('chat-new', localPmaChatScopeOption(), 'hermes', '', '', 'Hello')
+      planStartAndSendChat('chat-new', localChatScopeOption(), 'hermes', '', '', 'Hello')
     );
 
     expect(result.ok).toBe(true);

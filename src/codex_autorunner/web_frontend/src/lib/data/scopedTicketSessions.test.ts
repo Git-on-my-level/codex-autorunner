@@ -37,7 +37,7 @@ describe('scoped ticket sessions', () => {
 
     expect(result.ok).toBe(true);
     expect(store.snapshot().ticketOrderByOwner['repo:repo-1']).toEqual(['t-1']);
-    expect(store.snapshot().pmaRunOrderByOwner['repo:repo-1']).toEqual(['run-1']);
+    expect(store.snapshot().chatRunOrderByOwner['repo:repo-1']).toEqual(['run-1']);
     expect(api.requestJson).toHaveBeenCalledWith(
       '/repos/repo-1/api/flows/ticket_flow/action-manifest?ui_kind=pma_web&resource_kind=repo&resource_id=repo-1'
     );

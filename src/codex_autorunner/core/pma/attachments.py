@@ -27,7 +27,7 @@ def build_managed_thread_attachment_execution_context(
 ) -> ManagedThreadAttachmentExecutionContext | None:
     """Render web PMA attachment metadata into the actual runtime turn input.
 
-    PMA chat uploads are persisted to the hub FileBox before the message is sent.
+    Managed thread uploads are persisted to the hub FileBox before the message is sent.
     The visible chat chip is not enough: the runtime prompt must include the local
     file path so the agent can inspect it, and images should also travel as native
     image inputs when the backend supports them.

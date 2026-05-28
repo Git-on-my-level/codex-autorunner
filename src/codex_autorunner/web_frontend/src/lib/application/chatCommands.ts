@@ -1,5 +1,5 @@
 import type { ApiResult, WebApiClient } from '$lib/api/client';
-import type { PmaChatMessage, PmaChatSummary } from '$lib/viewModels/domain';
+import type { ChatMessage, ChatSummary } from '$lib/viewModels/domain';
 import {
   buildManagedThreadCreatePayload,
   buildManagedThreadStartMessagePayload,
@@ -9,69 +9,69 @@ import {
   type ManagedThreadMessagePayload,
   type ManagedThreadStartMessagePayload,
   type PendingAttachment,
-  type PmaChatScopeOption,
-  type PmaChatScopeSource
-} from '$lib/viewModels/pmaChat';
-import type { PmaChatKind } from '$lib/viewModels/pmaChat';
+  type ChatScopeOption,
+  type ChatScopeSource
+} from '$lib/viewModels/chat';
+import type { ChatKind } from '$lib/viewModels/chat';
 
-export type PmaChatBusyPolicy = 'queue' | 'interrupt' | 'reject';
+export type ChatBusyPolicy = 'queue' | 'interrupt' | 'reject';
 
-export type StartPmaChatPlan = {
+export type StartChatPlan = {
   kind: 'StartChat';
   body: ManagedThreadCreatePayload;
 };
 
-export type SendExistingPmaChatPlan = {
+export type SendExistingChatPlan = {
   kind: 'SendMessage';
   threadId: string;
   body: ManagedThreadMessagePayload;
 };
 
-export type StartAndSendPmaChatPlan = {
+export type StartAndSendChatPlan = {
   kind: 'StartAndSendChat';
   body: ManagedThreadStartMessagePayload;
 };
 
-export type ForkPmaChatPlan = {
+export type ForkChatPlan = {
   kind: 'ForkChat';
   threadId: string;
-  body: PmaChatForkPayload;
+  body: ChatForkPayload;
 };
 
-export type PmaChatCommandPlan = StartPmaChatPlan | StartAndSendPmaChatPlan | SendExistingPmaChatPlan | ForkPmaChatPlan;
+export type ChatCommandPlan = StartChatPlan | StartAndSendChatPlan | SendExistingChatPlan | ForkChatPlan;
 
-export type PmaChatForkPayload = {
+export type ChatForkPayload = {
   name?: string;
 };
 
-export type ExistingPmaChatMessageOptions = {
+export type ExistingChatMessageOptions = {
   model?: string;
   isRunning?: boolean;
   attachments?: Array<PendingAttachment | DocumentFileIntentPayload>;
   reasoning?: string;
   profile?: string;
-  busyPolicy?: PmaChatBusyPolicy | null;
+  busyPolicy?: ChatBusyPolicy | null;
   clientTurnId?: string;
 };
 
-type PmaCommandClient = {
+type ChatCommandClient = {
   pma: Pick<WebApiClient['pma'], 'createChat' | 'startChatWithMessage' | 'sendMessage' | 'forkThread'>;
 };
 
 function requireThreadId(threadId: string): string {
   const trimmed = threadId.trim();
-  if (!trimmed) throw new Error('Existing PMA chat commands require a thread id.');
+  if (!trimmed) throw new Error('Existing chat commands require a thread id.');
   return trimmed;
 }
 
 export function planStartChat(
-  scope: PmaChatScopeOption,
+  scope: ChatScopeOption,
   agent: string,
   profile = '',
   model = '',
   name = 'New chat',
-  chatKind: PmaChatKind = 'pma'
-): StartPmaChatPlan {
+  chatKind: ChatKind = 'pma'
+): StartChatPlan {
   return {
     kind: 'StartChat',
     body: buildManagedThreadCreatePayload(agent, scope, name, model, profile, chatKind)
@@ -80,20 +80,20 @@ export function planStartChat(
 
 export function planStartAndSendChat(
   chatId: string,
-  scope: PmaChatScopeOption,
+  scope: ChatScopeOption,
   agent: string,
   profile: string,
   model: string,
   message: string,
   options: {
     name?: string;
-    chatKind?: PmaChatKind;
+    chatKind?: ChatKind;
     attachments?: Array<PendingAttachment | DocumentFileIntentPayload>;
     reasoning?: string;
     clientTurnId?: string;
-    scopeSource?: PmaChatScopeSource;
+    scopeSource?: ChatScopeSource;
   } = {}
-): StartAndSendPmaChatPlan {
+): StartAndSendChatPlan {
   return {
     kind: 'StartAndSendChat',
     body: buildManagedThreadStartMessagePayload(
@@ -116,8 +116,8 @@ export function planStartAndSendChat(
 export function planSendExistingChat(
   threadId: string,
   message: string,
-  options: ExistingPmaChatMessageOptions = {}
-): SendExistingPmaChatPlan {
+  options: ExistingChatMessageOptions = {}
+): SendExistingChatPlan {
   const isRunning = options.isRunning ?? false;
   return {
     kind: 'SendMessage',
@@ -138,20 +138,20 @@ export function planSendExistingChat(
 export function planQueueExistingChat(
   threadId: string,
   message: string,
-  options: Omit<ExistingPmaChatMessageOptions, 'busyPolicy'> = {}
-): SendExistingPmaChatPlan {
+  options: Omit<ExistingChatMessageOptions, 'busyPolicy'> = {}
+): SendExistingChatPlan {
   return planSendExistingChat(threadId, message, { ...options, isRunning: true, busyPolicy: 'queue' });
 }
 
 export function planInterruptExistingChat(
   threadId: string,
   message: string,
-  options: Omit<ExistingPmaChatMessageOptions, 'busyPolicy'> = {}
-): SendExistingPmaChatPlan {
+  options: Omit<ExistingChatMessageOptions, 'busyPolicy'> = {}
+): SendExistingChatPlan {
   return planSendExistingChat(threadId, message, { ...options, isRunning: true, busyPolicy: 'interrupt' });
 }
 
-export function planForkChat(threadId: string, overrides: PmaChatForkPayload = {}): ForkPmaChatPlan {
+export function planForkChat(threadId: string, overrides: ChatForkPayload = {}): ForkChatPlan {
   return {
     kind: 'ForkChat',
     threadId: requireThreadId(threadId),
@@ -159,18 +159,18 @@ export function planForkChat(threadId: string, overrides: PmaChatForkPayload = {
   };
 }
 
-export async function executePmaChatCommandPlan(
-  client: PmaCommandClient,
-  plan: StartPmaChatPlan | ForkPmaChatPlan
-): Promise<ApiResult<PmaChatSummary>>;
-export async function executePmaChatCommandPlan(
-  client: PmaCommandClient,
-  plan: StartAndSendPmaChatPlan | SendExistingPmaChatPlan
-): Promise<ApiResult<PmaChatMessage>>;
-export async function executePmaChatCommandPlan(
-  client: PmaCommandClient,
-  plan: PmaChatCommandPlan
-): Promise<ApiResult<PmaChatSummary> | ApiResult<PmaChatMessage>> {
+export async function executeChatCommandPlan(
+  client: ChatCommandClient,
+  plan: StartChatPlan | ForkChatPlan
+): Promise<ApiResult<ChatSummary>>;
+export async function executeChatCommandPlan(
+  client: ChatCommandClient,
+  plan: StartAndSendChatPlan | SendExistingChatPlan
+): Promise<ApiResult<ChatMessage>>;
+export async function executeChatCommandPlan(
+  client: ChatCommandClient,
+  plan: ChatCommandPlan
+): Promise<ApiResult<ChatSummary> | ApiResult<ChatMessage>> {
   if (plan.kind === 'StartChat') return client.pma.createChat(plan.body);
   if (plan.kind === 'StartAndSendChat') return client.pma.startChatWithMessage(plan.body);
   if (plan.kind === 'ForkChat') return client.pma.forkThread(plan.threadId, plan.body);

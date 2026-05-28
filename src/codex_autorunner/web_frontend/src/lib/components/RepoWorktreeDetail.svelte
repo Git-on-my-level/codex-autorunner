@@ -2,7 +2,7 @@
   import type { RepoWorktreeDetailViewModel } from '$lib/viewModels/repoWorktree';
   import { rowRelativeTime } from '$lib/viewModels/repoWorktree';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
-  import { statusLabel } from '$lib/viewModels/pmaChat';
+  import { statusLabel } from '$lib/viewModels/chat';
   import type { PartialPageIssue } from '$lib/api/client';
   import PageHero from './PageHero.svelte';
   import TicketDiffStats from '$lib/components/tickets/TicketDiffStats.svelte';
@@ -118,7 +118,7 @@
     {:else}
     <PageHero title={shortDetailTitle} subtitle={detailSubtitle}>
       {#snippet actions()}
-        <a class="ghost-button is-primary" href={href(detail.pmaChatHref)} data-sveltekit-preload-data="tap">+ New chat</a>
+        <a class="ghost-button is-primary" href={href(detail.chatHref)} data-sveltekit-preload-data="tap">+ New chat</a>
         <a class="ghost-button" href={href(detail.newTicketHref)} data-sveltekit-preload-data="tap">+ New ticket</a>
       {/snippet}
     </PageHero>
@@ -282,7 +282,7 @@
             </a>
           </h2>
           <div class="panel-heading-actions">
-            <a class="ghost-button" href={href(detail.pmaChatHref)} data-sveltekit-preload-data="tap">New PMA chat</a>
+            <a class="ghost-button" href={href(detail.chatHref)} data-sveltekit-preload-data="tap">New chat</a>
             <a class="ghost-button" href={href(detail.codingAgentChatHref)} data-sveltekit-preload-data="tap">New coding agent chat</a>
           </div>
         </div>
@@ -290,7 +290,7 @@
           <div class="panel-empty-card" role="status">
             <p class="panel-empty-card-title">No chats scoped to this {detail.kind} yet.</p>
             <div class="panel-empty-card-actions">
-              <a class="ghost-button is-primary" href={href(detail.pmaChatHref)} data-sveltekit-preload-data="tap">+ New PMA chat</a>
+              <a class="ghost-button is-primary" href={href(detail.chatHref)} data-sveltekit-preload-data="tap">+ New chat</a>
               <a class="ghost-button" href={href(detail.codingAgentChatHref)} data-sveltekit-preload-data="tap">+ New coding agent chat</a>
             </div>
           </div>

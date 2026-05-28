@@ -14,7 +14,7 @@ export type ChatTranscriptStreamEvent =
   | { kind: 'transcript_patch'; payload: Record<string, unknown>; lastEventId: string | null }
   | { kind: 'message'; payload: unknown; lastEventId: string | null };
 
-export type PmaChatStreamEvent =
+export type ChatStreamEvent =
   | { kind: 'chat_snapshot'; payload: Record<string, unknown>; lastEventId: string | null }
   | { kind: 'message'; payload: unknown; lastEventId: string | null };
 
@@ -46,8 +46,8 @@ export type ChatTranscriptStreamUseState = {
   queueDepth?: number | null;
 };
 
-export type PmaChatStreamOptions = {
-  onEvent: (event: PmaChatStreamEvent) => void;
+export type ChatStreamOptions = {
+  onEvent: (event: ChatStreamEvent) => void;
   onError?: (error: Event) => void;
   withCredentials?: boolean;
 };
@@ -100,7 +100,7 @@ export function normalizeChatTranscriptStreamEvent(event: SseEvent<unknown>): Ch
   return { kind: 'message', payload: event.data, lastEventId: event.id };
 }
 
-export function normalizePmaChatStreamEvent(event: SseEvent<unknown>): PmaChatStreamEvent {
+export function normalizeChatStreamEvent(event: SseEvent<unknown>): ChatStreamEvent {
   if (event.event === 'chat_snapshot') {
     return { kind: 'chat_snapshot', payload: asRecord(event.data), lastEventId: event.id };
   }
@@ -173,8 +173,8 @@ export function shouldUseChatTranscriptStream(
   return isActiveChatTranscriptStatus(progress?.status) || isActiveChatTranscriptStatus(chat?.status);
 }
 
-export function openPmaChatEventSource(
-  options: PmaChatStreamOptions,
+export function openChatEventSource(
+  options: ChatStreamOptions,
   basePath = runtimeBasePath()
 ): StreamSubscription {
   const source = new EventSource(withRuntimeBasePath('/hub/pma/events', basePath), {
@@ -182,7 +182,7 @@ export function openPmaChatEventSource(
   });
   const handle = (message: MessageEvent) => {
     options.onEvent(
-      normalizePmaChatStreamEvent({
+      normalizeChatStreamEvent({
         id: message.lastEventId || null,
         event: message.type || 'message',
         data: parseJson(message.data),

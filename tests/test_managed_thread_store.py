@@ -79,7 +79,7 @@ def test_update_thread_title_only_replaces_generic_titles(tmp_path: Path) -> Non
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
     store = ManagedThreadStore(tmp_path / "hub")
-    generic = store.create_thread("codex", workspace_root, name="New PMA chat")
+    generic = store.create_thread("codex", workspace_root, name="New chat")
     explicit = store.create_thread("codex", workspace_root, name="Release notes")
 
     updated_generic = store.update_thread_title(

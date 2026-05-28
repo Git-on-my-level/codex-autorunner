@@ -7,7 +7,7 @@
   import AgentModelReasoningPicker from '$lib/components/AgentModelReasoningPicker.svelte';
   import ChatScopePicker from '$lib/components/ChatScopePicker.svelte';
   import type { PickerRecord } from '$lib/viewModels/modelPickers';
-  import type { PmaChatScopeOption } from '$lib/viewModels/pmaChat';
+  import type { ChatScopeOption } from '$lib/viewModels/chat';
 
   let {
     agents = [],
@@ -36,7 +36,7 @@
     reasoningValue?: string;
     scopeValue?: string;
     modeValue?: 'pma' | 'agent';
-    scopeOptions?: PmaChatScopeOption[];
+    scopeOptions?: ChatScopeOption[];
     /** When true, the scope is fixed by the route ("+ New chat" from a repo/worktree page). */
     scopeLocked?: boolean;
     loading?: boolean;

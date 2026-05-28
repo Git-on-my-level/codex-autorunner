@@ -24,7 +24,7 @@ from codex_autorunner.core.orchestration.thread_titles import (
         ),
         (
             ManagedThreadTitleInputs(
-                stored_title="New PMA chat",
+                stored_title="New chat",
                 provider_title="Native Codex thread",
                 user_visible_title_seed="Visible request",
             ),

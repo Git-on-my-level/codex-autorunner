@@ -28,7 +28,7 @@ def _normalize_optional_text(value: Any) -> Optional[str]:
 
 
 def _normalize_pma_delivery_target(value: Any) -> Optional[tuple[str, str]]:
-    """Validate ``surface_kind`` / ``surface_key`` for PMA chat delivery targets.
+    """Validate ``surface_kind`` / ``surface_key`` for chat delivery targets.
 
     Uses strict string normalization for both fields so persistence and runtime
     delivery agree on which payloads are valid.

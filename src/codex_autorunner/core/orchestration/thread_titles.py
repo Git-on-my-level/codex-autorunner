@@ -9,7 +9,7 @@ _TITLE_LIMIT = 80
 _GENERIC_TITLES = {
     "chat",
     "new chat",
-    "new pma chat",
+    "new managed thread",
     "pma",
     "untitled",
     "untitled chat",
