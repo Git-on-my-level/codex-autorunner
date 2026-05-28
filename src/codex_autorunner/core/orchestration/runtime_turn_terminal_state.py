@@ -413,11 +413,20 @@ class RuntimeTurnTerminalStateMachine:
         )
 
     def _note_assistant_stream_text(
-        self, text: str, *, preserve_word_boundaries: bool = False
+        self,
+        text: str,
+        *,
+        stream_mode: str = "delta",
+        preserve_word_boundaries: bool = False,
     ) -> None:
-        self._assistant_text.note_stream_snapshot(
-            text, preserve_word_boundaries=preserve_word_boundaries
-        )
+        if stream_mode == "snapshot":
+            self._assistant_text.note_stream_snapshot(
+                text, preserve_word_boundaries=preserve_word_boundaries
+            )
+        else:
+            self._assistant_text.note_stream_delta(
+                text, preserve_word_boundaries=preserve_word_boundaries
+            )
         self.last_assistant_text = self._assistant_text.text
 
     def _note_assistant_message_text(self, text: str) -> None:
@@ -448,7 +457,8 @@ class RuntimeTurnTerminalStateMachine:
         if isinstance(event, AssistantDelta):
             self._note_assistant_stream_text(
                 event.text,
-                preserve_word_boundaries=event.source == "session/update",
+                stream_mode=event.stream_mode,
+                preserve_word_boundaries=event.preserve_word_boundaries,
             )
             return
         if isinstance(event, AssistantMessage):

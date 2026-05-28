@@ -368,15 +368,25 @@ def test_runtime_turn_terminal_state_machine_reduces_semantic_events() -> None:
     assert state.terminal_signals[0].status == "ok"
 
 
-def test_runtime_turn_terminal_state_preserves_hermes_session_update_word_boundaries() -> (
-    None
-):
+def test_runtime_turn_terminal_state_preserves_hermes_session_update_deltas() -> None:
     state = RuntimeTurnTerminalStateMachine(
         backend_thread_id="thread-1",
         backend_turn_id="turn-1",
     )
 
-    for chunk in ("Alpha", "beta", "gamma", "delta", "."):
+    for chunk in (
+        "Process",
+        "ed",
+        " update",
+        ".\n",
+        "``",
+        "`\n",
+        "print",
+        '("',
+        "ok",
+        '")\n',
+        "```",
+    ):
         state.note_raw_event(
             {
                 "method": "session/update",
@@ -391,7 +401,7 @@ def test_runtime_turn_terminal_state_preserves_hermes_session_update_word_bounda
             }
         )
 
-    assert state.last_assistant_text == "Alpha beta gamma delta."
+    assert state.last_assistant_text == 'Processed update.\n```\nprint("ok")\n```'
 
 
 def test_unknown_raw_event_remains_observable_without_terminal_mutation() -> None:

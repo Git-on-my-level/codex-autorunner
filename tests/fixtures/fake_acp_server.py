@@ -489,18 +489,51 @@ class FakeACPServer:
         # scenarios exercise orchestration behavior instead of burning most of
         # the latency budget inside fixture sleeps under xdist load.
         time.sleep(_OFFICIAL_STREAM_UPDATE_DELAY_SECONDS)
-        self.send(
-            {
-                "method": "session/update",
-                "params": {
-                    "sessionId": session_id,
-                    "update": {
-                        "sessionUpdate": "agent_message_chunk",
-                        "content": reply_content,
+        if self._scenario == "official_hermes_delta_markdown_chunks":
+            for chunk in (
+                "Process",
+                "ed",
+                " up",
+                "date",
+                " and",
+                " orchest",
+                "ration",
+                " are",
+                " intact",
+                ".\n",
+                "``",
+                "`\n",
+                "print",
+                '("',
+                "ok",
+                '")\n',
+                "```",
+            ):
+                self.send(
+                    {
+                        "method": "session/update",
+                        "params": {
+                            "sessionId": session_id,
+                            "update": {
+                                "sessionUpdate": "agent_message_chunk",
+                                "content": {"type": "text", "text": chunk},
+                            },
+                        },
+                    }
+                )
+        else:
+            self.send(
+                {
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": session_id,
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": reply_content,
+                        },
                     },
-                },
-            }
-        )
+                }
+            )
         if self._scenario == "official_cumulative_stream_chunks":
             self.send(
                 {

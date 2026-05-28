@@ -58,7 +58,11 @@ from .events import (
     ACPTurnTerminalEvent,
     normalize_notification,
 )
-from .output_normalizer import ACPIngressNormalizedOutput, normalize_acp_ingress_output
+from .output_normalizer import (
+    ACPIngressInputKind,
+    ACPIngressNormalizedOutput,
+    normalize_acp_ingress_output,
+)
 from .protocol import (
     ACPAdvertisedCommand,
     ACPInitializeResult,
@@ -225,6 +229,46 @@ def _text_excerpt(value: Any, *, limit: int = 120) -> Optional[str]:
     if len(normalized) <= limit:
         return normalized
     return normalized[: limit - 3] + "..."
+
+
+def _compact_text(value: str) -> str:
+    return "".join(str(value or "").split())
+
+
+def _looks_like_transcript_projection(text: str) -> bool:
+    if not text:
+        return False
+    return bool(
+        re.search(r"(?im)(?:^|\n)\s*(?:user|human)\s*:", text)
+        and re.search(r"(?im)(?:^|\n)\s*(?:assistant|agent)\s*:", text)
+    )
+
+
+def _session_update_input_kind(
+    state: _PromptState,
+    text: str,
+) -> ACPIngressInputKind:
+    """Classify Hermes/ACP assistant updates before text assembly.
+
+    `agent_message_chunk` is an append-only delta unless the payload carries
+    clear cumulative evidence. Treating all updates as snapshots corrupts
+    markdown token splits such as "``" + "`\n".
+    """
+
+    if not text:
+        return "current_turn_delta"
+    if state.final_output and text.startswith(state.final_output):
+        return "current_turn_snapshot"
+    if _looks_like_transcript_projection(text):
+        return "current_turn_snapshot"
+    compact_incoming = _compact_text(text)
+    if not compact_incoming:
+        return "current_turn_delta"
+    for prior in state.prior_assistant_texts:
+        compact_prior = _compact_text(prior)
+        if compact_prior and compact_incoming.startswith(compact_prior):
+            return "current_turn_snapshot"
+    return "current_turn_delta"
 
 
 def _stringify(value: Any) -> str:
@@ -1202,10 +1246,15 @@ class ACPClient:
             return event
         self._note_prompt_trace_event(state, event)
         if isinstance(event, ACPOutputDeltaEvent):
+            input_kind: ACPIngressInputKind = (
+                _session_update_input_kind(state, event.delta)
+                if event.method == "session/update"
+                else "current_turn_delta"
+            )
             normalized_delta = state.note_output_delta(
                 event.delta,
-                merge_snapshot=event.method == "session/update",
-                preserve_word_boundaries=event.method == "session/update",
+                merge_snapshot=input_kind == "current_turn_snapshot",
+                preserve_word_boundaries=False,
             )
             self._log_ingress_normalization(state, normalized_delta)
             event = replace(event, delta=normalized_delta.text)
