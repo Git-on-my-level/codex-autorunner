@@ -15,7 +15,7 @@
     invalidateReadModelTags,
     readModelEntityStore,
     readModelEntityTags,
-    selectPmaChats,
+    selectChats,
     selectRepoSummaries,
     selectTicketSummaries,
     selectWorktreeSummaries
@@ -34,7 +34,7 @@
       repos: selectRepoSummaries(readModelState),
       worktrees: selectWorktreeSummaries(readModelState),
       runs: [],
-      chats: selectPmaChats(readModelState),
+      chats: selectChats(readModelState),
       tickets: selectTicketSummaries(readModelState, 'all'),
       artifacts: [],
       ticketsListLoaded

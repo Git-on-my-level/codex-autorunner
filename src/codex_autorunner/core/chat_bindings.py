@@ -1325,7 +1325,7 @@ def repo_has_active_chat_binding(
 def repo_has_active_non_pma_chat_binding(
     *, hub_root: Path, raw_config: Mapping[str, Any], repo_id: str
 ) -> bool:
-    """Return True when a repo has active non-PMA chat bindings."""
+    """Return True when a repo has active non-managed thread bindings."""
 
     return repo_has_active_chat_binding(
         hub_root=hub_root,

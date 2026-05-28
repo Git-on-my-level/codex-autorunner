@@ -1,10 +1,10 @@
-import { agentCapabilityAllowed, modelReasoningOptions, modelSelectorState, type ModelSelectorState } from './pmaChat';
-import type { PmaChatSummary } from './domain';
+import { agentCapabilityAllowed, modelReasoningOptions, modelSelectorState, type ModelSelectorState } from './chat';
+import type { ChatSummary } from './domain';
 
 export type PickerRecord = Record<string, unknown>;
 
 /** Selector state when switching chats or applying user defaults (no chat-bound agent). */
-export type PmaChatResolvedSelectors =
+export type ChatResolvedSelectors =
   | { mode: 'defaults'; agentId: string; agentProfile: string; reasoning: string }
   | {
       mode: 'chat-bound';
@@ -15,12 +15,12 @@ export type PmaChatResolvedSelectors =
     };
 
 /** Match `+page` / `loadInitialSupportingData` default-agent path: hub defaults + first agent fallback. */
-export function resolvePmaChatSelectorsForActiveChat(
-  chat: PmaChatSummary | null | undefined,
+export function resolveChatSelectorsForActiveChat(
+  chat: ChatSummary | null | undefined,
   agents: PickerRecord[],
   configuredDefaultAgentId: string | undefined,
   configuredDefaultProfile: string
-): PmaChatResolvedSelectors {
+): ChatResolvedSelectors {
   if (!chat?.agentId) {
     if (agents.length === 0) {
       return { mode: 'defaults', agentId: '', agentProfile: '', reasoning: '' };

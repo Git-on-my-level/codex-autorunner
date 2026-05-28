@@ -1,5 +1,5 @@
-import type { PmaRunProgress, TicketSummary, WorkStatus } from './domain';
-import { formatRelativeTime, statusLabel } from './pmaChat';
+import type { ChatRunProgress, TicketSummary, WorkStatus } from './domain';
+import { formatRelativeTime, statusLabel } from './chat';
 import { repoTicketRoute, worktreeTicketRoute } from './routes';
 
 export type TicketFlowStatusViewModel = {
@@ -23,7 +23,7 @@ export type TicketFlowOwnerScope = {
 
 export function buildTicketFlowStatusViewModel(
   tickets: TicketSummary[],
-  runs: PmaRunProgress[],
+  runs: ChatRunProgress[],
   owner: TicketFlowOwnerScope = null,
   now = new Date()
 ): TicketFlowStatusViewModel {
@@ -89,7 +89,7 @@ export function ticketAliases(ticket: TicketSummary): Set<string> {
   );
 }
 
-export function ticketAliasesFromRun(run: PmaRunProgress): Set<string> {
+export function ticketAliasesFromRun(run: ChatRunProgress): Set<string> {
   return new Set(
     [
       'ticket_id',
@@ -123,7 +123,7 @@ export function aliasesOverlap(left: Set<string>, right: Set<string>): boolean {
   return false;
 }
 
-function selectPrimaryRun(runs: PmaRunProgress[]): PmaRunProgress | null {
+function selectPrimaryRun(runs: ChatRunProgress[]): ChatRunProgress | null {
   const actionableRuns = runs.filter((run) => !isPendingStopRequestedRun(run));
   return (
     actionableRuns.find((run) => run.status === 'running') ??
@@ -132,7 +132,7 @@ function selectPrimaryRun(runs: PmaRunProgress[]): PmaRunProgress | null {
   );
 }
 
-function isPendingStopRequestedRun(run: PmaRunProgress): boolean {
+function isPendingStopRequestedRun(run: ChatRunProgress): boolean {
   const rawStatus = stringFromRaw(run.raw, 'status') ?? run.status;
   const stopRequested = rawValue(run.raw, 'stop_requested');
   return String(rawStatus).trim().toLowerCase() === 'pending' && isTruthyRaw(stopRequested);
@@ -144,7 +144,7 @@ function isTruthyRaw(value: unknown): boolean {
   return false;
 }
 
-function mostRecentRun(runs: PmaRunProgress[]): PmaRunProgress | null {
+function mostRecentRun(runs: ChatRunProgress[]): ChatRunProgress | null {
   return (
     [...runs].sort(
       (left, right) =>
@@ -153,7 +153,7 @@ function mostRecentRun(runs: PmaRunProgress[]): PmaRunProgress | null {
   );
 }
 
-function runRecencyTimestamp(run: PmaRunProgress): number {
+function runRecencyTimestamp(run: ChatRunProgress): number {
   const candidates = [
     run.lastEventAt,
     dateFromRaw(run.raw, ['finished_at', 'started_at', 'created_at'])
@@ -189,7 +189,7 @@ function buildTicketAliasLookup(tickets: TicketSummary[]): TicketAliasLookup {
   return lookup;
 }
 
-function findTicketForRun(tickets: TicketSummary[], run: PmaRunProgress, lookup: TicketAliasLookup | null = null): TicketSummary | null {
+function findTicketForRun(tickets: TicketSummary[], run: ChatRunProgress, lookup: TicketAliasLookup | null = null): TicketSummary | null {
   const runAliases = ticketAliasesFromRun(run);
   if (lookup) {
     for (const alias of runAliases) {
@@ -209,7 +209,7 @@ function ticketMatchesOwner(ticket: TicketSummary, owner: Exclude<TicketFlowOwne
   return ticket.worktreeId === owner.id;
 }
 
-function runMatchesOwner(run: PmaRunProgress, owner: Exclude<TicketFlowOwnerScope, null>): boolean {
+function runMatchesOwner(run: ChatRunProgress, owner: Exclude<TicketFlowOwnerScope, null>): boolean {
   const resourceKind = stringFromRaw(run.raw, 'resource_kind') ?? stringFromRaw(run.raw, 'state.resource_kind') ?? stringFromRaw(run.raw, 'state.ticket_engine.resource_kind');
   const resourceId = stringFromRaw(run.raw, 'resource_id') ?? stringFromRaw(run.raw, 'state.resource_id') ?? stringFromRaw(run.raw, 'state.ticket_engine.resource_id');
   if (resourceKind === owner.kind && resourceId === owner.id) return true;
@@ -248,7 +248,7 @@ function ticketDetailHref(ticket: TicketSummary): string {
   return '/chats';
 }
 
-function reasonFromRun(run: PmaRunProgress | null): string | null {
+function reasonFromRun(run: ChatRunProgress | null): string | null {
   if (!run) return null;
   return (
     run.guidance ??
@@ -262,7 +262,7 @@ function reasonFromRun(run: PmaRunProgress | null): string | null {
   );
 }
 
-function recoveryStateFromRun(run: PmaRunProgress | null): string | null {
+function recoveryStateFromRun(run: ChatRunProgress | null): string | null {
   if (!run) return null;
   return (
     stringFromRaw(run.raw, 'run_state.recovery_projection.primary_state') ??
@@ -273,7 +273,7 @@ function recoveryStateFromRun(run: PmaRunProgress | null): string | null {
   );
 }
 
-function recoveryReasonFromRun(run: PmaRunProgress | null): string | null {
+function recoveryReasonFromRun(run: ChatRunProgress | null): string | null {
   if (!run) return null;
   const state = recoveryStateFromRun(run);
   if (state === 'commit_barrier_pending' || state === 'commit_barrier_exhausted') {

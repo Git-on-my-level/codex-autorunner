@@ -20,7 +20,7 @@
   import { filterTicketRows, rowRelativeTime } from '$lib/viewModels/ticket';
   import { renderMarkdownToHtml } from '$lib/viewModels/markdown';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
-  import { statusLabel } from '$lib/viewModels/pmaChat';
+  import { statusLabel } from '$lib/viewModels/chat';
   import type { JsonRecord, PartialPageIssue } from '$lib/api/client';
   import AgentModelReasoningPicker from '$lib/components/AgentModelReasoningPicker.svelte';
   import ContentSkeleton from '$lib/components/ContentSkeleton.svelte';

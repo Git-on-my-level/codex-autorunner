@@ -13,12 +13,10 @@ MANAGED_THREAD_PUBLIC_EXECUTION_ERROR = "Managed thread execution failed"
 
 def sanitize_managed_thread_result_error(detail: Any) -> str:
     sanitized = _normalize_optional_text(detail)
-    if sanitized in {RUNTIME_THREAD_TIMEOUT_ERROR, "PMA chat timed out"}:
-        return "PMA chat timed out"
-    if sanitized in {RUNTIME_THREAD_INTERRUPTED_ERROR, "PMA chat interrupted"}:
-        return "PMA chat interrupted"
-    if sanitized in {"PMA chat timed out", "PMA chat interrupted"}:
-        return sanitized
+    if sanitized == RUNTIME_THREAD_TIMEOUT_ERROR:
+        return "Managed thread timed out"
+    if sanitized == RUNTIME_THREAD_INTERRUPTED_ERROR:
+        return "Managed thread interrupted"
     return MANAGED_THREAD_PUBLIC_EXECUTION_ERROR
 
 

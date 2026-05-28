@@ -3,9 +3,9 @@ import {
   mapContextspaceDocument,
   mapArtifactDelivery,
   mapDashboardSummary,
-  mapPmaChatSummary,
-  mapPmaRunProgress,
-  mapPmaTimelineItem,
+  mapChatSummary,
+  mapChatRunProgress,
+  mapChatTimelineItem,
   mapRepoSummary,
   mapSurfaceArtifact,
   mapTicketDetail,
@@ -41,7 +41,7 @@ describe('view model mappers', () => {
 
   it('requires canonical PMA timeline identity and provenance', () => {
     expect(() =>
-      mapPmaTimelineItem({
+      mapChatTimelineItem({
         item_id: 'cursor-99',
         kind: 'intermediate',
         order_key: '00000099|cursor',
@@ -52,7 +52,7 @@ describe('view model mappers', () => {
       })
     ).toThrow(/canonical identity/);
 
-    const item = mapPmaTimelineItem({
+    const item = mapChatTimelineItem({
       item_id: 'turn:turn-1:intermediate:0001',
       kind: 'intermediate',
       order_key: '00000001|item',
@@ -89,7 +89,7 @@ describe('view model mappers', () => {
   });
 
   it('maps managed thread payloads into chat summaries', () => {
-    const vm = mapPmaChatSummary({
+    const vm = mapChatSummary({
       thread_target_id: 'thread-1',
       display_name: 'Repo fix',
       agent_id: 'codex',
@@ -112,7 +112,7 @@ describe('view model mappers', () => {
   });
 
   it('preserves explicit unknown runtime without inventing a model', () => {
-    const vm = mapPmaChatSummary({
+    const vm = mapChatSummary({
       thread_target_id: 'thread-runtime-unknown',
       display_name: 'Runtime unknown',
       agent_id: 'codex',
@@ -141,7 +141,7 @@ describe('view model mappers', () => {
   });
 
   it('trusts backend-projected summary titles without client delimiter cleanup', () => {
-    const vm = mapPmaChatSummary({
+    const vm = mapChatSummary({
       thread_target_id: 'thread-inj',
       display_name: 'The web UI gets frozen after a while',
       agent_id: 'codex',
@@ -154,7 +154,7 @@ describe('view model mappers', () => {
   });
 
   it('uses backend-projected display title instead of rebuilding from message excerpts', () => {
-    const vm = mapPmaChatSummary({
+    const vm = mapChatSummary({
       thread_target_id: 'thread-inj-only',
       display_title: 'User-visible first line',
       display_name: 'New chat',
@@ -169,7 +169,7 @@ describe('view model mappers', () => {
   });
 
   it('does not derive summary titles from backend-visible excerpt fields', () => {
-    const vm = mapPmaChatSummary({
+    const vm = mapChatSummary({
       thread_target_id: 'thread-ex-inj',
       name: 'New chat',
       first_user_visible_text: 'Real question here',
@@ -183,7 +183,7 @@ describe('view model mappers', () => {
   });
 
   it('trusts backend display title before raw prompt fallbacks', () => {
-    const vm = mapPmaChatSummary({
+    const vm = mapChatSummary({
       thread_target_id: 'thread-visible-seed',
       display_title: 'Real visible request',
       name: 'New chat',
@@ -200,7 +200,7 @@ describe('view model mappers', () => {
   });
 
   it('uses chat channel display names instead of surface id fallback titles', () => {
-    const vm = mapPmaChatSummary({
+    const vm = mapChatSummary({
       thread_target_id: 'thread-1',
       display_title: 'CAR Workspace / #hermes',
       display_name: 'discord:1488827014600331415',
@@ -215,7 +215,7 @@ describe('view model mappers', () => {
   });
 
   it('keeps explicit user-managed thread titles even when channel display exists', () => {
-    const vm = mapPmaChatSummary({
+    const vm = mapChatSummary({
       thread_target_id: 'thread-1',
       display_name: 'Chat-bound thread',
       chat_bound: true,
@@ -229,7 +229,7 @@ describe('view model mappers', () => {
   });
 
   it('maps managed thread agent_profile into chat summaries', () => {
-    const vm = mapPmaChatSummary({
+    const vm = mapChatSummary({
       managed_thread_id: 'thread-h',
       name: 'Hermes chat',
       agent: 'hermes',
@@ -240,7 +240,7 @@ describe('view model mappers', () => {
   });
 
   it('falls back to status_changed_at when updated_at is absent from list payloads', () => {
-    const vm = mapPmaChatSummary({
+    const vm = mapChatSummary({
       managed_thread_id: 't-stamp',
       name: 'Hello',
       agent: 'codex',
@@ -251,7 +251,7 @@ describe('view model mappers', () => {
   });
 
   it('prefers latest visible turn activity over broad thread-row maintenance timestamps', () => {
-    const vm = mapPmaChatSummary({
+    const vm = mapChatSummary({
       managed_thread_id: 't-maintenance',
       name: 'Old chat',
       agent: 'codex',
@@ -275,7 +275,7 @@ describe('view model mappers', () => {
   });
 
   it('derives readable ticket-flow chat summaries from managed thread payload fields', () => {
-    const vm = mapPmaChatSummary({
+    const vm = mapChatSummary({
       managed_thread_id: 'thread-ticket-flow',
       display_title: 'Ticket flow · TICKET-330-pma-chat-managed-thread-readability',
       name: 'ticket-flow:codex',
@@ -304,7 +304,7 @@ describe('view model mappers', () => {
   });
 
   it('flags ticket-flow chats from raw name even when no ticket id surfaces', () => {
-    const vm = mapPmaChatSummary({
+    const vm = mapChatSummary({
       managed_thread_id: 'thread-no-ticket',
       name: 'ticket-flow:hermes@m4-pma',
       agent: 'codex',
@@ -317,7 +317,7 @@ describe('view model mappers', () => {
   });
 
   it('does not flag plain chats as ticket-flow', () => {
-    const vm = mapPmaChatSummary({
+    const vm = mapChatSummary({
       managed_thread_id: 'thread-plain',
       name: 'New chat',
       agent: 'codex',
@@ -328,7 +328,7 @@ describe('view model mappers', () => {
   });
 
   it('maps PMA tail/status payloads into run progress', () => {
-    const vm = mapPmaRunProgress({
+    const vm = mapChatRunProgress({
       managed_thread_id: 'thread-1',
       managed_turn_id: 'turn-1',
       turn_status: 'running',

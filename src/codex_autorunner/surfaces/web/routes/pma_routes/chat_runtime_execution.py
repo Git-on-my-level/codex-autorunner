@@ -295,7 +295,7 @@ async def execute_harness_turn(
             ConnectionResetError,
         ):
             logger.exception("Failed to interrupt PMA runtime turn")
-        return {"status": "interrupted", "detail": "PMA chat interrupted"}
+        return {"status": "interrupted", "detail": "Managed thread interrupted"}
 
     streamed_raw_events: list[Any] = []
     stream_task: Optional[asyncio.Task[None]] = None
@@ -344,7 +344,7 @@ async def execute_harness_turn(
             ):
                 logger.exception("Failed to interrupt PMA runtime turn")
             cancel_background_task(turn_task, name="pma.runtime.turn.wait")
-            return {"status": "error", "detail": "PMA chat timed out"}
+            return {"status": "error", "detail": "Managed thread timed out"}
         if interrupt_task in done:
             try:
                 await harness.interrupt(hub_root, resolved_conversation_id, turn_id)
@@ -357,7 +357,7 @@ async def execute_harness_turn(
             ):
                 logger.exception("Failed to interrupt PMA runtime turn")
             cancel_background_task(turn_task, name="pma.runtime.turn.wait")
-            return {"status": "interrupted", "detail": "PMA chat interrupted"}
+            return {"status": "interrupted", "detail": "Managed thread interrupted"}
         turn_result = await turn_task
         turn_completed_normally = True
     except Exception as exc:
@@ -496,7 +496,7 @@ async def execute_app_server(
             RuntimeError,
             ValueError,
         ):
-            logger.debug("pma chat register_turn failed", exc_info=True)
+            logger.debug("managed thread register_turn failed", exc_info=True)
     codex_harness = CodexHarness(supervisor, events)
     if on_meta is not None:
         try:
@@ -523,7 +523,7 @@ async def execute_app_server(
             ConnectionResetError,
         ):
             logger.exception("Failed to interrupt Codex turn")
-        return {"status": "interrupted", "detail": "PMA chat interrupted"}
+        return {"status": "interrupted", "detail": "Managed thread interrupted"}
 
     turn_task = asyncio.create_task(handle.wait(timeout=None))
     timeout_task = asyncio.create_task(asyncio.sleep(resolved_timeout_seconds))
@@ -545,7 +545,7 @@ async def execute_app_server(
             ):
                 logger.exception("Failed to interrupt Codex turn")
             cancel_background_task(turn_task, name="pma.app_server.turn.wait")
-            return {"status": "error", "detail": "PMA chat timed out"}
+            return {"status": "error", "detail": "Managed thread timed out"}
         if interrupt_task in done:
             try:
                 await codex_harness.interrupt(hub_root, thread_id, handle.turn_id)
@@ -558,7 +558,7 @@ async def execute_app_server(
             ):
                 logger.exception("Failed to interrupt Codex turn")
             cancel_background_task(turn_task, name="pma.app_server.turn.wait")
-            return {"status": "interrupted", "detail": "PMA chat interrupted"}
+            return {"status": "interrupted", "detail": "Managed thread interrupted"}
         turn_result = await turn_task
     finally:
         cancel_background_task(timeout_task, name="pma.app_server.timeout.wait")
@@ -676,7 +676,7 @@ async def execute_opencode(
     opencode_harness = OpenCodeHarness(supervisor)
     if interrupt_event.is_set():
         await opencode_harness.interrupt(hub_root, session_id, None)
-        return {"status": "interrupted", "detail": "PMA chat interrupted"}
+        return {"status": "interrupted", "detail": "Managed thread interrupted"}
 
     model_payload = resolve_opencode_model_payload(model)
     await supervisor.mark_turn_started(hub_root)
@@ -789,11 +789,11 @@ async def execute_opencode(
         if timeout_task in done:
             cancel_background_task(output_task, name="pma.opencode.output.collect")
             await opencode_harness.interrupt(hub_root, session_id, None)
-            return {"status": "error", "detail": "PMA chat timed out"}
+            return {"status": "error", "detail": "Managed thread timed out"}
         if interrupt_task in done:
             cancel_background_task(output_task, name="pma.opencode.output.collect")
             await opencode_harness.interrupt(hub_root, session_id, None)
-            return {"status": "interrupted", "detail": "PMA chat interrupted"}
+            return {"status": "interrupted", "detail": "Managed thread interrupted"}
         output_result = await output_task
     finally:
         cancel_background_task(timeout_task, name="pma.opencode.timeout.wait")

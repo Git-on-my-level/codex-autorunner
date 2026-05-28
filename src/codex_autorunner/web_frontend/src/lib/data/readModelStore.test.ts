@@ -9,10 +9,10 @@ import {
   type PageWindow,
   type ProjectionCursor
 } from '$lib/api/readModelContracts';
-import { type PmaRunProgress, type SurfaceArtifact } from '$lib/viewModels/domain';
-import type { ChatTranscriptCard } from '$lib/viewModels/pmaChat';
+import { type ChatRunProgress, type SurfaceArtifact } from '$lib/viewModels/domain';
+import type { ChatTranscriptCard } from '$lib/viewModels/chat';
 import {
-  PMA_LIVE_PROGRESS_EVENT_LIMIT,
+  LIVE_PROGRESS_EVENT_LIMIT,
   ReadModelEntityStore,
   selectChatDetailView,
   selectChatIndexView,
@@ -362,7 +362,7 @@ describe('read model entity store', () => {
     store.replaceChatTranscript('chat-2', [inactive]);
     const inactiveBefore = store.snapshot().chatTranscripts['chat-2'];
 
-    store.setPmaProgress('chat-1', progress('chat-1', 1));
+    store.setChatProgress('chat-1', progress('chat-1', 1));
 
     expect(store.snapshot().chatTranscripts['chat-2']).toBe(inactiveBefore);
   });
@@ -372,7 +372,7 @@ describe('read model entity store', () => {
     store.replaceChatTranscript('chat-1', [pmaMessageCard('chat-1', 'turn:1:user', 'hello')]);
     const selectedBefore = selectChatTranscript(store.snapshot(), 'chat-1');
 
-    store.setPmaProgress('chat-1', progress('chat-1', 1));
+    store.setChatProgress('chat-1', progress('chat-1', 1));
 
     expect(selectChatTranscript(store.snapshot(), 'chat-1')).toBe(selectedBefore);
   });
@@ -393,7 +393,7 @@ describe('read model entity store', () => {
       'turn:1:user'
     ]);
 
-    store.setPmaProgress('chat-1', progress('chat-1', 1));
+    store.setChatProgress('chat-1', progress('chat-1', 1));
 
     expect(selectChatTranscript(store.snapshot(), 'chat-1')).toBe(selectedBefore);
   });
@@ -1053,13 +1053,13 @@ describe('read model entity store', () => {
     const store = new ReadModelEntityStore();
     const events = [
       ...Array.from({ length: 1_000 }, (_, index) => progressArtifact(`hidden-${index}`, { kind: 'hidden', hidden: true })),
-      ...Array.from({ length: PMA_LIVE_PROGRESS_EVENT_LIMIT + 5 }, (_, index) => progressArtifact(`visible-${index}`, { kind: 'tool' }))
+      ...Array.from({ length: LIVE_PROGRESS_EVENT_LIMIT + 5 }, (_, index) => progressArtifact(`visible-${index}`, { kind: 'tool' }))
     ];
 
-    store.setPmaProgress('chat-1', pmaProgress(events));
+    store.setChatProgress('chat-1', chatProgress(events));
 
-    const retained = store.snapshot().pmaProgress['chat-1'].events;
-    expect(retained).toHaveLength(PMA_LIVE_PROGRESS_EVENT_LIMIT);
+    const retained = store.snapshot().chatProgress['chat-1'].events;
+    expect(retained).toHaveLength(LIVE_PROGRESS_EVENT_LIMIT);
     expect(retained.every((event) => event.id.startsWith('visible-'))).toBe(true);
     expect(retained[0].id).toBe('visible-5');
   });
@@ -1101,7 +1101,7 @@ function pmaTraceCard(id: string, text: string, eventIds: string[], index = 1): 
   };
 }
 
-function progress(chatId: string, sequence: number): PmaRunProgress {
+function progress(chatId: string, sequence: number): ChatRunProgress {
   return {
     id: `turn-${sequence}`,
     chatId,
@@ -1137,7 +1137,7 @@ function progressArtifact(id: string, progressItem: Record<string, unknown>): Su
   };
 }
 
-function pmaProgress(events: SurfaceArtifact[]): PmaRunProgress {
+function chatProgress(events: SurfaceArtifact[]): ChatRunProgress {
   return {
     id: 'run-1',
     chatId: 'chat-1',

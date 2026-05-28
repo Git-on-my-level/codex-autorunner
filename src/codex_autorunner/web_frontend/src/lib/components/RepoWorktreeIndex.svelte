@@ -3,7 +3,7 @@
   import type { RepoWorktreeIndexFilter, RepoWorktreeIndexViewModel } from '$lib/viewModels/repoWorktree';
   import { countRepoWorktreeIndexEntities, filterRepoWorktreeIndexRows, rowRelativeTime, visibleRepoWorktreeChildren } from '$lib/viewModels/repoWorktree';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
-  import { statusLabel } from '$lib/viewModels/pmaChat';
+  import { statusLabel } from '$lib/viewModels/chat';
   import type { PartialPageIssue } from '$lib/api/client';
   import TicketDiffStats from '$lib/components/tickets/TicketDiffStats.svelte';
   import VirtualList from '$lib/components/VirtualList.svelte';
@@ -326,7 +326,7 @@
             <div class="repo-action-buttons repo-head-actions" aria-label={`Actions for ${row.label}`}>
               <a
                 class="row-action-button is-primary-affordance"
-                href={href(row.pmaChatHref)}
+                href={href(row.chatHref)}
                 title={`New chat scoped to ${row.label}`}
                 aria-label={`New chat for ${row.label}`}
                 data-sveltekit-preload-data="tap"
@@ -497,7 +497,7 @@
                       <div class="repo-action-buttons" aria-label={`Actions for ${worktree.label}`}>
                         <a
                           class="row-action-button is-primary-affordance"
-                          href={href(worktree.pmaChatHref)}
+                          href={href(worktree.chatHref)}
                           title={`New chat scoped to ${worktree.label}`}
                           aria-label={`New chat for ${worktree.label}`}
                           data-sveltekit-preload-data="tap"

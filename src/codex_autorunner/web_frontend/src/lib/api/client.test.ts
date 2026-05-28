@@ -105,7 +105,7 @@ describe('API client error handling', () => {
   it('maps domain client responses through view model mappers', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({
-        threads: [{ thread_target_id: 'thread-1', display_name: 'PMA room', status: 'running' }]
+        threads: [{ thread_target_id: 'thread-1', display_name: 'chat', status: 'running' }]
       })
     ) as unknown as typeof fetch;
     const client = new WebApiClient(fetcher);
@@ -117,7 +117,7 @@ describe('API client error handling', () => {
     if (result.ok) {
       expect(result.data[0]).toMatchObject({
         id: 'thread-1',
-        title: 'PMA room',
+        title: 'chat',
         status: 'running'
       });
     }
@@ -305,13 +305,13 @@ describe('API client error handling', () => {
     }
   });
 
-  it('maps PMA chat list status from backend execution state before lifecycle state', async () => {
+  it('maps chat list status from backend execution state before lifecycle state', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({
         threads: [
           {
             thread_target_id: 'thread-1',
-            display_name: 'PMA room',
+            display_name: 'chat',
             status: 'completed',
             normalized_status: 'completed',
             execution_status: 'running'
@@ -337,7 +337,7 @@ describe('API client error handling', () => {
       const url = String(input);
       if (url.endsWith('/retire-active')) {
         return Response.json({
-          threads: [{ thread_target_id: 'thread-1', display_name: 'PMA room' }],
+          threads: [{ thread_target_id: 'thread-1', display_name: 'chat' }],
           retired_count: 1,
           requested_count: 1,
           error_count: 0,
@@ -345,7 +345,7 @@ describe('API client error handling', () => {
         });
       }
       if (url.endsWith('/resume') || url.endsWith('/compact') || url.endsWith('/retire')) {
-        return Response.json({ thread: { thread_target_id: 'thread-1', display_name: 'PMA room' } });
+        return Response.json({ thread: { thread_target_id: 'thread-1', display_name: 'chat' } });
       }
       return Response.json({ status: 'ok' });
     }) as unknown as typeof fetch;

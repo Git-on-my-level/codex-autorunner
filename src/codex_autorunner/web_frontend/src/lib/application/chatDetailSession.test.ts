@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { PmaChatSummary } from '$lib/viewModels/domain';
-import type { ChatListEntry } from '$lib/viewModels/pmaChat';
+import type { ChatSummary } from '$lib/viewModels/domain';
+import type { ChatListEntry } from '$lib/viewModels/chat';
 import {
   activateChatDetail,
   activateRequestedChatFromRows,
@@ -119,7 +119,7 @@ describe('chat detail session', () => {
   });
 });
 
-function chat(overrides: Partial<PmaChatSummary>): PmaChatSummary {
+function chat(overrides: Partial<ChatSummary>): ChatSummary {
   return {
     id: 'chat-1',
     title: 'Chat',

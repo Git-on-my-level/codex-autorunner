@@ -7,8 +7,8 @@
     formatCompactMessageDateTime,
     type ChatTranscriptCard,
     type ChatToolCallCard
-  } from '$lib/viewModels/pmaChat';
-  import type { PmaMessageCapsuleRef } from '$lib/viewModels/domain';
+  } from '$lib/viewModels/chat';
+  import type { MessageCapsuleRef } from '$lib/viewModels/domain';
   import type { ArtifactDelivery, SurfaceArtifact } from '$lib/viewModels/domain';
 
   let {
@@ -164,14 +164,14 @@
     return Math.max(0, card.cards.length - MAX_RENDERED_TURN_SUMMARY_CARDS);
   }
 
-  function modelOnlyCapsuleRefs(card: Extract<ChatTranscriptCard, { kind: 'message' }>): PmaMessageCapsuleRef[] {
+  function modelOnlyCapsuleRefs(card: Extract<ChatTranscriptCard, { kind: 'message' }>): MessageCapsuleRef[] {
     if (card.message.role !== 'user') return [];
     const structuredRefs = card.message.modelContextRefs ?? [];
     if (structuredRefs.length > 0) return structuredRefs;
     return (card.message.capsuleRefs ?? []).filter((ref) => ref.visibility === 'model_only');
   }
 
-  function capsuleRefLabel(ref: PmaMessageCapsuleRef): string {
+  function capsuleRefLabel(ref: MessageCapsuleRef): string {
     return `${ref.capsuleId} v${ref.capsuleVersion} · ${ref.scope}`;
   }
 

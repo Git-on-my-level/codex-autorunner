@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { statusLabel } from '$lib/viewModels/pmaChat';
+  import { statusLabel } from '$lib/viewModels/chat';
   import type { WorkStatus } from '$lib/viewModels/domain';
 
   let { status, title = null }: { status: WorkStatus; title?: string | null } = $props();

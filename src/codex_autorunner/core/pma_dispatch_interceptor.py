@@ -6,12 +6,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from .config import load_repo_config
-from .lifecycle_events import LifecycleEvent, LifecycleEventType
-from .pma_chat_delivery import (
+from .chat_delivery import (
     notify_preferred_bound_chat_for_workspace,
     notify_primary_pma_chat_for_repo,
 )
+from .config import load_repo_config
+from .lifecycle_events import LifecycleEvent, LifecycleEventType
 from .state_roots import resolve_repo_flows_db_path
 
 logger = logging.getLogger(__name__)
@@ -327,7 +327,7 @@ class PmaDispatchInterceptor:
             )
         except (OSError, RuntimeError, ValueError):
             self._logger.exception(
-                "Failed to notify PMA chat for escalated dispatch run_id=%s",
+                "Failed to notify managed thread for escalated dispatch run_id=%s",
                 run_id,
             )
             return False

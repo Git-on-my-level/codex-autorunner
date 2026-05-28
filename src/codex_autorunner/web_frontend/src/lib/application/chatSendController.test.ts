@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ApiError, PmaQueuedTurn } from '$lib/api/client';
+import type { ApiError, ChatQueuedTurn } from '$lib/api/client';
 import { ReadModelEntityStore } from '$lib/data/readModelStore';
-import { localPmaChatScopeOption, type PendingAttachment } from '$lib/viewModels/pmaChat';
-import type { PmaChatSummary, PmaRunProgress } from '$lib/viewModels/domain';
+import { localChatScopeOption, type PendingAttachment } from '$lib/viewModels/chat';
+import type { ChatSummary, ChatRunProgress } from '$lib/viewModels/domain';
 import { initialChatDetailSessionState, type ChatDetailSessionState } from './chatDetailSession';
 import { createChatSendController, type ChatSendControllerApi } from './chatSendController';
 
@@ -30,7 +30,7 @@ describe('chat send controller', () => {
     });
     harness.api.pma.sendMessage.mockResolvedValue(ok({ chatId: 'chat-1', id: 'turn-2', text: 'follow up' }));
     harness.refreshActive.mockImplementation(async (chatId) => {
-      harness.store.setPmaQueue(chatId, [queuedTurn('turn-2', { client_turn_id: 'optimistic:user:1778932800000:turn' })]);
+      harness.store.setChatQueue(chatId, [queuedTurn('turn-2', { client_turn_id: 'optimistic:user:1778932800000:turn' })]);
     });
 
     await harness.controller.sendMessage();
@@ -64,7 +64,7 @@ describe('chat send controller', () => {
     const harness = createHarness({ draft: 'surprise queue' });
     harness.api.pma.sendMessage.mockResolvedValue(ok({ chatId: 'chat-1', id: 'turn-2', text: 'surprise queue' }));
     harness.refreshActive.mockImplementation(async (chatId) => {
-      harness.store.setPmaQueue(chatId, [queuedTurn('turn-2', { client_turn_id: 'optimistic:user:1778932800000:turn' })]);
+      harness.store.setChatQueue(chatId, [queuedTurn('turn-2', { client_turn_id: 'optimistic:user:1778932800000:turn' })]);
     });
 
     await harness.controller.sendMessage();
@@ -154,17 +154,17 @@ describe('chat send controller', () => {
 
 function createHarness(options: {
   activeChatId?: string;
-  activeChat?: PmaChatSummary;
-  localDraftChat?: PmaChatSummary | null;
+  activeChat?: ChatSummary;
+  localDraftChat?: ChatSummary | null;
   draft?: string;
   attachments?: PendingAttachment[];
-  progress?: PmaRunProgress | null;
-  queuedTurns?: PmaQueuedTurn[];
+  progress?: ChatRunProgress | null;
+  queuedTurns?: ChatQueuedTurn[];
 } = {}) {
   const store = new ReadModelEntityStore();
   const activeChatId = options.activeChatId ?? 'chat-1';
   const activeChat = options.activeChat ?? chatSummary(activeChatId);
-  if (options.queuedTurns) store.setPmaQueue(activeChatId, options.queuedTurns);
+  if (options.queuedTurns) store.setChatQueue(activeChatId, options.queuedTurns);
   const state = {
     activeChatId,
     activeChat,
@@ -209,7 +209,7 @@ function createHarness(options: {
       state.attachments = value;
     },
     getComposerEditVersion: () => 0,
-    getSelectedScope: () => localPmaChatScopeOption(),
+    getSelectedScope: () => localChatScopeOption(),
     getSelectedScopeSource: () => 'default_hub',
     getSelectedAgent: () => 'codex',
     getSelectedProfile: () => '',
@@ -244,7 +244,7 @@ function createHarness(options: {
     confirm,
     refreshActive,
     transcriptIds: (chatId: string) => store.snapshot().chatTranscripts[chatId]?.order ?? [],
-    queueIds: (chatId: string) => (store.snapshot().pmaQueues[chatId] ?? []).map((turn) => turn.managedTurnId)
+    queueIds: (chatId: string) => (store.snapshot().chatQueues[chatId] ?? []).map((turn) => turn.managedTurnId)
   };
 }
 
@@ -265,7 +265,7 @@ function error(code: string) {
   };
 }
 
-function chatSummary(id: string, overrides: Partial<PmaChatSummary> = {}): PmaChatSummary {
+function chatSummary(id: string, overrides: Partial<ChatSummary> = {}): ChatSummary {
   return {
     id,
     title: 'Chat',
@@ -286,7 +286,7 @@ function chatSummary(id: string, overrides: Partial<PmaChatSummary> = {}): PmaCh
   };
 }
 
-function queuedTurn(managedTurnId: string, raw: Record<string, unknown> = {}): PmaQueuedTurn {
+function queuedTurn(managedTurnId: string, raw: Record<string, unknown> = {}): ChatQueuedTurn {
   return {
     managedTurnId,
     position: 1,
@@ -318,7 +318,7 @@ function pendingAttachment(
   };
 }
 
-function progress(): PmaRunProgress {
+function progress(): ChatRunProgress {
   return {
     id: 'turn-running',
     chatId: 'chat-1',

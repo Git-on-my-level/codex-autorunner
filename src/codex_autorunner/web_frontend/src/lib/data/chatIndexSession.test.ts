@@ -10,7 +10,7 @@ import {
 } from '$lib/api/readModelContracts';
 import type { StreamVisibilityPolicy } from '$lib/runtime/streamVisibilityPolicy';
 import { ReadModelEntityStore, selectChatIndexWindowView } from './readModelStore';
-import { selectPmaChats } from './readModelViewModels';
+import { selectChats } from './readModelViewModels';
 import { createChatIndexSession } from './chatIndexSession';
 import type { ReadModelSnapshotClient } from './readModelClients';
 import type { ChatIndexStreamFactory } from './chatIndexSession';
@@ -175,7 +175,7 @@ describe('chat index session', () => {
     }));
     const streamOptions = streamFactory.mock.calls[0]?.[0] as ReadModelStreamOptions<ChatIndexPatchEvent>;
     expect(streamOptions.cursorStorage?.getItem('car.readModel.cursor.chat.index.entity')).toBe('1');
-    expect(selectPmaChats(store.snapshot()).map((chat) => chat.id)).toEqual(['chat-active']);
+    expect(selectChats(store.snapshot()).map((chat) => chat.id)).toEqual(['chat-active']);
     expect(session.isStarted()).toBe(true);
 
     session.stop();
@@ -194,7 +194,7 @@ describe('chat index session', () => {
 
     session.start();
 
-    const rows = selectPmaChats(store.snapshot());
+    const rows = selectChats(store.snapshot());
     expect(rows.map((chat) => chat.id)).toEqual(['chat-active']);
     expect(replaceSpy).not.toHaveBeenCalled();
     expect(applySpy).not.toHaveBeenCalled();

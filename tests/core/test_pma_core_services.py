@@ -5,6 +5,9 @@ from pathlib import Path
 import pytest
 
 from codex_autorunner.core.car_context import build_car_context_bundle
+from codex_autorunner.core.orchestration.runtime_threads import (
+    RUNTIME_THREAD_TIMEOUT_ERROR,
+)
 from codex_autorunner.core.pma.outbound_payloads import (
     MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
     sanitize_managed_thread_result_error,
@@ -116,8 +119,8 @@ def test_queue_prompt_builder_can_return_plain_prompt_without_injector(
 
 
 def test_outbound_error_sanitizer_is_transport_neutral() -> None:
-    assert sanitize_managed_thread_result_error("PMA chat timed out") == (
-        "PMA chat timed out"
+    assert sanitize_managed_thread_result_error(RUNTIME_THREAD_TIMEOUT_ERROR) == (
+        "Managed thread timed out"
     )
     assert sanitize_managed_thread_result_error("unknown internal detail") == (
         MANAGED_THREAD_PUBLIC_EXECUTION_ERROR

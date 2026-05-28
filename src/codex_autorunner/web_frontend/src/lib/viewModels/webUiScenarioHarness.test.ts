@@ -1,21 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import {
   mapContextspaceDocument,
-  mapPmaChatSummary,
-  mapPmaRunProgress,
+  mapChatSummary,
+  mapChatRunProgress,
   mapRepoSummary,
   mapSurfaceArtifact,
   mapTicketDetail,
   mapTicketSummary,
   mapWorktreeSummary,
-  type PmaChatSummary,
-  type PmaRunProgress,
+  type ChatSummary,
+  type ChatRunProgress,
   type RepoSummary,
   type SurfaceArtifact,
   type TicketSummary,
   type WorktreeSummary
 } from './domain';
-import { buildChatListEntries } from './pmaChat';
+import { buildChatListEntries } from './chat';
 import {
   buildRepoWorktreeDetailViewModel,
   buildRepoWorktreeIndexViewModel,
@@ -147,7 +147,7 @@ function largeListWindowing(): FixturePayload {
   return payload;
 }
 
-function pmaRunning(): FixturePayload {
+function chatRunning(): FixturePayload {
   const payload = chatListDetail();
   payload.runs = [runProgress('running', 'implementation', 0, 46)];
   return payload;
@@ -221,16 +221,16 @@ function mapped(payload: FixturePayload): {
   repos: RepoSummary[];
   worktrees: WorktreeSummary[];
   tickets: TicketSummary[];
-  runs: PmaRunProgress[];
-  chats: PmaChatSummary[];
+  runs: ChatRunProgress[];
+  chats: ChatSummary[];
   artifacts: SurfaceArtifact[];
 } {
   return {
     repos: payload.repos.map(mapRepoSummary),
     worktrees: payload.worktrees.map(mapWorktreeSummary),
     tickets: payload.tickets.map(mapTicketSummary),
-    runs: payload.runs.map(mapPmaRunProgress),
-    chats: payload.chats.map(mapPmaChatSummary),
+    runs: payload.runs.map(mapChatRunProgress),
+    chats: payload.chats.map(mapChatSummary),
     artifacts: payload.artifacts.map(mapSurfaceArtifact)
   };
 }
@@ -281,7 +281,7 @@ describe('fixture-backed Web UI scenario harness', () => {
   });
 
   it('builds running worktree detail from PMA progress snapshots', () => {
-    const source = mapped(pmaRunning());
+    const source = mapped(chatRunning());
     const detail = buildRepoWorktreeDetailViewModel(source, 'worktree', 'smoke-repo--review');
 
     expect(detail.title).toBe('smoke-repo--review');

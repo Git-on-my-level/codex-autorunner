@@ -5,7 +5,7 @@ adapters translate the resulting attempts into Discord or Telegram delivery
 operations via the out-of-core runtime registry.
 
 Canonical domain types (``PmaDeliveryTarget``, ``PmaDeliveryAttempt``) live in
-``pma_domain.models`` while ``PmaChatDeliveryIntent`` adds the
+``pma_domain.models`` while ``ChatDeliveryIntent`` adds the
 ``context_payload`` field needed by the delivery runtime.
 """
 
@@ -71,7 +71,7 @@ def _delivery_target_matches_active_thread_binding(
 
 
 @dataclass(frozen=True)
-class PmaChatDeliveryIntent:
+class ChatDeliveryIntent:
     """Transport-agnostic PMA notification delivery intent."""
 
     message: str
@@ -252,9 +252,9 @@ async def deliver_pma_notification(
             }
         if not persisted_attempts:
             return {"route": normalized_delivery, "targets": 0, "published": 0}
-        from ..pma_chat_delivery_runtime import dispatch_pma_chat_delivery_intent
+        from ..chat_delivery_runtime import dispatch_chat_delivery_intent
 
-        intent = PmaChatDeliveryIntent(
+        intent = ChatDeliveryIntent(
             message=text,
             correlation_id=correlation_id,
             source_kind=normalized_source_kind,
@@ -266,7 +266,7 @@ async def deliver_pma_notification(
             managed_thread_id=managed_thread_id,
             context_payload=payload,
         )
-        return await dispatch_pma_chat_delivery_intent(
+        return await dispatch_chat_delivery_intent(
             hub_root=hub_root,
             raw_config=raw_config,
             intent=intent,
@@ -314,14 +314,14 @@ async def deliver_pma_notification(
             for surface_kind in ("discord", "telegram")
         )
         if normalized_delivery == "primary_pma" and attempts:
-            from ..pma_chat_delivery_runtime import (
-                dispatch_pma_chat_delivery_intent,
+            from ..chat_delivery_runtime import (
+                dispatch_chat_delivery_intent,
             )
 
-            return await dispatch_pma_chat_delivery_intent(
+            return await dispatch_chat_delivery_intent(
                 hub_root=hub_root,
                 raw_config=raw_config,
-                intent=PmaChatDeliveryIntent(
+                intent=ChatDeliveryIntent(
                     message=text,
                     correlation_id=correlation_id,
                     source_kind=normalized_source_kind,
@@ -354,9 +354,9 @@ async def deliver_pma_notification(
     if not attempts:
         return {"route": normalized_delivery, "targets": 0, "published": 0}
 
-    from ..pma_chat_delivery_runtime import dispatch_pma_chat_delivery_intent
+    from ..chat_delivery_runtime import dispatch_chat_delivery_intent
 
-    intent = PmaChatDeliveryIntent(
+    intent = ChatDeliveryIntent(
         message=text,
         correlation_id=correlation_id,
         source_kind=normalized_source_kind,
@@ -368,7 +368,7 @@ async def deliver_pma_notification(
         managed_thread_id=managed_thread_id,
         context_payload=payload,
     )
-    return await dispatch_pma_chat_delivery_intent(
+    return await dispatch_chat_delivery_intent(
         hub_root=hub_root,
         raw_config=raw_config,
         intent=intent,
@@ -412,7 +412,7 @@ async def start_bound_chat_live_progress_for_thread(
     workspace_root: Optional[Path] = None,
     repo_id: Optional[str] = None,
 ) -> dict[str, Any]:
-    from ..pma_chat_delivery_runtime import (
+    from ..chat_delivery_runtime import (
         start_bound_chat_live_progress_for_thread as runtime_start,
     )
 
@@ -455,7 +455,7 @@ async def notify_primary_pma_chat_for_repo(
 
 
 __all__ = [
-    "PmaChatDeliveryIntent",
+    "ChatDeliveryIntent",
     "deliver_pma_notification",
     "notify_preferred_bound_chat_for_workspace",
     "notify_primary_pma_chat_for_repo",

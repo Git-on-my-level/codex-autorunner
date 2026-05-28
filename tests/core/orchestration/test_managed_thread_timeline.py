@@ -183,6 +183,48 @@ def test_completed_timeline_separates_intermediate_and_final_output(
     )
 
 
+def test_commentary_notice_projects_as_canonical_intermediate(
+    tmp_path: Path,
+) -> None:
+    hub_root, store, thread_id = _store(tmp_path)
+    turn = create_test_turn(store, thread_id, prompt="inspect the UI")
+    turn_id = str(turn["managed_turn_id"])
+    persist_turn_timeline(
+        hub_root,
+        execution_id=turn_id,
+        target_kind="thread_target",
+        target_id=thread_id,
+        events=[
+            RunNotice(
+                timestamp="2026-05-06T10:00:01Z",
+                kind="commentary",
+                message="I am checking the renderer.",
+            ),
+            Completed(
+                timestamp="2026-05-06T10:00:03Z",
+                final_message="final answer",
+            ),
+        ],
+    )
+    assert store.mark_turn_finished(turn_id, status="ok", assistant_text="final answer")
+
+    payload = build_managed_thread_timeline(
+        hub_root,
+        thread_store=store,
+        managed_thread_id=thread_id,
+    )
+
+    commentary = next(
+        item
+        for item in payload["items"]
+        if item["kind"] == "intermediate"
+        and item["payload"].get("intermediate_kind") == "commentary"
+    )
+    assert commentary["managed_turn_id"] == turn_id
+    assert commentary["payload"]["text"] == "I am checking the renderer."
+    assert commentary["payload"]["event"]["kind"] == "commentary"
+
+
 def test_high_volume_assistant_and_log_deltas_do_not_expand_default_timeline(
     tmp_path: Path,
 ) -> None:

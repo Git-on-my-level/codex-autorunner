@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { PmaChatSummary } from './domain';
+import type { ChatSummary } from './domain';
 import { isChatUnread, loadLastSeenMap, markAllChatsRead, saveLastSeenMap } from './unread';
 
 describe('chat unread marker persistence', () => {
@@ -63,7 +63,7 @@ describe('chat unread marker persistence', () => {
   });
 });
 
-function chat(overrides: Partial<PmaChatSummary>): PmaChatSummary {
+function chat(overrides: Partial<ChatSummary>): ChatSummary {
   return {
     id: 'chat-1',
     title: 'Chat',

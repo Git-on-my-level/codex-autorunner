@@ -91,13 +91,13 @@ class TestAgentSync:
 
 
 class TestArchitectureMapPaths:
-    def test_pma_chat_delivery_runtime_path(self):
+    def test_chat_delivery_runtime_path(self):
         text = _read_doc(ARCH_MAP)
-        assert "pma_chat_delivery_runtime.py" in text
-        expected_file = SRC_ROOT / "pma_chat_delivery_runtime.py"
+        assert "chat_delivery_runtime.py" in text
+        expected_file = SRC_ROOT / "chat_delivery_runtime.py"
         assert (
             expected_file.is_file()
-        ), f"pma_chat_delivery_runtime.py not at package root: {expected_file}"
+        ), f"chat_delivery_runtime.py not at package root: {expected_file}"
 
     def test_runner_submodules_under_tickets(self):
         text = _read_doc(ARCH_MAP)

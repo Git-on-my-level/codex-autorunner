@@ -1,5 +1,5 @@
 import type { PaletteItem, PaletteSource } from './types';
-import type { PmaChatSummary, TicketSummary, ContextspaceDocument } from '$lib/viewModels/domain';
+import type { ChatSummary, TicketSummary, ContextspaceDocument } from '$lib/viewModels/domain';
 import type { RepoSummary, WorktreeSummary } from '$lib/viewModels/domain';
 import {
   chatRoute,
@@ -29,7 +29,7 @@ export function getRecentActions(): PaletteItem[] {
   return [...recentActions];
 }
 
-export function threadSource(threads: PmaChatSummary[]): PaletteSource {
+export function threadSource(threads: ChatSummary[]): PaletteSource {
   return {
     group: 'Threads',
     priority: 10,

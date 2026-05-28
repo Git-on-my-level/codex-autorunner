@@ -22,11 +22,11 @@ from codex_autorunner.core.ports.run_event import Completed, OutputDelta, RunNot
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.pma_routes.tail_stream import (
     _successful_terminal_turn_id,
-    _transcript_has_assistant_row,
+    _transcript_has_completed_turn_row,
 )
 
 
-def test_transcript_stream_terminal_snapshot_gate_requires_assistant_row() -> None:
+def test_transcript_stream_terminal_snapshot_gate_requires_completed_turn_row() -> None:
     assert (
         _successful_terminal_turn_id(
             {
@@ -47,7 +47,7 @@ def test_transcript_stream_terminal_snapshot_gate_requires_assistant_row() -> No
         )
         is None
     )
-    assert not _transcript_has_assistant_row(
+    assert not _transcript_has_completed_turn_row(
         {
             "rows": [
                 {
@@ -59,13 +59,26 @@ def test_transcript_stream_terminal_snapshot_gate_requires_assistant_row() -> No
         },
         "turn-1",
     )
-    assert _transcript_has_assistant_row(
+    assert _transcript_has_completed_turn_row(
         {
             "rows": [
                 {
                     "kind": "message",
                     "turn_id": "turn-1",
                     "message": {"role": "assistant", "text": "answer"},
+                }
+            ]
+        },
+        "turn-1",
+    )
+    assert _transcript_has_completed_turn_row(
+        {
+            "rows": [
+                {
+                    "kind": "intermediate",
+                    "turn_id": "turn-1",
+                    "title": "commentary",
+                    "text": "I am checking the renderer.",
                 }
             ]
         },

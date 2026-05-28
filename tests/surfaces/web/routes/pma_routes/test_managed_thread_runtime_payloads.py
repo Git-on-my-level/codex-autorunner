@@ -7,6 +7,10 @@ from unittest.mock import patch
 import pytest
 from fastapi import HTTPException
 
+from codex_autorunner.core.orchestration.runtime_threads import (
+    RUNTIME_THREAD_INTERRUPTED_ERROR,
+    RUNTIME_THREAD_TIMEOUT_ERROR,
+)
 from codex_autorunner.surfaces.web.routes.pma_routes.managed_thread_runtime_payloads import (
     MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
     build_accepted_send_payload,
@@ -26,22 +30,16 @@ from codex_autorunner.surfaces.web.schemas import ManagedThreadMessageRequest
 
 
 class TestSanitizeManagedThreadResultError:
-    @pytest.mark.parametrize(
-        "input_detail",
-        ["PMA chat timed out", "Runtime thread timed out"],
-    )
-    def test_timeout_variants_sanitized(self, input_detail: str) -> None:
+    def test_timeout_error_sanitized(self) -> None:
         assert (
-            sanitize_managed_thread_result_error(input_detail) == "PMA chat timed out"
+            sanitize_managed_thread_result_error(RUNTIME_THREAD_TIMEOUT_ERROR)
+            == "Managed thread timed out"
         )
 
-    @pytest.mark.parametrize(
-        "input_detail",
-        ["PMA chat interrupted", "Runtime thread interrupted"],
-    )
-    def test_interrupt_variants_sanitized(self, input_detail: str) -> None:
+    def test_interrupt_error_sanitized(self) -> None:
         assert (
-            sanitize_managed_thread_result_error(input_detail) == "PMA chat interrupted"
+            sanitize_managed_thread_result_error(RUNTIME_THREAD_INTERRUPTED_ERROR)
+            == "Managed thread interrupted"
         )
 
     def test_unknown_error_sanitized(self) -> None:

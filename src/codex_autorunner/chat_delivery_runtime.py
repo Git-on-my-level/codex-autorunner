@@ -1,4 +1,4 @@
-"""Out-of-core registry for PMA chat delivery adapters."""
+"""Out-of-core registry for chat delivery adapters."""
 
 from __future__ import annotations
 
@@ -9,12 +9,12 @@ from .adapters.chat.bound_live_progress import (
     build_bound_chat_live_progress_session,
 )
 from .adapters.chat.pma_delivery import (
-    PmaChatDeliveryAdapter,
-    PmaChatDeliveryAdapterResult,
-    PmaChatDeliveryRecord,
+    ChatDeliveryAdapter,
+    ChatDeliveryAdapterResult,
+    ChatDeliveryRecord,
 )
-from .adapters.discord.pma_delivery import DiscordPmaChatDeliveryAdapter
-from .adapters.telegram.pma_delivery import TelegramPmaChatDeliveryAdapter
+from .adapters.discord.pma_delivery import DiscordChatDeliveryAdapter
+from .adapters.telegram.pma_delivery import TelegramChatDeliveryAdapter
 from .core.chat_bindings import (
     normalize_workspace_path,
     orchestration_surface_targets_for_thread,
@@ -24,14 +24,14 @@ from .core.chat_bindings import (
     resolve_repo_id_by_workspace_path,
     resolve_telegram_state_path,
 )
+from .core.chat_delivery import ChatDeliveryIntent
 from .core.orchestration.chat_surface_emitters import emit_chat_surface_event
-from .core.pma_chat_delivery import PmaChatDeliveryIntent
 from .core.pma_notification_store import PmaNotificationStore
 from .core.text_utils import _normalize_optional_text
 
-_DEFAULT_PMA_CHAT_DELIVERY_ADAPTERS: dict[str, PmaChatDeliveryAdapter] = {
-    "discord": DiscordPmaChatDeliveryAdapter(),
-    "telegram": TelegramPmaChatDeliveryAdapter(),
+_DEFAULT_CHAT_DELIVERY_ADAPTERS: dict[str, ChatDeliveryAdapter] = {
+    "discord": DiscordChatDeliveryAdapter(),
+    "telegram": TelegramChatDeliveryAdapter(),
 }
 
 
@@ -203,8 +203,8 @@ async def start_bound_chat_live_progress_for_thread(
 def _record_notification_deliveries(
     *,
     hub_root: Path,
-    intent: PmaChatDeliveryIntent,
-    records: tuple[PmaChatDeliveryRecord, ...],
+    intent: ChatDeliveryIntent,
+    records: tuple[ChatDeliveryRecord, ...],
 ) -> None:
     if not records:
         return
@@ -251,21 +251,21 @@ def _record_notification_deliveries(
         )
 
 
-async def dispatch_pma_chat_delivery_intent(
+async def dispatch_chat_delivery_intent(
     *,
     hub_root: Path,
     raw_config: Mapping[str, Any],
-    intent: PmaChatDeliveryIntent,
+    intent: ChatDeliveryIntent,
 ) -> dict[str, Any]:
-    last_result = PmaChatDeliveryAdapterResult(
+    last_result = ChatDeliveryAdapterResult(
         route=intent.requested_delivery,
         targets=0,
         published=0,
     )
     for attempt in intent.attempts:
-        adapter = _DEFAULT_PMA_CHAT_DELIVERY_ADAPTERS.get(attempt.target.surface_kind)
+        adapter = _DEFAULT_CHAT_DELIVERY_ADAPTERS.get(attempt.target.surface_kind)
         if adapter is None:
-            last_result = PmaChatDeliveryAdapterResult(
+            last_result = ChatDeliveryAdapterResult(
                 route=attempt.route,
                 targets=0,
                 published=0,
@@ -289,6 +289,6 @@ async def dispatch_pma_chat_delivery_intent(
 
 
 __all__ = [
-    "dispatch_pma_chat_delivery_intent",
+    "dispatch_chat_delivery_intent",
     "start_bound_chat_live_progress_for_thread",
 ]

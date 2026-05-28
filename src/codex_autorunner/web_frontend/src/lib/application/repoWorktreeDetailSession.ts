@@ -20,8 +20,8 @@ import {
 } from '$lib/data';
 import {
   mapContextspaceDocument,
-  mapPmaChatSummary,
-  mapPmaRunProgress,
+  mapChatSummary,
+  mapChatRunProgress,
   mapRepoSummary,
   mapSurfaceArtifact,
   mapTicketSummary,
@@ -304,8 +304,8 @@ export function buildDetailFromSnapshot(
       owner.kind === 'repo'
         ? childrenFromTopology(snapshot.topology).map(mapWorktreeSummary)
         : [mapWorktreeSummary(snapshot.identity)],
-    runs: snapshot.runQueue.map(mapPmaRunProgress),
-    chats: snapshot.chatQueue.map(mapPmaChatSummary),
+    runs: snapshot.runQueue.map(mapChatRunProgress),
+    chats: snapshot.chatQueue.map(mapChatSummary),
     tickets: snapshot.ticketQueue.map(mapTicketSummary),
     contextspaceDocs: snapshot.contextspaceSummary.map(mapContextspaceDocument),
     artifacts: snapshot.currentArtifacts.map(mapSurfaceArtifact)

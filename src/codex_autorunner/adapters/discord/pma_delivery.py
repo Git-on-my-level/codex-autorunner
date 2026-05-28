@@ -10,17 +10,17 @@ from ...core.chat_bindings import (
     resolve_discord_state_path,
     resolve_repo_id_by_workspace_path,
 )
-from ...core.pma_chat_delivery import PmaChatDeliveryIntent
+from ...core.chat_delivery import ChatDeliveryIntent
 from ...core.pma_domain.models import PmaDeliveryAttempt
 from ...core.text_utils import _normalize_optional_text
 from ...core.time_utils import now_iso
 from ..chat.pma_delivery import (
-    PmaChatDeliveryAdapter,
-    PmaChatDeliveryAdapterResult,
-    PmaChatDeliveryRecord,
+    ChatDeliveryAdapter,
+    ChatDeliveryAdapterResult,
+    ChatDeliveryRecord,
 )
 from ..chat.pma_delivery_targets import (
-    PmaChatSurfaceBinding,
+    ChatSurfaceBinding,
     select_bound_pma_targets,
     select_explicit_pma_target,
     select_primary_pma_target,
@@ -52,8 +52,8 @@ def _notification_record(
     surface_key: str,
     delivery_record_id: str,
     workspace_root: Optional[str],
-) -> PmaChatDeliveryRecord:
-    return PmaChatDeliveryRecord(
+) -> ChatDeliveryRecord:
+    return ChatDeliveryRecord(
         delivery_mode=attempt.delivery_mode,
         surface_kind="discord",
         surface_key=surface_key,
@@ -64,14 +64,14 @@ def _notification_record(
 
 def _discord_surface_bindings(
     bindings: list[ChannelBinding],
-) -> tuple[PmaChatSurfaceBinding, ...]:
-    projected: list[PmaChatSurfaceBinding] = []
+) -> tuple[ChatSurfaceBinding, ...]:
+    projected: list[ChatSurfaceBinding] = []
     for binding in bindings:
         channel_id = _normalize_optional_text(binding.get("channel_id"))
         if channel_id is None:
             continue
         projected.append(
-            PmaChatSurfaceBinding(
+            ChatSurfaceBinding(
                 surface_key=channel_id,
                 workspace_path=_normalize_optional_text(binding.get("workspace_path")),
                 repo_id=_normalize_optional_text(binding.get("repo_id")),
@@ -88,19 +88,19 @@ def _discord_surface_bindings(
     return tuple(projected)
 
 
-class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
+class DiscordChatDeliveryAdapter(ChatDeliveryAdapter):
     @property
     def surface_kind(self) -> str:
         return "discord"
 
     async def deliver_pma_attempt(
         self,
-        intent: PmaChatDeliveryIntent,
+        intent: ChatDeliveryIntent,
         *,
         attempt: PmaDeliveryAttempt,
         hub_root: Path,
         raw_config: Mapping[str, Any],
-    ) -> PmaChatDeliveryAdapterResult:
+    ) -> ChatDeliveryAdapterResult:
         if attempt.route == "explicit":
             return await self._deliver_explicit(
                 intent,
@@ -122,7 +122,7 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
                 hub_root=hub_root,
                 raw_config=raw_config,
             )
-        return PmaChatDeliveryAdapterResult(
+        return ChatDeliveryAdapterResult(
             route=attempt.route,
             targets=0,
             published=0,
@@ -130,17 +130,15 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
 
     async def _deliver_explicit(
         self,
-        intent: PmaChatDeliveryIntent,
+        intent: ChatDeliveryIntent,
         *,
         attempt: PmaDeliveryAttempt,
         hub_root: Path,
         raw_config: Mapping[str, Any],
-    ) -> PmaChatDeliveryAdapterResult:
+    ) -> ChatDeliveryAdapterResult:
         channel_id = _normalize_optional_text(attempt.target.surface_key)
         if channel_id is None:
-            return PmaChatDeliveryAdapterResult(
-                route="explicit", targets=0, published=0
-            )
+            return ChatDeliveryAdapterResult(route="explicit", targets=0, published=0)
         created_at = now_iso()
         store = DiscordStateStore(resolve_discord_state_path(hub_root, raw_config))
         try:
@@ -150,7 +148,7 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
                 bindings=_discord_surface_bindings(bindings),
             )
             if target is None:
-                return PmaChatDeliveryAdapterResult(
+                return ChatDeliveryAdapterResult(
                     route="explicit",
                     targets=0,
                     published=0,
@@ -163,7 +161,7 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
             if not chunks:
                 chunks = [format_discord_message(intent.message)]
             published = 0
-            delivery_records: list[PmaChatDeliveryRecord] = []
+            delivery_records: list[ChatDeliveryRecord] = []
             for index, chunk in enumerate(chunks, start=1):
                 record_id = _build_discord_record_id(
                     correlation_id=intent.correlation_id,
@@ -192,7 +190,7 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
                     )
                 )
                 published += 1
-            return PmaChatDeliveryAdapterResult(
+            return ChatDeliveryAdapterResult(
                 route="explicit",
                 targets=1,
                 published=published,
@@ -203,12 +201,12 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
 
     async def _deliver_bound(
         self,
-        intent: PmaChatDeliveryIntent,
+        intent: ChatDeliveryIntent,
         *,
         attempt: PmaDeliveryAttempt,
         hub_root: Path,
         raw_config: Mapping[str, Any],
-    ) -> PmaChatDeliveryAdapterResult:
+    ) -> ChatDeliveryAdapterResult:
         workspace_root = attempt.workspace_root
         repo_id_by_workspace = resolve_repo_id_by_workspace_path(hub_root, raw_config)
         created_at = now_iso()
@@ -223,9 +221,7 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
                 repo_id_by_workspace=repo_id_by_workspace,
             )
             if not targets:
-                return PmaChatDeliveryAdapterResult(
-                    route="bound", targets=0, published=0
-                )
+                return ChatDeliveryAdapterResult(route="bound", targets=0, published=0)
             chunks = chunk_discord_message(
                 format_discord_message(intent.message),
                 max_len=_DISCORD_MESSAGE_MAX_LEN,
@@ -233,7 +229,7 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
             )
             if not chunks:
                 chunks = [format_discord_message(intent.message)]
-            delivery_records: list[PmaChatDeliveryRecord] = []
+            delivery_records: list[ChatDeliveryRecord] = []
             for target in targets:
                 channel_id = target.surface_key
                 for index, chunk in enumerate(chunks, start=1):
@@ -264,7 +260,7 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
                         )
                     )
                     published += 1
-            return PmaChatDeliveryAdapterResult(
+            return ChatDeliveryAdapterResult(
                 route="bound",
                 targets=len(targets),
                 published=published,
@@ -275,12 +271,12 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
 
     async def _deliver_primary_pma(
         self,
-        intent: PmaChatDeliveryIntent,
+        intent: ChatDeliveryIntent,
         *,
         attempt: PmaDeliveryAttempt,
         hub_root: Path,
         raw_config: Mapping[str, Any],
-    ) -> PmaChatDeliveryAdapterResult:
+    ) -> ChatDeliveryAdapterResult:
         repo_id_by_workspace = resolve_repo_id_by_workspace_path(hub_root, raw_config)
         created_at = now_iso()
         store = DiscordStateStore(resolve_discord_state_path(hub_root, raw_config))
@@ -291,7 +287,7 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
                 repo_id_by_workspace=repo_id_by_workspace,
             )
             if target is None:
-                return PmaChatDeliveryAdapterResult(
+                return ChatDeliveryAdapterResult(
                     route="primary_pma",
                     targets=0,
                     published=0,
@@ -305,7 +301,7 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
             if not chunks:
                 chunks = [format_discord_message(intent.message)]
             published = 0
-            delivery_records: list[PmaChatDeliveryRecord] = []
+            delivery_records: list[ChatDeliveryRecord] = []
             for index, chunk in enumerate(chunks, start=1):
                 record_id = _build_discord_record_id(
                     correlation_id=intent.correlation_id,
@@ -334,7 +330,7 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
                     )
                 )
                 published += 1
-            return PmaChatDeliveryAdapterResult(
+            return ChatDeliveryAdapterResult(
                 route="primary_pma",
                 targets=1,
                 published=published,
@@ -344,4 +340,4 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
             await store.close()
 
 
-__all__ = ["DiscordPmaChatDeliveryAdapter"]
+__all__ = ["DiscordChatDeliveryAdapter"]

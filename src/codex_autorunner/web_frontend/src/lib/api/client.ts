@@ -9,10 +9,10 @@ import {
   mapContextspaceDocument,
   mapArtifactDelivery,
   mapDashboardSummary,
-  mapPmaChatMessage,
-  mapPmaTimelineItem,
-  mapPmaChatSummary,
-  mapPmaRunProgress,
+  mapChatMessage,
+  mapChatTimelineItem,
+  mapChatSummary,
+  mapChatRunProgress,
   mapRepoSummary,
   mapSurfaceArtifact,
   mapTicketDetail,
@@ -21,17 +21,17 @@ import {
   type ContextspaceDocument,
   type ArtifactDelivery,
   type DashboardSummary,
-  type PmaChatMessage,
-  type PmaChatSummary,
-  type PmaRunProgress,
-  type PmaTimelineItem,
+  type ChatMessage,
+  type ChatSummary,
+  type ChatRunProgress,
+  type ChatTimelineItem,
   type RepoSummary,
   type SurfaceArtifact,
   type TicketDetail,
   type TicketSummary,
   type WorktreeSummary
 } from '$lib/viewModels/domain';
-import { mapChatTranscriptSnapshot, type ChatTranscriptSnapshot } from '$lib/viewModels/pmaChat';
+import { mapChatTranscriptSnapshot, type ChatTranscriptSnapshot } from '$lib/viewModels/chat';
 import { runtimeBasePath, withRuntimeBasePath } from '$lib/runtime/basePath';
 
 export type ApiErrorKind = 'http' | 'network' | 'parse' | 'aborted';
@@ -63,11 +63,11 @@ export type PartialPageIssue = {
 
 export type JsonRecord = Record<string, unknown>;
 
-export type PmaTimelineRequest = {
+export type ChatTimelineRequest = {
   limit?: number;
 };
 
-export type PmaQueuedTurn = {
+export type ChatQueuedTurn = {
   managedTurnId: string;
   position: number;
   state: string;
@@ -80,14 +80,14 @@ export type PmaQueuedTurn = {
   raw: JsonRecord;
 };
 
-export type PmaThreadQueue = {
+export type ChatThreadQueue = {
   managedThreadId: string;
   queueDepth: number;
-  queuedTurns: PmaQueuedTurn[];
+  queuedTurns: ChatQueuedTurn[];
 };
 
-export type PmaBulkRetireResult = {
-  threads: PmaChatSummary[];
+export type ChatBulkRetireResult = {
+  threads: ChatSummary[];
   retiredCount: number;
   requestedCount: number;
   errorCount: number;
@@ -544,117 +544,117 @@ export class WebApiClient {
 
   pma = {
     // Legacy diagnostics/tests only. Screen routes use chat index/detail projections.
-    listChats: async (status: 'active' | 'archived' | null = 'active'): Promise<ApiResult<PmaChatSummary[]>> => {
+    listChats: async (status: 'active' | 'archived' | null = 'active'): Promise<ApiResult<ChatSummary[]>> => {
       const query = status ? `?status=${encodeURIComponent(status)}` : '';
       return mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads${query}`), (payload) =>
-        asArray(payload.threads).map(mapPmaChatSummary)
+        asArray(payload.threads).map(mapChatSummary)
       );
     },
-    createChat: async (body: unknown): Promise<ApiResult<PmaChatSummary>> =>
+    createChat: async (body: unknown): Promise<ApiResult<ChatSummary>> =>
       mapResult(
         await this.requestJson<JsonRecord>('/hub/pma/threads', {
           method: 'POST',
           body
         }),
-        (payload) => mapPmaChatSummary(asRecord(payload.thread ?? payload))
+        (payload) => mapChatSummary(asRecord(payload.thread ?? payload))
       ),
-    startChatWithMessage: async (body: unknown): Promise<ApiResult<PmaChatMessage>> =>
+    startChatWithMessage: async (body: unknown): Promise<ApiResult<ChatMessage>> =>
       mapResult(
         await this.requestJson<JsonRecord>('/hub/pma/thread-starts', {
           method: 'POST',
           body
         }),
-        (payload) => mapPmaChatMessage(asRecord(payload.message ?? payload.turn ?? payload))
+        (payload) => mapChatMessage(asRecord(payload.message ?? payload.turn ?? payload))
       ),
-    getChat: async (chatId: string): Promise<ApiResult<PmaChatSummary>> =>
+    getChat: async (chatId: string): Promise<ApiResult<ChatSummary>> =>
       mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}`), (payload) =>
-        mapPmaChatSummary(asRecord(payload.thread))
+        mapChatSummary(asRecord(payload.thread))
       ),
-    sendMessage: async (chatId: string, body: unknown): Promise<ApiResult<PmaChatMessage>> =>
+    sendMessage: async (chatId: string, body: unknown): Promise<ApiResult<ChatMessage>> =>
       mapResult(
         await this.requestJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/messages`, {
           method: 'POST',
           body
         }),
-        (payload) => mapPmaChatMessage(asRecord(payload.message ?? payload.turn ?? payload))
+        (payload) => mapChatMessage(asRecord(payload.message ?? payload.turn ?? payload))
       ),
-    forkThread: async (chatId: string, body: unknown): Promise<ApiResult<PmaChatSummary>> =>
+    forkThread: async (chatId: string, body: unknown): Promise<ApiResult<ChatSummary>> =>
       mapResult(
         await this.requestJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/fork`, {
           method: 'POST',
           body
         }),
-        (payload) => mapPmaChatSummary(asRecord(payload.thread ?? payload))
+        (payload) => mapChatSummary(asRecord(payload.thread ?? payload))
       ),
     // Chat rendering uses transcript projections; timeline and tail are diagnostics-only.
-    getTranscript: async (chatId: string, request: PmaTimelineRequest = {}): Promise<ApiResult<ChatTranscriptSnapshot>> => {
+    getTranscript: async (chatId: string, request: ChatTimelineRequest = {}): Promise<ApiResult<ChatTranscriptSnapshot>> => {
       const params = new URLSearchParams({ limit: String(request.limit ?? 200) });
       return mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/transcript?${params.toString()}`), (payload) =>
-        mapChatTranscriptSnapshot(payload, mapPmaRunProgress)
+        mapChatTranscriptSnapshot(payload, mapChatRunProgress)
       );
     },
     diagnostics: {
       // Legacy diagnostics/tests only. Screen routes use chat index/detail projections.
-      getTimeline: async (chatId: string, request: PmaTimelineRequest = {}): Promise<ApiResult<PmaTimelineItem[]>> => {
+      getTimeline: async (chatId: string, request: ChatTimelineRequest = {}): Promise<ApiResult<ChatTimelineItem[]>> => {
         const params = new URLSearchParams({ limit: String(request.limit ?? 50) });
         return mapResult(
           await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/timeline?${params.toString()}`),
-          (payload) => asArray(payload.items).map(mapPmaTimelineItem)
+          (payload) => asArray(payload.items).map(mapChatTimelineItem)
         );
       },
-      getTail: async (chatId: string): Promise<ApiResult<PmaRunProgress>> =>
-        mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/tail`), mapPmaRunProgress)
+      getTail: async (chatId: string): Promise<ApiResult<ChatRunProgress>> =>
+        mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/tail`), mapChatRunProgress)
     },
-    getStatus: async (chatId: string): Promise<ApiResult<PmaRunProgress>> =>
-      mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/status`), mapPmaRunProgress),
-    getQueue: async (chatId: string): Promise<ApiResult<PmaThreadQueue>> =>
-      mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/queue`), mapPmaThreadQueue),
+    getStatus: async (chatId: string): Promise<ApiResult<ChatRunProgress>> =>
+      mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/status`), mapChatRunProgress),
+    getQueue: async (chatId: string): Promise<ApiResult<ChatThreadQueue>> =>
+      mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/queue`), mapChatThreadQueue),
     interruptThread: async (chatId: string): Promise<ApiResult<JsonRecord>> =>
       this.requestJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/interrupt`, { method: 'POST' }),
-    resumeThread: async (chatId: string): Promise<ApiResult<PmaChatSummary>> =>
+    resumeThread: async (chatId: string): Promise<ApiResult<ChatSummary>> =>
       mapResult(
         await this.requestJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/resume`, {
           method: 'POST',
           body: {}
         }),
-        (payload) => mapPmaChatSummary(asRecord(payload.thread))
+        (payload) => mapChatSummary(asRecord(payload.thread))
       ),
-    compactThread: async (chatId: string, summary: string): Promise<ApiResult<PmaChatSummary>> =>
+    compactThread: async (chatId: string, summary: string): Promise<ApiResult<ChatSummary>> =>
       mapResult(
         await this.requestJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/compact`, {
           method: 'POST',
           body: { summary, reset_backend: true }
         }),
-        (payload) => mapPmaChatSummary(asRecord(payload.thread))
+        (payload) => mapChatSummary(asRecord(payload.thread))
       ),
-    retireThread: async (chatId: string): Promise<ApiResult<PmaChatSummary>> =>
+    retireThread: async (chatId: string): Promise<ApiResult<ChatSummary>> =>
       mapResult(
         await this.requestJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/retire`, {
           method: 'POST'
         }),
-        (payload) => mapPmaChatSummary(asRecord(payload.thread))
+        (payload) => mapChatSummary(asRecord(payload.thread))
       ),
-    retireThreads: async (chatIds: string[]): Promise<ApiResult<PmaBulkRetireResult>> =>
+    retireThreads: async (chatIds: string[]): Promise<ApiResult<ChatBulkRetireResult>> =>
       mapResult(
         await this.requestJson<JsonRecord>('/hub/pma/threads/retire', {
           method: 'POST',
           body: { thread_ids: chatIds }
         }),
         (payload) => ({
-          threads: asArray(payload.threads).map(mapPmaChatSummary),
+          threads: asArray(payload.threads).map(mapChatSummary),
           retiredCount: numberValue(payload.retired_count ?? payload.retiredCount, 0),
           requestedCount: numberValue(payload.requested_count ?? payload.requestedCount, chatIds.length),
           errorCount: numberValue(payload.error_count ?? payload.errorCount, 0),
           errors: asArray(payload.errors)
         })
       ),
-    retireActiveThreads: async (): Promise<ApiResult<PmaBulkRetireResult>> =>
+    retireActiveThreads: async (): Promise<ApiResult<ChatBulkRetireResult>> =>
       mapResult(
         await this.requestJson<JsonRecord>('/hub/pma/threads/retire-active', {
           method: 'POST'
         }),
         (payload) => ({
-          threads: asArray(payload.threads).map(mapPmaChatSummary),
+          threads: asArray(payload.threads).map(mapChatSummary),
           retiredCount: numberValue(payload.retired_count ?? payload.retiredCount, 0),
           requestedCount: numberValue(payload.requested_count ?? payload.requestedCount, 0),
           errorCount: numberValue(payload.error_count ?? payload.errorCount, 0),
@@ -922,12 +922,12 @@ export class WebApiClient {
 
   ticketFlow = {
     // Legacy diagnostics/tests only. Ticket and owner screens read scoped ticket/run projections.
-    listRuns: async (owner?: { repo?: string; worktree?: string }): Promise<ApiResult<PmaRunProgress[]>> =>
+    listRuns: async (owner?: { repo?: string; worktree?: string }): Promise<ApiResult<ChatRunProgress[]>> =>
       mapResult(await this.getJson<JsonRecord[]>(flowRunsPath(owner)), (payload) =>
-        payload.map(mapPmaRunProgress)
+        payload.map(mapChatRunProgress)
       ),
-    getRun: async (runId: string): Promise<ApiResult<PmaRunProgress>> =>
-      mapResult(await this.getJson<JsonRecord>(`/api/flows/${encodeURIComponent(runId)}/status`), mapPmaRunProgress),
+    getRun: async (runId: string): Promise<ApiResult<ChatRunProgress>> =>
+      mapResult(await this.getJson<JsonRecord>(`/api/flows/${encodeURIComponent(runId)}/status`), mapChatRunProgress),
     // Legacy diagnostics/tests only. Ticket and owner screens read scoped ticket projections.
     listTickets: async (owner?: { repo?: string; worktree?: string }): Promise<ApiResult<TicketSummary[]>> => {
       const hubResult = await this.getJson<JsonRecord>(hubTicketPath(owner));
@@ -987,20 +987,20 @@ export class WebApiClient {
       mapResult(await this.getJson<JsonRecord>(flowRunPath(runId, 'dispatch_history', owner)), (payload) =>
         asArray(payload.history)
       ),
-    resumeRun: async (runId: string): Promise<ApiResult<PmaRunProgress>> =>
+    resumeRun: async (runId: string): Promise<ApiResult<ChatRunProgress>> =>
       mapResult(
         await this.requestJson<JsonRecord>(`/api/flows/${encodeURIComponent(runId)}/resume`, {
           method: 'POST'
         }),
-        mapPmaRunProgress
+        mapChatRunProgress
       ),
-    bootstrap: async (): Promise<ApiResult<PmaRunProgress>> =>
+    bootstrap: async (): Promise<ApiResult<ChatRunProgress>> =>
       mapResult(
         await this.requestJson<JsonRecord>('/api/flows/ticket_flow/bootstrap', {
           method: 'POST',
           body: { once: false }
         }),
-        mapPmaRunProgress
+        mapChatRunProgress
       )
   };
 
@@ -1191,15 +1191,15 @@ function asArray(value: unknown): JsonRecord[] {
   return Array.isArray(value) ? value.filter((item): item is JsonRecord => Boolean(item) && typeof item === 'object') : [];
 }
 
-function mapPmaThreadQueue(raw: JsonRecord): PmaThreadQueue {
+function mapChatThreadQueue(raw: JsonRecord): ChatThreadQueue {
   return {
     managedThreadId: stringValue(raw.managed_thread_id ?? raw.managedThreadId, ''),
     queueDepth: numberValue(raw.queue_depth ?? raw.queueDepth, 0),
-    queuedTurns: asArray(raw.queued_turns ?? raw.queuedTurns).map(mapPmaQueuedTurn)
+    queuedTurns: asArray(raw.queued_turns ?? raw.queuedTurns).map(mapChatQueuedTurn)
   };
 }
 
-function mapPmaQueuedTurn(raw: JsonRecord): PmaQueuedTurn {
+function mapChatQueuedTurn(raw: JsonRecord): ChatQueuedTurn {
   return {
     managedTurnId: stringValue(raw.managed_turn_id ?? raw.managedTurnId, ''),
     position: numberValue(raw.position, 0),

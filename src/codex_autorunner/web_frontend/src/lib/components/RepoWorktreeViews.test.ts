@@ -151,7 +151,7 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('configured model');
     expect(body).not.toContain('Child worktrees');
     expect(body).not.toContain('Activity');
-    expect(body).not.toContain('Open PMA chat');
+    expect(body).not.toContain('Open chat');
   });
 
   it('renders worktree detail ticket-flow strip and current queue row affordances', () => {

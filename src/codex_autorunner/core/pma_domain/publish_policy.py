@@ -1,7 +1,7 @@
 """Domain-owned publish message construction and suppression policy.
 
 This module owns two responsibilities that were previously split across the
-delivery control plane (``pma_chat_delivery``), the dispatch decision builder
+delivery control plane (``chat_delivery``), the dispatch decision builder
 (``pma_dispatch_decision``), and the web surface (``publish.py``):
 
 1. **Duplicate/noop suppression** -- deciding whether a publish notice should

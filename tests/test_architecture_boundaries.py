@@ -125,7 +125,7 @@ ALLOWED_BOUNDARY_IMPORTS: dict[str, set[str]] = {
     "codex_autorunner.housekeeping": {
         "codex_autorunner.adapters.docker.runtime",
     },
-    "codex_autorunner.pma_chat_delivery_runtime": {
+    "codex_autorunner.chat_delivery_runtime": {
         "codex_autorunner.adapters.chat.bound_live_progress",
         "codex_autorunner.adapters.chat.pma_delivery",
         "codex_autorunner.adapters.discord.pma_delivery",

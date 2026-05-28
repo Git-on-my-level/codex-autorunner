@@ -3,7 +3,7 @@ import {
   type JsonRecord,
   type RequestOptions
 } from '$lib/api/client';
-import type { PmaChatSummary, PmaRunProgress, SurfaceArtifact, TicketDetail, TicketSummary } from '$lib/viewModels/domain';
+import type { ChatSummary, ChatRunProgress, SurfaceArtifact, TicketDetail, TicketSummary } from '$lib/viewModels/domain';
 import {
   buildTicketListViewModel,
   ticketRouteSegmentFromSummary,
@@ -235,8 +235,8 @@ export async function runScopedTicketQueueCommand(
 
 export function buildScopedTicketList(
   tickets: TicketSummary[],
-  runs: PmaRunProgress[],
-  chats: PmaChatSummary[],
+  runs: ChatRunProgress[],
+  chats: ChatSummary[],
   scope: Exclude<TicketOwnerScope, null>,
   actionManifest: SurfaceActionManifest | null = null
 ): TicketListViewModel {

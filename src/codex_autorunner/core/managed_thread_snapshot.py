@@ -38,7 +38,8 @@ def snapshot_managed_threads(
         )
     except (OSError, RuntimeError, ValueError) as exc:
         _logger.warning(
-            "Could not load PMA chat-binding metadata for thread snapshot: %s", exc
+            "Could not load managed thread chat-binding metadata for thread snapshot: %s",
+            exc,
         )
         chat_binding_metadata = {}
 

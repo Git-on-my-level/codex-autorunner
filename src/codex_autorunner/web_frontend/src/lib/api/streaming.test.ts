@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   normalizeChatSurfaceStreamEvent,
-  normalizePmaChatStreamEvent,
+  normalizeChatStreamEvent,
   normalizeChatTranscriptStreamEvent,
   openFlowRunEventSource,
   openChatSurfaceEventSource,
-  openPmaChatEventSource,
+  openChatEventSource,
   openChatTranscriptEventSource,
   parseJsonSseFrame,
   parseSseFrame,
@@ -84,11 +84,11 @@ describe('SSE helpers', () => {
     });
   });
 
-  it('normalizes PMA chat snapshot stream events', () => {
+  it('normalizes chat snapshot stream events', () => {
     const parsed = parseJsonSseFrame('id: abc\nevent: chat_snapshot\ndata: {"threads":[{"managed_thread_id":"thread-1"}]}\n\n');
     expect(parsed).not.toBeNull();
 
-    expect(normalizePmaChatStreamEvent(parsed!)).toEqual({
+    expect(normalizeChatStreamEvent(parsed!)).toEqual({
       kind: 'chat_snapshot',
       lastEventId: 'abc',
       payload: { threads: [{ managed_thread_id: 'thread-1' }] }
@@ -199,7 +199,7 @@ describe('SSE helpers', () => {
     subscription.close();
   });
 
-  it('opens PMA chat EventSource under the configured hub base path', () => {
+  it('opens chat EventSource under the configured hub base path', () => {
     const close = vi.fn();
     const addEventListener = vi.fn();
     const eventSource = vi.fn(function EventSourceMock() {
@@ -207,7 +207,7 @@ describe('SSE helpers', () => {
     });
     vi.stubGlobal('EventSource', eventSource);
 
-    const subscription = openPmaChatEventSource({ onEvent: vi.fn() }, '/car');
+    const subscription = openChatEventSource({ onEvent: vi.fn() }, '/car');
 
     expect(eventSource).toHaveBeenCalledWith('/car/hub/pma/events', {
       withCredentials: undefined

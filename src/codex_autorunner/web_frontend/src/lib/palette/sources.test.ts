@@ -13,7 +13,7 @@ import {
   clearRecentActions
 } from './sources';
 import type { PaletteSource } from './types';
-import type { PmaChatSummary, TicketSummary, ContextspaceDocument, RepoSummary, WorktreeSummary } from '$lib/viewModels/domain';
+import type { ChatSummary, TicketSummary, ContextspaceDocument, RepoSummary, WorktreeSummary } from '$lib/viewModels/domain';
 
 beforeEach(() => {
   clearRecentActions();
@@ -21,7 +21,7 @@ beforeEach(() => {
 
 describe('threadSource', () => {
   it('produces palette items from threads', () => {
-    const threads: PmaChatSummary[] = [
+    const threads: ChatSummary[] = [
       {
         id: 'thread-1',
         title: 'Fix login bug',

@@ -1,117 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import type { PmaQueuedTurn } from '$lib/api/client';
-import type { PmaChatSummary, PmaRunProgress, SurfaceArtifact } from '$lib/viewModels/domain';
-import type { ChatTranscriptCard } from '$lib/viewModels/pmaChat';
+import type { ChatQueuedTurn } from '$lib/api/client';
+import type { ChatSummary, ChatRunProgress, SurfaceArtifact } from '$lib/viewModels/domain';
+import type { ChatTranscriptCard } from '$lib/viewModels/chat';
 import {
   buildChatDetailDisplayReadModel,
-  buildOptimisticQueuedTurn,
-  buildOptimisticUserTranscriptCard,
-  evaluatePmaChatArchitectureGoal,
-  mergePmaProgressUpdate,
-  mergeTranscriptSnapshotWithPendingOptimistic,
-  queueContainsCommittedClientTurn,
-  transcriptCardCorrelationId,
-  transcriptContainsCommittedUserRow,
-  transcriptRowsConfirmOptimistic,
-  visibleChatDetailTranscriptCards,
-  withoutOptimisticQueuedTurn
-} from './pmaChatArchitecture';
+  visibleChatDetailTranscriptCards
+} from './chatDetailReadModel';
 
 const now = '2026-05-16T12:00:00.000Z';
 type MessageTranscriptCard = Extract<ChatTranscriptCard, { kind: 'message' }>;
 
-describe('PMA chat architecture goal', () => {
-  it('treats backend projection plus application boundaries as the target architecture', () => {
-    const result = evaluatePmaChatArchitectureGoal({
-      transcriptProjectionIsBackendOwned: true,
-      routeOwnsTranscriptReconciliation: false,
-      commandsUseApplicationPlans: true,
-      capabilitiesHaveTypedBoundaries: true,
-      usesCursorStreamRepair: true,
-      usesUnboundedRendering: false,
-      hasContractTests: true
-    });
-
-    expect(result.satisfied).toBe(true);
-    expect(result.score).toBe(1);
-    expect(result.gaps).toEqual([]);
-  });
-
-  it('penalizes page-owned orchestration and unbounded rendering even when commands are typed', () => {
-    const result = evaluatePmaChatArchitectureGoal({
-      transcriptProjectionIsBackendOwned: true,
-      routeOwnsTranscriptReconciliation: true,
-      commandsUseApplicationPlans: true,
-      capabilitiesHaveTypedBoundaries: false,
-      usesCursorStreamRepair: true,
-      usesUnboundedRendering: true,
-      hasContractTests: true
-    });
-
-    expect(result.satisfied).toBe(false);
-    expect(result.gaps).toContain(
-      'Keep Svelte routes focused on binding UI controls to application services, not owning transcript or stream reconciliation rules.'
-    );
-    expect(result.gaps).toContain(
-      'Keep chat indexes and transcripts bounded or virtualized so large workspaces do not degrade page behavior.'
-    );
-  });
-});
-
-describe('PMA chat transcript optimistic reconciliation', () => {
-  it('retains an optimistic user row until a backend row confirms its correlation id', () => {
-    const optimistic = userCard('optimistic:user:1', 'draft text', {
-      optimistic: true,
-      client_turn_id: 'client-1'
-    });
-    const backendAssistant = assistantCard('turn:1:assistant', 'Working on it');
-
-    expect(
-      mergeTranscriptSnapshotWithPendingOptimistic(
-        { cardsById: { [optimistic.id]: optimistic }, order: [optimistic.id] },
-        [backendAssistant]
-      ).map((card) => card.id)
-    ).toEqual(['turn:1:assistant', 'optimistic:user:1']);
-  });
-
-  it('drops the optimistic row after the backend returns the matching user row', () => {
-    const optimistic = userCard('optimistic:user:1', 'draft text', {
-      optimistic: true,
-      client_turn_id: 'client-1'
-    });
-    const backendUser = userCard('turn:1:user', 'draft text', {
-      identity: { correlation_id: 'client-1' }
-    });
-
-    expect(transcriptRowsConfirmOptimistic([backendUser], optimistic)).toBe(true);
-    expect(
-      mergeTranscriptSnapshotWithPendingOptimistic(
-        { cardsById: { [optimistic.id]: optimistic }, order: [optimistic.id] },
-        [backendUser]
-      ).map((card) => card.id)
-    ).toEqual(['turn:1:user']);
-  });
-
-  it('reads correlation ids from direct fields before nested identity metadata', () => {
-    expect(
-      transcriptCardCorrelationId(
-        userCard('turn:1:user', 'hello', {
-          correlation_id: 'direct-id',
-          identity: { correlation_id: 'nested-id' }
-        })
-      )
-    ).toBe('direct-id');
-    expect(
-      transcriptCardCorrelationId(
-        userCard('turn:2:user', 'hello', {
-          identity: { correlation_id: 'nested-id' }
-        })
-      )
-    ).toBe('nested-id');
-  });
-});
-
-describe('PMA chat detail state composition', () => {
+describe('chat detail state composition', () => {
   it('hides backend-persisted queued user rows from the active transcript', () => {
     const queuedUser = userCard('turn:queued:user', 'queued', {});
     const visibleAssistant = assistantCard('turn:active:assistant', 'hello');
@@ -124,48 +23,6 @@ describe('PMA chat detail state composition', () => {
     );
 
     expect(cards.map((card) => card.id)).toEqual(['turn:active:assistant']);
-  });
-
-  it('builds and removes optimistic queue rows through the detail view model', () => {
-    const optimistic = buildOptimisticQueuedTurn('second message', 'client-1', 2, now);
-    const committed = queuedTurn('turn-2', { client_turn_id: 'client-1' });
-    const queue = [queuedTurn('turn-1'), optimistic, committed];
-
-    expect(optimistic).toMatchObject({
-      managedTurnId: 'optimistic-queue:client-1',
-      position: 2,
-      state: 'queueing',
-      promptPreview: 'second message'
-    });
-    expect(withoutOptimisticQueuedTurn(queue, 'client-1').map((turn) => turn.managedTurnId)).toEqual([
-      'turn-1',
-      'turn-2'
-    ]);
-    expect(queueContainsCommittedClientTurn(queue, 'client-1')).toBe(true);
-  });
-
-  it('builds optimistic user rows and detects backend confirmation by correlation id', () => {
-    const optimistic = buildOptimisticUserTranscriptCard('chat-1', 'hello', 'client-1', now, [
-      {
-        id: 'att-1',
-        kind: 'file',
-        title: 'notes.md',
-        url: null,
-        sizeLabel: '12 B',
-        uploadedName: 'notes.md'
-      }
-    ]);
-    const backendUser = userCard('turn:1:user', 'hello', {
-      identity: { correlation_id: 'client-1' }
-    });
-
-    expect(optimistic.message.artifacts[0]).toMatchObject({ id: 'att-1', kind: 'file' });
-    expect(
-      transcriptContainsCommittedUserRow(
-        { cardsById: { [backendUser.id]: backendUser }, order: [backendUser.id] },
-        'client-1'
-      )
-    ).toBe(true);
   });
 
   it('builds the chat detail transcript and composer read model outside the page', () => {
@@ -200,6 +57,117 @@ describe('PMA chat detail state composition', () => {
     expect(model.canInterruptWithDraft).toBe(true);
     expect(model.composerWillQueue).toBe(true);
     expect(model.queueDepthForCommands).toBe(1);
+  });
+
+  it('renders live commentary progress in the transcript for the active turn', () => {
+    const user = { ...userCard('turn:run-1:user', 'next task', {}), turnId: 'run-1' };
+    const model = buildChatDetailDisplayReadModel({
+      transcriptCards: [user],
+      queuedTurns: [],
+      displayedProgress: progress('run-1', 12, [
+        artifact('event-1', {
+          item_id: 'progress:commentary:0001',
+          kind: 'assistant_update',
+          title: 'commentary',
+          summary: 'I am checking the renderer.',
+          event_ids: ['journal:1']
+        })
+      ]),
+      activeChat: chatSummary('chat-1'),
+      assistantSharedFileCount: 0,
+      streamState: 'connected',
+      loadingActive: false,
+      activeError: null,
+      draft: '',
+      pendingAttachmentCount: 0
+    });
+
+    expect(model.displayTranscriptCards.map((card) => card.kind)).toEqual(['message', 'intermediate']);
+    expect(model.displayTranscriptCards[1]).toMatchObject({
+      kind: 'intermediate',
+      title: 'commentary',
+      text: 'I am checking the renderer.',
+      turnId: 'run-1'
+    });
+    expect(model.transcriptListItems.map((item) => item.kind)).toEqual(['card', 'card', 'typing']);
+  });
+
+  it('keeps terminal live commentary before the final assistant reply', () => {
+    const user = { ...userCard('turn:run-1:user', 'next task', {}), turnId: 'run-1' };
+    const assistant = { ...assistantCard('turn:run-1:assistant', 'done'), turnId: 'run-1' };
+    const terminalProgress = {
+      ...progress('run-1', 12, [
+        artifact('event-1', {
+          item_id: 'progress:commentary:0001',
+          kind: 'assistant_update',
+          title: 'commentary',
+          summary: 'I found the old path and restored it.',
+          event_ids: ['journal:1']
+        })
+      ]),
+      status: 'done' as const,
+      workStatus: 'done' as const,
+      operatorStatus: 'done' as const,
+      terminal: true
+    };
+    const model = buildChatDetailDisplayReadModel({
+      transcriptCards: [user, assistant],
+      queuedTurns: [],
+      displayedProgress: terminalProgress,
+      activeChat: chatSummary('chat-1'),
+      assistantSharedFileCount: 0,
+      streamState: 'connected',
+      loadingActive: false,
+      activeError: null,
+      draft: '',
+      pendingAttachmentCount: 0
+    });
+
+    expect(model.displayTranscriptCards.map((card) => `${card.kind}:${card.id}`)).toEqual([
+      'message:turn:run-1:user',
+      'intermediate:intermediate-event-1',
+      'message:turn:run-1:assistant'
+    ]);
+    expect(model.transcriptListItems.map((item) => item.kind)).toEqual(['card', 'card', 'card']);
+  });
+
+  it('does not duplicate live progress already projected by the backend transcript', () => {
+    const user = { ...userCard('turn:run-1:user', 'next task', {}), turnId: 'run-1' };
+    const commentary: ChatTranscriptCard = {
+      kind: 'intermediate',
+      id: 'timeline:commentary:1',
+      title: 'commentary',
+      text: 'I am checking the renderer.',
+      eventIds: ['journal:1'],
+      progressSourceIds: ['progress:commentary:0001'],
+      detail: null,
+      turnId: 'run-1',
+      orderKey: '002',
+      timestamp: now
+    };
+    const model = buildChatDetailDisplayReadModel({
+      transcriptCards: [user, commentary],
+      queuedTurns: [],
+      displayedProgress: progress('run-1', 12, [
+        artifact('event-1', {
+          item_id: 'progress:commentary:0001',
+          kind: 'assistant_update',
+          title: 'commentary',
+          summary: 'I am checking the renderer.',
+          event_ids: ['journal:1']
+        })
+      ]),
+      activeChat: chatSummary('chat-1'),
+      assistantSharedFileCount: 0,
+      streamState: 'connected',
+      loadingActive: false,
+      activeError: null,
+      draft: '',
+      pendingAttachmentCount: 0
+    });
+
+    expect(model.displayTranscriptCards.filter((card) => card.kind === 'intermediate')).toHaveLength(1);
+    expect(model.displayTranscriptCards.map((card) => card.id)).toEqual(['turn:run-1:user', 'timeline:commentary:1']);
   });
 
   it('does not mark a stale assistant card as streaming for a newer running turn', () => {
@@ -286,33 +254,6 @@ describe('PMA chat detail state composition', () => {
     expect(model.composerWillQueue).toBe(false);
   });
 
-  it('merges live progress elapsed time and deduplicates event rows', () => {
-    const previous = progress('run-1', 10, [artifact('event-1')]);
-    const next = progress('run-1', 5, [artifact('event-1'), artifact('event-2')]);
-
-    const merged = mergePmaProgressUpdate(previous, next, Date.parse(now) + 20_000);
-
-    expect(merged.elapsedSeconds).toBe(20);
-    expect(merged.events.map((event) => event.id)).toEqual(['event-1', 'event-2']);
-  });
-
-  it('replaces live progress events by canonical progress item id', () => {
-    const previous = progress('run-1', 10, [
-      artifact('event-1', { item_id: 'progress:assistant_update:0001', summary: 'Read' })
-    ]);
-    const next = progress('run-1', 11, [
-      artifact('event-2', { item_id: 'progress:assistant_update:0001', summary: 'Reading files' })
-    ]);
-
-    const merged = mergePmaProgressUpdate(previous, next, Date.parse(now) + 11_000);
-
-    expect(merged.events).toHaveLength(1);
-    expect(merged.events[0].id).toBe('event-2');
-    expect(merged.events[0].raw.progress_item).toMatchObject({
-      item_id: 'progress:assistant_update:0001',
-      summary: 'Reading files'
-    });
-  });
 });
 
 function userCard(id: string, text: string, raw: Record<string, unknown>): MessageTranscriptCard {
@@ -346,7 +287,7 @@ function assistantCard(id: string, text: string): MessageTranscriptCard {
   };
 }
 
-function queuedTurn(managedTurnId: string, raw: Record<string, unknown> = {}): PmaQueuedTurn {
+function queuedTurn(managedTurnId: string, raw: Record<string, unknown> = {}): ChatQueuedTurn {
   return {
     managedTurnId,
     position: 1,
@@ -361,7 +302,7 @@ function queuedTurn(managedTurnId: string, raw: Record<string, unknown> = {}): P
   };
 }
 
-function chatSummary(id: string): PmaChatSummary {
+function chatSummary(id: string): ChatSummary {
   return {
     id,
     title: 'Chat One',
@@ -397,7 +338,7 @@ function artifact(id: string, progressItem: Record<string, unknown> = {}): Surfa
   };
 }
 
-function progress(id: string, elapsedSeconds: number, events: SurfaceArtifact[]): PmaRunProgress {
+function progress(id: string, elapsedSeconds: number, events: SurfaceArtifact[]): ChatRunProgress {
   return {
     id,
     chatId: 'chat-1',

@@ -4,7 +4,7 @@ import {
   type ChatIndexWindowRequest,
   CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST,
   canonicalChatIndexWindowKey,
-  selectPmaChats,
+  selectChats,
   selectRepoSummaries,
   selectWorktreeSummaries,
   type ReadModelEntityState,
@@ -24,11 +24,11 @@ import {
   type ChatDetailSessionState,
   type PinnedChatMap
 } from './chatDetailSession';
-import type { PmaChatSummary, SurfaceArtifact } from '$lib/viewModels/domain';
+import type { ChatSummary, SurfaceArtifact } from '$lib/viewModels/domain';
 import {
-  buildPmaChatScopeOptions,
-  type PmaChatScopeOption
-} from '$lib/viewModels/pmaChat';
+  buildChatScopeOptions,
+  type ChatScopeOption
+} from '$lib/viewModels/chat';
 
 type ChatIndexSessionState = {
   status: 'idle' | 'loading' | 'connected' | 'interrupted' | 'closed';
@@ -77,7 +77,7 @@ export type ChatDetailPageSupportData = {
   agents: JsonRecord[];
   defaults: JsonRecord;
   defaultAgent: string;
-  scopeOptions: PmaChatScopeOption[];
+  scopeOptions: ChatScopeOption[];
 };
 
 type ControllerTimers = {
@@ -184,7 +184,7 @@ export class ChatDetailPageController {
     else this.stopActiveClock();
   }
 
-  clearCommittedDraftPlaceholder(persistedChats: PmaChatSummary[]): void {
+  clearCommittedDraftPlaceholder(persistedChats: ChatSummary[]): void {
     this.writeSession(clearCommittedDraftPlaceholderIfPersisted(this.readSession(), persistedChats));
   }
 
@@ -232,8 +232,8 @@ export class ChatDetailPageController {
   private handleReadModelState(state: ReadModelEntityState): void {
     const previous = this.readModelState;
     const replacementChatId = replacementForArchivedActiveChat(
-      selectPmaChats(previous, this.currentRequest),
-      selectPmaChats(state, this.currentRequest),
+      selectChats(previous, this.currentRequest),
+      selectChats(state, this.currentRequest),
       this.readSession().activeChatId
     );
     this.readModelState = state;
@@ -282,7 +282,7 @@ export class ChatDetailPageController {
       this.deps.supportApi.repoWorktreeTopology('all', 50),
       this.deps.supportApi.repoWorktreeRuntime('all', 50)
     ]);
-    if (artifactResult.ok) this.deps.readModelStore.setPmaArtifacts('__global__', artifactResult.data);
+    if (artifactResult.ok) this.deps.readModelStore.setSurfaceArtifacts('__global__', artifactResult.data);
     if (topologyResult.ok) this.deps.readModelStore.applyRepoWorktreeTopologySnapshot(topologyResult.data as Parameters<ReadModelEntityStore['applyRepoWorktreeTopologySnapshot']>[0]);
     if (runtimeResult.ok) this.deps.readModelStore.applyRepoWorktreeRuntimeSnapshot(runtimeResult.data as Parameters<ReadModelEntityStore['applyRepoWorktreeRuntimeSnapshot']>[0]);
     const scopeState = this.deps.readModelStore.snapshot();
@@ -290,7 +290,7 @@ export class ChatDetailPageController {
       agents: agentResult.ok ? agentResult.data.agents : [],
       defaults: agentResult.ok ? agentResult.data.defaults : {},
       defaultAgent: agentResult.ok ? agentResult.data.default : 'codex',
-      scopeOptions: buildPmaChatScopeOptions(
+      scopeOptions: buildChatScopeOptions(
         topologyResult.ok ? selectRepoSummaries(scopeState) : [],
         topologyResult.ok ? selectWorktreeSummaries(scopeState) : []
       )
@@ -305,15 +305,15 @@ export class ChatDetailPageController {
     const state = this.deps.readModelStore.snapshot();
     return Boolean(
       state.chatTranscripts[chatId]?.order.length ||
-      state.pmaProgress[chatId] ||
-      state.pmaQueues[chatId]?.length ||
+      state.chatProgress[chatId] ||
+      state.chatQueues[chatId]?.length ||
       state.timelines[chatId]?.order.length ||
       state.chatDetails[chatId]?.thread
     );
   }
 
-  private currentChats(): PmaChatSummary[] {
-    return selectPmaChats(this.deps.readModelStore.snapshot(), this.currentRequest);
+  private currentChats(): ChatSummary[] {
+    return selectChats(this.deps.readModelStore.snapshot(), this.currentRequest);
   }
 
   private readSession(): ChatDetailSessionState {

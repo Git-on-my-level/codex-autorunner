@@ -214,7 +214,8 @@ def _load_chat_binding_metadata_by_thread(hub_root: Path) -> dict[str, dict[str,
         metadata = active_chat_binding_metadata_by_thread(hub_root=hub_root)
     except Exception as exc:  # intentional: non-critical metadata load
         _logger.warning(
-            "Could not load PMA chat-binding metadata for thread response: %s", exc
+            "Could not load managed thread chat-binding metadata for thread response: %s",
+            exc,
         )
         return {}
     return _enrich_chat_binding_metadata_with_channel_names(metadata, hub_root=hub_root)

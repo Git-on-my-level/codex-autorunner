@@ -702,14 +702,18 @@ def _successful_terminal_turn_id(snapshot: dict[str, Any]) -> str | None:
     return normalize_optional_text(snapshot.get("managed_turn_id"))
 
 
-def _transcript_has_assistant_row(snapshot: dict[str, Any], turn_id: str) -> bool:
+def _transcript_has_completed_turn_row(snapshot: dict[str, Any], turn_id: str) -> bool:
     rows = snapshot.get("rows")
     if not isinstance(rows, list):
         return False
     for row in rows:
         if not isinstance(row, dict):
             continue
-        if row.get("kind") != "message" or row.get("turn_id") != turn_id:
+        if row.get("turn_id") != turn_id:
+            continue
+        if row.get("kind") == "intermediate" and row.get("title") == "commentary":
+            return True
+        if row.get("kind") != "message":
             continue
         message = row.get("message")
         if not isinstance(message, dict):
@@ -975,7 +979,7 @@ def build_managed_thread_tail_routes(
                         limit=min(limit, _TRANSCRIPT_STREAM_LIMIT),
                         level=normalized_level,
                     )
-                    if _transcript_has_assistant_row(
+                    if _transcript_has_completed_turn_row(
                         terminal_snapshot,
                         terminal_turn_id,
                     ):

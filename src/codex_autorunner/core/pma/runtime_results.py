@@ -88,11 +88,11 @@ def classify_runtime_turn_result(
             and (completed_seen or raw_events_show_completion(raw_events))
         ):
             return {"status": "ok"}
-        return {"status": "error", "detail": detail or "PMA chat failed"}
+        return {"status": "error", "detail": detail or "Managed thread failed"}
     if normalized_status in {"interrupted", "cancelled", "canceled", "aborted"}:
-        return {"status": "interrupted", "detail": "PMA chat interrupted"}
+        return {"status": "interrupted", "detail": "Managed thread interrupted"}
     if normalized_status and not successful_completion:
-        return {"status": "error", "detail": "PMA chat failed"}
+        return {"status": "error", "detail": "Managed thread failed"}
     return {"status": "ok"}
 
 

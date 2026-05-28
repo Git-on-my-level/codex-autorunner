@@ -2,8 +2,8 @@ import { mapSurfaceArtifact } from './domain';
 import { renderMarkdownToHtml } from './markdown';
 import type {
   GitStatusSummary,
-  PmaChatSummary,
-  PmaRunProgress,
+  ChatSummary,
+  ChatRunProgress,
   RepoSummary,
   SurfaceArtifact,
   TicketSummary,
@@ -11,8 +11,8 @@ import type {
   WorktreeSummary,
   ContextspaceDocument
 } from './domain';
-import { formatRelativeTime, pmaChatKind, pmaChatKindLabel, progressPercent, sortChatsUnreadFirst, statusLabel } from './pmaChat';
-import type { PmaChatKind } from './pmaChat';
+import { formatRelativeTime, chatKind, chatKindLabel, progressPercent, sortChatsUnreadFirst, statusLabel } from './chat';
+import type { ChatKind } from './chat';
 import { buildChatsListHref, DEFAULT_CHAT_LIST_FILTERS } from '$lib/routes/chatListFiltersUrl';
 import {
   chatRoute,
@@ -57,12 +57,12 @@ export type RepoWorktreeIndexRow = {
   ticketHref: string | null;
   repoHref: string | null;
   childWorktrees: RepoWorktreeChildRow[];
-  /** PMA chats + ticket-flow runs scoped to this row (runs tied to an already-counted chat are skipped). */
+  /** chats + ticket-flow runs scoped to this row (runs tied to an already-counted chat are skipped). */
   signalWaiting: number;
   signalFailed: number;
   signalActive: number;
   /** Deep-link into chats with the new-chat scope picker preset for PMA mediation. */
-  pmaChatHref: string;
+  chatHref: string;
   /** Deep-link into chats with the new-chat scope picker preset for direct agent control. */
   codingAgentChatHref: string;
   hasCarState: boolean;
@@ -103,10 +103,10 @@ export type RepoWorktreeChildRow = {
   href: string;
   ticketHref: string | null;
   /** Deep-link into chats with PMA mediation scoped to this worktree. */
-  pmaChatHref: string;
+  chatHref: string;
   /** Deep-link into chats with direct agent control scoped to this worktree. */
   codingAgentChatHref: string;
-  /** PMA chats + ticket-flow runs scoped to this worktree. */
+  /** chats + ticket-flow runs scoped to this worktree. */
   signalWaiting: number;
   signalFailed: number;
   signalActive: number;
@@ -171,7 +171,7 @@ export type RepoWorktreeChatRow = {
   shortId: string;
   title: string;
   status: WorkStatus;
-  kind: PmaChatKind;
+  kind: ChatKind;
   kindLabel: string;
   agentId: string | null;
   model: string | null;
@@ -180,7 +180,7 @@ export type RepoWorktreeChatRow = {
   /** Ticket id when this chat was spawned by ticket flow; null for ad-hoc chats. */
   ticketId: string | null;
   ticketDone: boolean | null;
-  ticketStatus: PmaChatSummary['ticketStatus'];
+  ticketStatus: ChatSummary['ticketStatus'];
 };
 
 export type RepoWorktreeArtifactRow = {
@@ -295,7 +295,7 @@ export type RepoWorktreeDetailViewModel = {
   hasActiveRun: boolean;
   missingIndexHref: string;
   missingIndexLabel: string;
-  pmaChatHref: string;
+  chatHref: string;
   codingAgentChatHref: string;
   /** Chats list URL filtered to this detail's scope kind. */
   scopedChatListHref: string;
@@ -326,8 +326,8 @@ export type RepoWorktreeTicketOverview = {
 export type RepoWorktreeSourceData = {
   repos: RepoSummary[];
   worktrees: WorktreeSummary[];
-  runs: PmaRunProgress[];
-  chats: PmaChatSummary[];
+  runs: ChatRunProgress[];
+  chats: ChatSummary[];
   tickets: TicketSummary[];
   contextspaceDocs?: ContextspaceDocument[];
   artifacts: SurfaceArtifact[];
@@ -466,7 +466,7 @@ export function buildRepoWorktreeDetailViewModel(
     hasActiveRun: activeRunCards.length > 0,
     missingIndexHref: kind === 'repo' ? '/repos' : '/worktrees',
     missingIndexLabel: kind === 'repo' ? 'Back to repos' : 'Back to worktrees',
-    pmaChatHref: scopedNewChatRoute(kind, id, 'pma'),
+    chatHref: scopedNewChatRoute(kind, id, 'pma'),
     codingAgentChatHref: scopedNewChatRoute(kind, id, 'agent'),
     scopedChatListHref: scopedChatListHrefForKind(kind),
     newTicketHref:
@@ -537,7 +537,7 @@ function missingDetailViewModel(kind: RepoWorktreeKind, id: string): RepoWorktre
     hasActiveRun: false,
     missingIndexHref: kind === 'repo' ? '/repos' : '/worktrees',
     missingIndexLabel: kind === 'repo' ? 'Back to repos' : 'Back to worktrees',
-    pmaChatHref: '/chats',
+    chatHref: '/chats',
     codingAgentChatHref: '/chats',
     scopedChatListHref: scopedChatListHrefForKind(kind),
     newTicketHref: kind === 'repo' ? '/repos' : '/worktrees',
@@ -613,8 +613,8 @@ function chatBindingCountFromRaw(raw: Record<string, unknown>): number {
 type RepoWorktreeLookup = {
   worktreesByRepo: Map<string, WorktreeSummary[]>;
   ticketsByResource: Map<string, TicketSummary[]>;
-  chatsByResource: Map<string, PmaChatSummary[]>;
-  runsByResource: Map<string, PmaRunProgress[]>;
+  chatsByResource: Map<string, ChatSummary[]>;
+  runsByResource: Map<string, ChatRunProgress[]>;
 };
 
 function buildRepoWorktreeLookup(source: RepoWorktreeSourceData): RepoWorktreeLookup {
@@ -626,12 +626,12 @@ function buildRepoWorktreeLookup(source: RepoWorktreeSourceData): RepoWorktreeLo
   for (const ticket of source.tickets) {
     for (const key of ticketResourceKeys(ticket)) appendResource(ticketsByResource, key, ticket);
   }
-  const chatsByResource = new Map<string, PmaChatSummary[]>();
+  const chatsByResource = new Map<string, ChatSummary[]>();
   for (const chat of source.chats) {
     if (chat.worktreeId) appendResource(chatsByResource, resourceKey('worktree', chat.worktreeId), chat);
     else if (chat.repoId) appendResource(chatsByResource, resourceKey('repo', chat.repoId), chat);
   }
-  const runsByResource = new Map<string, PmaRunProgress[]>();
+  const runsByResource = new Map<string, ChatRunProgress[]>();
   for (const run of source.runs) {
     for (const key of runResourceKeys(run)) appendResource(runsByResource, key, run);
   }
@@ -675,7 +675,7 @@ function ticketResourceKeys(ticket: TicketSummary): Set<string> {
   return keys;
 }
 
-function runResourceKeys(run: PmaRunProgress): Set<string> {
+function runResourceKeys(run: ChatRunProgress): Set<string> {
   const keys = new Set<string>();
   const state = asRecord(run.raw.state);
   const ticketEngine = asRecord(state.ticket_engine);
@@ -745,7 +745,7 @@ function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source:
     signalWaiting: 0,
     signalFailed: 0,
     signalActive: 0,
-    pmaChatHref: scopedNewChatRoute('repo', repo.id, 'pma'),
+    chatHref: scopedNewChatRoute('repo', repo.id, 'pma'),
     codingAgentChatHref: scopedNewChatRoute('repo', repo.id, 'agent'),
     hasCarState: boolFromRaw(repo.raw, 'has_car_state'),
     unboundManagedThreadCount: numberFromRaw(repo.raw, 'unbound_managed_thread_count'),
@@ -803,7 +803,7 @@ function worktreeToNavChildRow(
     lastActivityAt: worktree.lastActivityAt,
     href: worktreeRoute(worktree.id, worktree.repoId),
     ticketHref: worktreeTicketRoute(worktree.id, worktree.repoId),
-    pmaChatHref: scopedNewChatRoute('worktree', worktree.id, 'pma'),
+    chatHref: scopedNewChatRoute('worktree', worktree.id, 'pma'),
     codingAgentChatHref: scopedNewChatRoute('worktree', worktree.id, 'agent'),
     signalWaiting: signals.waiting,
     signalFailed: signals.failed,
@@ -850,7 +850,7 @@ function worktreeToIndexRow(worktree: WorktreeSummary, source: RepoWorktreeSourc
     signalWaiting: 0,
     signalFailed: 0,
     signalActive: 0,
-    pmaChatHref: scopedNewChatRoute('worktree', worktree.id, 'pma'),
+    chatHref: scopedNewChatRoute('worktree', worktree.id, 'pma'),
     codingAgentChatHref: scopedNewChatRoute('worktree', worktree.id, 'agent'),
     hasCarState: boolFromRaw(worktree.raw, 'has_car_state'),
     unboundManagedThreadCount: numberFromRaw(worktree.raw, 'unbound_managed_thread_count'),
@@ -883,8 +883,8 @@ function shortenWorktreeLabel(name: string, repoName: string | null): string {
 }
 
 function mergeRunCards(
-  runs: PmaRunProgress[],
-  chats: PmaChatSummary[],
+  runs: ChatRunProgress[],
+  chats: ChatSummary[],
   scopeKind: RepoWorktreeKind,
   scopeId: string,
   parentRepoId: string | null = null
@@ -909,8 +909,8 @@ function scopedTicketDetail(scopeKind: RepoWorktreeKind, scopeId: string, ticket
 }
 
 function runToCard(
-  run: PmaRunProgress,
-  chat: PmaChatSummary | null,
+  run: ChatRunProgress,
+  chat: ChatSummary | null,
   scopeKind: RepoWorktreeKind,
   scopeId: string,
   parentRepoId: string | null = null
@@ -937,7 +937,7 @@ function runToCard(
   };
 }
 
-function chatToCard(chat: PmaChatSummary, scopeKind: RepoWorktreeKind, scopeId: string, parentRepoId: string | null = null): RepoWorktreeRunCard {
+function chatToCard(chat: ChatSummary, scopeKind: RepoWorktreeKind, scopeId: string, parentRepoId: string | null = null): RepoWorktreeRunCard {
   return {
     id: chat.id,
     title: chat.title,
@@ -953,7 +953,7 @@ function chatToCard(chat: PmaChatSummary, scopeKind: RepoWorktreeKind, scopeId: 
 }
 
 function buildScopedChatList(
-  chats: PmaChatSummary[],
+  chats: ChatSummary[],
   scopeKind: RepoWorktreeKind,
   scopeId: string
 ): RepoWorktreeChatList {
@@ -972,15 +972,15 @@ function buildScopedChatList(
 
 type ScopedChatListEntry =
   | { kind: 'group'; group: RepoWorktreeChatRunGroup }
-  | { kind: 'chat'; chat: PmaChatSummary };
+  | { kind: 'chat'; chat: ChatSummary };
 
 function buildScopedChatListEntries(
-  chats: PmaChatSummary[],
+  chats: ChatSummary[],
   scopeKind: RepoWorktreeKind,
   scopeId: string
 ): ScopedChatListEntry[] {
   const groups = new Map<string, RepoWorktreeChatRunGroup>();
-  const standalone: PmaChatSummary[] = [];
+  const standalone: ChatSummary[] = [];
   for (const chat of chats) {
     const key = scopedChatRunGroupKey(chat, scopeKind, scopeId);
     if (!key) {
@@ -1000,7 +1000,7 @@ function buildScopedChatListEntries(
 }
 
 function scopedChatRunGroupKey(
-  chat: PmaChatSummary,
+  chat: ChatSummary,
   scopeKind: RepoWorktreeKind,
   scopeId: string
 ): string | null {
@@ -1076,15 +1076,15 @@ function compareScopedChatListEntries(left: ScopedChatListEntry, right: ScopedCh
   return leftId.localeCompare(rightId);
 }
 
-function chatToRow(chat: PmaChatSummary): RepoWorktreeChatRow {
-  const kind = pmaChatKind(chat);
+function chatToRow(chat: ChatSummary): RepoWorktreeChatRow {
+  const kind = chatKind(chat);
   return {
     id: chat.id,
     shortId: chat.id.slice(0, 6).toLowerCase(),
     title: chat.title,
     status: chat.status,
     kind,
-    kindLabel: pmaChatKindLabel(kind),
+    kindLabel: chatKindLabel(kind),
     agentId: chat.agentId,
     model: chat.model,
     updatedAt: chat.updatedAt,
@@ -1274,7 +1274,7 @@ function ticketDetailHref(ticket: TicketSummary): string {
   return base === '/chats' ? base : `${base}/${encodeURIComponent(ticket.number ? String(ticket.number) : ticket.id)}`;
 }
 
-function runMatchesResource(run: PmaRunProgress, kind: RepoWorktreeKind, id: string): boolean {
+function runMatchesResource(run: ChatRunProgress, kind: RepoWorktreeKind, id: string): boolean {
   const state = asRecord(run.raw.state);
   const ticketEngine = asRecord(state.ticket_engine);
   const resourceKind = stringFromRaw(run.raw, ['resource_kind']) ?? stringFromRaw(state, ['resource_kind']) ?? stringFromRaw(ticketEngine, ['resource_kind']);
@@ -1291,7 +1291,7 @@ function runMatchesResource(run: PmaRunProgress, kind: RepoWorktreeKind, id: str
   );
 }
 
-function chatMatchesResource(chat: PmaChatSummary, kind: RepoWorktreeKind, id: string): boolean {
+function chatMatchesResource(chat: ChatSummary, kind: RepoWorktreeKind, id: string): boolean {
   return kind === 'repo' ? chat.repoId === id && !chat.worktreeId : chat.worktreeId === id;
 }
 

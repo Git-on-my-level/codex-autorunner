@@ -33,7 +33,7 @@ from codex_autorunner.core.orchestration.thread_titles import (
         (
             "web_pma",
             ManagedThreadTitleInputs(
-                stored_title="New PMA chat",
+                stored_title="New chat",
                 provider_title="Native provider title",
                 user_visible_title_seed="Lower priority visible seed",
                 fallback_id="thread-web",
