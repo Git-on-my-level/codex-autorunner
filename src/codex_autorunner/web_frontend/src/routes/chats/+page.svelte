@@ -1359,8 +1359,8 @@
   }
 
   async function selectChat(chatId: string): Promise<void> {
-    await pageController.selectChat(chatId, { syncUrl: true });
     await syncCommittedDetailUrl(chatId, { mode: 'push' });
+    await pageController.selectChat(chatId, { syncUrl: true });
   }
 
   function chatIdFromRowEvent(event: Event, fallbackChatId: string): string {
