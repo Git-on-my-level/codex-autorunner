@@ -347,6 +347,8 @@
   let sending = $state(false);
   let creating = $state(false);
   let archiving = $state(false);
+  let bulkRetireRequestedCount = $state<number | null>(null);
+  let bulkRetireModal: HTMLDivElement | null = $state(null);
   let loadingModels = $state(false);
   /** Invalidates in-flight `listAgentModels` results when the user switches agents quickly. */
   let loadModelsSeq = 0;
@@ -559,6 +561,10 @@
     slashSuggestions;
     slashSelectedIndex = Math.min(slashSelectedIndex, Math.max(slashSuggestions.length - 1, 0));
   });
+  $effect(() => {
+    if (!bulkRetireInProgress) return;
+    void tick().then(() => bulkRetireModal?.focus());
+  });
   let clockNowMs = $state(Date.now());
   let lastScrolledChatId: string | null = null;
   let lastScrolledCardCount = 0;
@@ -620,6 +626,12 @@
   );
   const archiveFilterCount = $derived(filterCounts.archived);
   const showArchiveFilterToggle = $derived(statusFilter === 'archived' || archiveFilterCount > 0);
+  const bulkRetireInProgress = $derived(archiving && bulkRetireRequestedCount !== null);
+  const bulkRetireStatusText = $derived(
+    bulkRetireRequestedCount === 1
+      ? 'Retiring 1 active chat. The list will refresh when the backend catches up.'
+      : `Retiring ${bulkRetireRequestedCount ?? activeChatCount} active chats. The list will refresh when the backend catches up.`
+  );
   const canLoadMoreChats = $derived(statusFilter !== 'drafts' && Boolean(selectedChatWindow?.window?.nextCursor));
   const initialChatIndexError = $derived(chatIndexLoadError());
   const visibleChatError = $derived(chatError ?? (!hasUsableChatIndex ? initialChatIndexError : null));
@@ -1443,24 +1455,29 @@
     });
     if (!ok) return;
     archiving = true;
+    bulkRetireRequestedCount = activeChatCount;
     composeError = null;
-    const result = await webApi.pma.retireActiveThreads();
-    if (result.ok) {
-      const targets = result.data.threads.map((chat) => chat.id);
-      await invalidateChatMutations(targets);
-      showCommandNotice(
-        result.data.errorCount > 0
-          ? `Retired ${result.data.retiredCount}; ${result.data.errorCount} failed.`
-          : `Retired ${result.data.retiredCount} chats.`
-      );
-      if (activeChatId && targets.includes(activeChatId)) {
-        closeStream();
-        await goto(chatsHubHref(null));
+    try {
+      const result = await webApi.pma.retireActiveThreads();
+      if (result.ok) {
+        const targets = result.data.threads.map((chat) => chat.id);
+        await invalidateChatMutations(targets);
+        showCommandNotice(
+          result.data.errorCount > 0
+            ? `Retired ${result.data.retiredCount}; ${result.data.errorCount} failed.`
+            : `Retired ${result.data.retiredCount} chats.`
+        );
+        if (activeChatId && targets.includes(activeChatId)) {
+          closeStream();
+          await goto(chatsHubHref(null));
+        }
+      } else {
+        composeError = result.error;
       }
-    } else {
-      composeError = result.error;
+    } finally {
+      archiving = false;
+      bulkRetireRequestedCount = null;
     }
-    archiving = false;
   }
 
   async function replaceDetailUrl(detailId: string): Promise<void> {
@@ -2336,6 +2353,13 @@
     setComposerDraft(draft);
     markComposerEdited();
     autosizeComposer();
+  }
+
+  function trapBulkRetireModalKeydown(event: KeyboardEvent): void {
+    event.stopPropagation();
+    if (event.key !== 'Tab') return;
+    event.preventDefault();
+    bulkRetireModal?.focus();
   }
 
 </script>
@@ -3459,6 +3483,33 @@
             <button type="button" class="ghost-button" onclick={cancelLinkDialog}>Cancel</button>
             <button type="button" class="send-button" disabled={!linkDraft.trim()} onclick={addLink}>Attach</button>
           </div>
+        </div>
+      </div>
+    {/if}
+    {#if bulkRetireInProgress}
+      <div class="modal-backdrop chat-processing-backdrop" role="presentation">
+        <div
+          bind:this={bulkRetireModal}
+          class="approval-modal chat-processing-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="chat-bulk-retire-title"
+          aria-describedby="chat-bulk-retire-status"
+          tabindex="-1"
+          onclick={(event) => event.stopPropagation()}
+          onkeydown={trapBulkRetireModalKeydown}
+        >
+          <span class="artifact-type">Processing</span>
+          <h2 id="chat-bulk-retire-title">Retiring active chats</h2>
+          <p id="chat-bulk-retire-status">{bulkRetireStatusText}</p>
+          <div
+            class="chat-processing-progress"
+            role="progressbar"
+            aria-label="Retiring active chats"
+          >
+            <span></span>
+          </div>
+          <p class="chat-processing-note">Keep this tab open while CAR marks the chats retired.</p>
         </div>
       </div>
     {/if}
