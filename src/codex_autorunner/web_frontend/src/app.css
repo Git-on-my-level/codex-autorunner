@@ -4336,6 +4336,51 @@ textarea:hover {
   gap: var(--space-2);
 }
 
+.chat-processing-backdrop {
+  z-index: 30;
+  cursor: wait;
+}
+
+.chat-processing-modal {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.chat-processing-progress {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  height: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-2);
+  background: var(--color-surface-sunken);
+}
+
+.chat-processing-progress span {
+  position: absolute;
+  inset-block: 0;
+  left: -35%;
+  width: 35%;
+  border-radius: inherit;
+  background: var(--color-accent);
+  animation: chat-processing-progress 1.1s ease-in-out infinite;
+}
+
+.chat-processing-note {
+  color: var(--color-ink-muted);
+  font-size: var(--font-size-1);
+}
+
+@keyframes chat-processing-progress {
+  0% {
+    transform: translateX(0);
+  }
+
+  100% {
+    transform: translateX(390%);
+  }
+}
+
 .state-panel {
   display: grid;
   gap: 3px;

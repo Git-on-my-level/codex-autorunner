@@ -117,6 +117,14 @@ def _run_ticket_linter(repo_root: Path) -> subprocess.CompletedProcess[str]:
         if not env.get("PYTHONPATH")
         else f"{src_dir}{os.pathsep}{env['PYTHONPATH']}"
     )
+    warning_filter = (
+        "ignore:Using `httpx` with `starlette.testclient` is deprecated:Warning"
+    )
+    env["PYTHONWARNINGS"] = (
+        warning_filter
+        if not env.get("PYTHONWARNINGS")
+        else f"{env['PYTHONWARNINGS']},{warning_filter}"
+    )
     return subprocess.run(
         [
             sys.executable,
