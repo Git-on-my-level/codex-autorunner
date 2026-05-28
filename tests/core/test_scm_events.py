@@ -53,6 +53,39 @@ def test_record_event_and_list_filtered_events(tmp_path: Path) -> None:
     assert by_pr[0].raw_payload == {"pull_request": {"number": 17}}
 
 
+def test_record_event_if_new_returns_none_for_existing_event_id(tmp_path: Path) -> None:
+    store = ScmEventStore(tmp_path)
+
+    created = store.record_event_if_new(
+        event_id="github:poll:pull_request_review_comment:comment-1",
+        provider="github",
+        event_type="pull_request_review_comment",
+        repo_slug="acme/widgets",
+        repo_id="repo-1",
+        pr_number=17,
+        occurred_at="2026-03-25T00:00:00Z",
+        received_at="2026-03-25T00:00:01Z",
+        payload={"action": "created", "comment_id": "comment-1"},
+    )
+    duplicate = store.record_event_if_new(
+        event_id="github:poll:pull_request_review_comment:comment-1",
+        provider="github",
+        event_type="pull_request_review_comment",
+        repo_slug="acme/widgets",
+        repo_id="repo-1",
+        pr_number=17,
+        occurred_at="2026-03-25T00:00:00Z",
+        received_at="2026-03-25T00:05:00Z",
+        payload={"action": "created", "comment_id": "comment-1"},
+    )
+
+    assert created is not None
+    assert duplicate is None
+    assert [event.event_id for event in store.list_events(limit=10)] == [
+        "github:poll:pull_request_review_comment:comment-1"
+    ]
+
+
 def test_record_event_rejects_oversized_raw_payload(tmp_path: Path) -> None:
     store = ScmEventStore(tmp_path)
 
