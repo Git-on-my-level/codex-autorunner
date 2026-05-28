@@ -108,6 +108,19 @@ describe('/chats page', () => {
     expect(syncCommittedBody).not.toContain('pendingCommittedDetailUrlChatId');
   });
 
+  it('pushes the selected chat URL and lets the updated route activate the detail controller', () => {
+    const source = chatDetailPageSource();
+    const selectChatBody = source.match(
+      /async function selectChat[\s\S]*?\n  function chatIdFromRowEvent/
+    )?.[0];
+
+    expect(selectChatBody).toBeTruthy();
+    expect(selectChatBody).toMatch(
+      /await syncCommittedDetailUrl\(chatId, \{ mode: 'push' \}\);[\s\S]*?pageController\.setRoute\(currentRouteSnapshot\(\)\);/
+    );
+    expect(selectChatBody).not.toContain('pageController.selectChat');
+  });
+
   it('keeps migrated PMA transcript, stream, queue, send, and normalization calls out of the page', () => {
     const pageSource = chatDetailPageSource();
     const forbiddenTokens = [
