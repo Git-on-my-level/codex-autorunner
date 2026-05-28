@@ -123,7 +123,7 @@ def _run_ticket_linter(repo_root: Path) -> subprocess.CompletedProcess[str]:
     env["PYTHONWARNINGS"] = (
         warning_filter
         if not env.get("PYTHONWARNINGS")
-        else f"{warning_filter},{env['PYTHONWARNINGS']}"
+        else f"{env['PYTHONWARNINGS']},{warning_filter}"
     )
     return subprocess.run(
         [
