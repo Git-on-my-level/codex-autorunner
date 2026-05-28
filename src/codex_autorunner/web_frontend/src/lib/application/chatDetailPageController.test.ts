@@ -85,6 +85,28 @@ describe('ChatDetailPageController', () => {
     expect(harness.liveProjection.activate).toHaveBeenCalledWith('deep-linked-chat', { quiet: false });
   });
 
+  it('keeps a route-selected chat active when read-model publication runs synchronously', async () => {
+    const harness = createHarness();
+    harness.store.applyChatIndexSnapshot(chatIndexSnapshot([
+      chatIndexRow('previous-chat'),
+      chatIndexRow('selected-chat')
+    ]));
+    harness.controller.mount({
+      route: route('previous-chat'),
+      currentRequest: { filter: 'all', limit: 50 },
+      ticketRunGroupRequest: CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(harness.sessionState.activeChatId).toBe('previous-chat');
+    harness.liveProjection.activate.mockClear();
+
+    harness.controller.setRoute(route('selected-chat'));
+
+    expect(harness.sessionState.activeChatId).toBe('selected-chat');
+    expect(harness.liveProjection.activate).toHaveBeenCalledWith('selected-chat', { quiet: false });
+  });
+
   it('debounces filter refreshes through the chat index session', () => {
     vi.useFakeTimers();
     const harness = createHarness();
