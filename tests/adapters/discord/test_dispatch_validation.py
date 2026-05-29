@@ -963,6 +963,10 @@ async def test_message_turn_waits_for_ingressed_slash_command_to_finish(
                 break
             await asyncio.sleep(0.01)
 
+        for _ in range(100):
+            if observed:
+                break
+            await asyncio.sleep(0.01)
         assert observed == ["newt:start"]
         assert message_turn_started.is_set() is False
         queued_notice = next(
