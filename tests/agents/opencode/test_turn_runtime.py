@@ -300,7 +300,7 @@ async def test_turn_runtime_collector_fails_failed_question_tool_part() -> None:
 
 
 @pytest.mark.asyncio
-async def test_turn_runtime_collector_ignores_question_tool_part_missing_request_id() -> (
+async def test_turn_runtime_collector_fails_question_tool_part_missing_request_id() -> (
     None
 ):
     async def _events():
@@ -336,7 +336,7 @@ async def test_turn_runtime_collector_ignores_question_tool_part_missing_request
     )
 
     assert output.text == ""
-    assert output.error is None
+    assert output.error == "OpenCode question tool missing request id"
 
 
 @pytest.mark.asyncio
