@@ -599,11 +599,18 @@ async def collect_opencode_output_from_events(
                 part_ignored = bool(part_dict.get("ignored")) if part_dict else False
                 part_message_id = extract_event_part_message_id(payload)
                 part_id = extract_event_part_id(payload)
-                assembler.remember_part_type(part_id, part_type)
+                assembler.remember_part_type(
+                    part_id,
+                    part_type,
+                    message_id=part_message_id,
+                )
                 resolved_part_type = (
                     part_type
                     if isinstance(part_type, str)
-                    else assembler.lookup_part_type(part_id)
+                    else assembler.lookup_part_type(
+                        part_id,
+                        message_id=part_message_id,
+                    )
                 )
                 if resolved_part_type == "tool" and isinstance(part_dict, dict):
                     (

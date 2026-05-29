@@ -7,7 +7,16 @@ import time
 from dataclasses import dataclass, field
 from os.path import basename
 from pathlib import Path
-from typing import Any, AsyncIterator, Awaitable, Callable, Mapping, Optional, Sequence
+from typing import (
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Literal,
+    Mapping,
+    Optional,
+    Sequence,
+)
 
 from ...core.acp_lifecycle import (
     active_turn_matches as _active_turn_matches,
@@ -17,9 +26,9 @@ from ...core.acp_lifecycle import (
 )
 from ...core.config import HubConfig, RepoConfig
 from ...core.logging_utils import log_event
-from ...core.orchestration.runtime_thread_events import (
-    RuntimeThreadRunEventState,
-    normalize_runtime_progress_event,
+from ...core.orchestration.assistant_output_assembly import (
+    AssistantOutputAssembler,
+    AssistantOutputEvent,
 )
 from ...core.orchestration.turn_event_buffer import TurnEventBuffer
 from ...core.text_utils import _normalize_optional_text
@@ -109,6 +118,70 @@ def _extract_session_summary(payload: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
+def _extract_acp_content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        text = content.get("text")
+        return text if isinstance(text, str) else ""
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            text = item.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+        return "".join(parts)
+    return ""
+
+
+def _assistant_output_event_from_acp_notification(
+    raw_event: Mapping[str, Any],
+) -> Optional[AssistantOutputEvent]:
+    method = str(raw_event.get("method") or "").strip()
+    params = raw_event.get("params")
+    if not isinstance(params, Mapping):
+        return None
+    turn_id = _normalize_optional_text(params.get("turnId") or params.get("turn_id"))
+    if method == "session/update":
+        update = params.get("update")
+        if not isinstance(update, Mapping):
+            return None
+        if (
+            _normalize_optional_text(
+                update.get("sessionUpdate") or update.get("session_update")
+            )
+            != "agent_message_chunk"
+        ):
+            return None
+        text = _extract_acp_content_text(update.get("content"))
+        if not text:
+            return None
+        raw_kind = str(params.get("assistantOutputKind") or "").strip()
+        kind: Literal["delta", "snapshot"]
+        if raw_kind == "delta":
+            kind = "delta"
+        else:
+            kind = "snapshot"
+        return AssistantOutputEvent(
+            kind=kind,
+            text=text,
+            scope=turn_id,
+            preserve_word_boundaries=kind == "snapshot",
+        )
+    if method in {"prompt/message", "turn/message"}:
+        message_text = _normalize_optional_text(
+            params.get("message") or params.get("text")
+        )
+        if not message_text:
+            return None
+        return AssistantOutputEvent(
+            kind="final_message", text=message_text, scope=turn_id
+        )
+    return None
+
+
 async def _assistant_text_from_turn_events(
     raw_events: Sequence[Mapping[str, Any]],
 ) -> str:
@@ -119,10 +192,12 @@ async def _assistant_text_from_turn_events(
     safer current-turn source when present.
     """
 
-    state = RuntimeThreadRunEventState()
+    assembler = AssistantOutputAssembler()
     for raw_event in raw_events:
-        await normalize_runtime_progress_event(dict(raw_event), state)
-    return state.assistant_stream_text.strip()
+        event = _assistant_output_event_from_acp_notification(raw_event)
+        if event is not None and event.kind in {"delta", "snapshot"}:
+            assembler.note(event)
+    return assembler.stream_text.strip()
 
 
 def _text_without_whitespace(value: str) -> str:
@@ -215,6 +290,7 @@ def _canonical_acp_notification(event: Any) -> Optional[dict[str, Any]]:
     payload["params"] = params
     method = str(payload.get("method") or "").strip()
     if isinstance(event, ACPOutputDeltaEvent):
+        params["assistantOutputKind"] = event.assembly_kind or "delta"
         if method == "session/update":
             update = dict(params.get("update") or {})
             update["content"] = _replace_session_update_content_text(
@@ -226,9 +302,11 @@ def _canonical_acp_notification(event: Any) -> Optional[dict[str, Any]]:
             params["delta"] = event.delta
             params["text"] = event.delta
     elif isinstance(event, ACPMessageEvent):
+        params["assistantOutputKind"] = event.assembly_kind or "final_message"
         params["message"] = event.message
         params["text"] = event.message
     elif isinstance(event, ACPTurnTerminalEvent):
+        params["assistantOutputKind"] = event.assembly_kind or "final_message"
         params["finalOutput"] = event.final_output
     return payload
 

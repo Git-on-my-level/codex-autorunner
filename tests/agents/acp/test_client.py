@@ -504,6 +504,11 @@ async def test_client_merges_cumulative_stream_chunks_without_duplication(
             for event in handle.snapshot_events()
             if event.kind == "output_delta"
         ] == ["fixture", "fixture reply"]
+        assert [
+            getattr(event, "assembly_kind", None)
+            for event in handle.snapshot_events()
+            if event.kind == "output_delta"
+        ] == ["delta", "snapshot"]
     finally:
         await client.close()
 
@@ -534,6 +539,11 @@ async def test_client_preserves_hermes_delta_markdown_chunks(
             for event in handle.snapshot_events()
             if event.kind == "turn_terminal"
         ] == [result.final_output]
+        assert {
+            getattr(event, "assembly_kind", None)
+            for event in handle.snapshot_events()
+            if event.kind == "output_delta"
+        } == {"delta"}
     finally:
         await client.close()
 
@@ -565,6 +575,11 @@ async def test_client_normalizes_hermes_cumulative_session_update_at_ingress(
             for event in second_events
             if event.kind == "output_delta"
         ] == ["second answer"]
+        assert [
+            getattr(event, "assembly_kind", None)
+            for event in second_events
+            if event.kind == "output_delta"
+        ] == ["snapshot"]
         assert any(
             payload.get("event") == "acp.prompt.output_normalized"
             and payload.get("classification") == "transcript_projection"

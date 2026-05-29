@@ -38,7 +38,10 @@ from ...core.acp_lifecycle import (
     should_register_server_turn_alias as _should_register_server_turn_alias,
 )
 from ...core.logging_utils import log_event
-from ...core.orchestration.stream_text_merge import AssistantOutputState
+from ...core.orchestration.assistant_output_assembly import (
+    AssistantOutputAssembler,
+    AssistantOutputEvent,
+)
 from ...core.text_utils import _normalize_optional_text
 from .errors import (
     ACPError,
@@ -152,14 +155,22 @@ class _PromptState:
     last_output_normalized: bool = False
     session_update_counts: Counter[str] = field(default_factory=Counter)
     missing_turn_id_fallback_counts: Counter[str] = field(default_factory=Counter)
-    _assistant_text: AssistantOutputState = field(
-        default_factory=AssistantOutputState,
+    _assistant_text: AssistantOutputAssembler = field(
+        default_factory=AssistantOutputAssembler,
         init=False,
         repr=False,
     )
 
     def __post_init__(self) -> None:
-        self._assistant_text = AssistantOutputState(stream_text=self.final_output)
+        self._assistant_text = AssistantOutputAssembler()
+        if self.final_output:
+            self._assistant_text.note(
+                AssistantOutputEvent(
+                    kind="snapshot",
+                    text=self.final_output,
+                    scope=self.turn_id,
+                )
+            )
 
     def note_output_delta(
         self,
@@ -180,12 +191,22 @@ class _PromptState:
             self.last_output_normalized = True
             return normalized
         if merge_snapshot:
-            self._assistant_text.note_stream_snapshot(
-                normalized.text, preserve_word_boundaries=preserve_word_boundaries
+            self._assistant_text.note(
+                AssistantOutputEvent(
+                    kind="snapshot",
+                    text=normalized.text,
+                    scope=self.turn_id,
+                    preserve_word_boundaries=preserve_word_boundaries,
+                )
             )
         else:
-            self._assistant_text.note_stream_delta(
-                normalized.text, preserve_word_boundaries=preserve_word_boundaries
+            self._assistant_text.note(
+                AssistantOutputEvent(
+                    kind="delta",
+                    text=normalized.text,
+                    scope=self.turn_id,
+                    preserve_word_boundaries=preserve_word_boundaries,
+                )
             )
         self.final_output = self._assistant_text.text
         self.last_output_normalized = self.last_output_normalized or bool(
@@ -210,7 +231,13 @@ class _PromptState:
             if normalized.classification == "invalid_stale_output":
                 self.last_output_normalized = True
                 return normalized
-            self._assistant_text.note_final_message(normalized.text)
+            self._assistant_text.note(
+                AssistantOutputEvent(
+                    kind="final_message",
+                    text=normalized.text,
+                    scope=self.turn_id,
+                )
+            )
             self.final_output = self._assistant_text.text
             self.last_output_normalized = self.last_output_normalized or bool(
                 normalized.trimmed
@@ -1251,13 +1278,20 @@ class ACPClient:
                 if event.method == "session/update"
                 else "current_turn_delta"
             )
+            assembly_kind = (
+                "snapshot" if input_kind == "current_turn_snapshot" else "delta"
+            )
             normalized_delta = state.note_output_delta(
                 event.delta,
-                merge_snapshot=input_kind == "current_turn_snapshot",
+                merge_snapshot=assembly_kind == "snapshot",
                 preserve_word_boundaries=False,
             )
             self._log_ingress_normalization(state, normalized_delta)
-            event = replace(event, delta=normalized_delta.text)
+            event = replace(
+                event,
+                delta=normalized_delta.text,
+                assembly_kind=assembly_kind,
+            )
         elif isinstance(event, ACPMessageEvent) and event.message:
             normalized_message = state.note_assistant_message(event.message)
             if normalized_message is not None:
