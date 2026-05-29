@@ -300,7 +300,7 @@ async def test_turn_runtime_collector_fails_failed_question_tool_part() -> None:
 
 
 @pytest.mark.asyncio
-async def test_turn_runtime_collector_fails_question_tool_part_missing_request_id() -> (
+async def test_turn_runtime_collector_ignores_question_tool_part_missing_request_id() -> (
     None
 ):
     async def _events():
@@ -336,7 +336,68 @@ async def test_turn_runtime_collector_fails_question_tool_part_missing_request_i
     )
 
     assert output.text == ""
-    assert output.error == "OpenCode question tool missing request id"
+    assert output.error is None
+
+
+@pytest.mark.asyncio
+async def test_turn_runtime_collector_uses_question_event_after_tool_part_without_id() -> (
+    None
+):
+    question_answers: list[tuple[str, list[list[str]]]] = []
+
+    async def _events():
+        yield SSEEvent(
+            event="message.part.updated",
+            data=json.dumps(
+                {
+                    "sessionID": "session-1",
+                    "properties": {
+                        "part": {
+                            "id": "prt-q1",
+                            "type": "tool",
+                            "tool": "question",
+                            "state": {
+                                "status": "pending",
+                                "input": {},
+                            },
+                        }
+                    },
+                }
+            ),
+        )
+        yield SSEEvent(
+            event="question.asked",
+            data=json.dumps(
+                {
+                    "sessionID": "session-1",
+                    "properties": {
+                        "id": "que-q1",
+                        "questions": [
+                            {
+                                "question": "Continue?",
+                                "options": [{"label": "Yes"}],
+                            }
+                        ],
+                    },
+                }
+            ),
+        )
+        yield SSEEvent(
+            event="session.status",
+            data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+        )
+
+    output = await collect_opencode_output_from_events(
+        _events(),
+        session_id="session-1",
+        question_handler=lambda request_id, props: _answer_question(request_id, props),
+        reply_question=lambda request_id, answers: _record_question_answer(
+            question_answers, request_id, answers
+        ),
+    )
+
+    assert output.error is None
+    assert question_answers == [("que-q1", [["Yes"]])]
 
 
 @pytest.mark.asyncio

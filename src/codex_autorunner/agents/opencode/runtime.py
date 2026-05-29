@@ -630,11 +630,19 @@ async def collect_opencode_output_from_events(
                             break
                         if question_status not in {"completed", "complete", "success"}:
                             if not question_request_id:
-                                fatal_question_tool_error = (
-                                    "OpenCode question tool missing request id"
+                                questions = question_props.get("questions")
+                                question_count = (
+                                    len(questions) if isinstance(questions, list) else 0
                                 )
-                                assembler.error = fatal_question_tool_error
-                                break
+                                log_event(
+                                    logger,
+                                    logging.INFO,
+                                    "opencode.question.tool_waiting_for_request_id",
+                                    question_count=question_count,
+                                    session_id=event_session_id,
+                                    source="tool_part",
+                                )
+                                continue
                             await _handle_question_request(
                                 question_request_id,
                                 question_props,
