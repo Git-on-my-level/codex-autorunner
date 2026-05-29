@@ -261,6 +261,42 @@ async def test_hermes_supervisor_buffers_normalized_cumulative_turn_events(
 
 @pytest.mark.slow
 @pytest.mark.asyncio
+async def test_hermes_supervisor_preserves_delta_markdown_code_spacing(
+    tmp_path: Path,
+) -> None:
+    supervisor = HermesSupervisor(
+        fixture_command("official_hermes_delta_markdown_chunks")
+    )
+    try:
+        await supervisor.ensure_ready(tmp_path)
+        session = await supervisor.create_session(tmp_path, title="Markdown")
+        turn_id = await supervisor.start_turn(tmp_path, session.session_id, "markdown")
+
+        result = await asyncio.wait_for(
+            supervisor.wait_for_turn(tmp_path, session.session_id, turn_id),
+            timeout=2.0,
+        )
+
+        assert result.status == "completed"
+        assert result.assistant_text == (
+            "Processed update and orchestration are intact.\n"
+            "```\n"
+            'print("ok")\n'
+            "```"
+        )
+        assert {
+            event.get("params", {}).get("assistantOutputKind")
+            for event in result.raw_events
+            if event.get("method") == "session/update"
+            and event.get("params", {}).get("update", {}).get("sessionUpdate")
+            == "agent_message_chunk"
+        } == {"delta"}
+    finally:
+        await supervisor.close_all()
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
 async def test_hermes_supervisor_maps_session_scoped_updates_to_active_turn(
     tmp_path: Path,
 ) -> None:
@@ -361,6 +397,7 @@ async def test_hermes_supervisor_prefers_turn_stream_over_cumulative_terminal_ou
             event.get("method") == "prompt/completed"
             and event.get("params", {}).get("finalOutput")
             == "prior reply\n\nfixture reply"
+            and event.get("params", {}).get("assistantOutputKind") == "final_message"
             for event in result.raw_events
         )
     finally:

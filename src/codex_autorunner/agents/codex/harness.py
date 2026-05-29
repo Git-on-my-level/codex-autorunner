@@ -11,6 +11,10 @@ from ...adapters.app_server.client import (
 )
 from ...adapters.app_server.event_buffer import AppServerEventBuffer
 from ...adapters.app_server.supervisor import WorkspaceAppServerSupervisor
+from ...core.orchestration.assistant_output_assembly import (
+    AssistantOutputEvent,
+    assemble_assistant_output,
+)
 from ...core.runtime_identity import RUNTIME_STAGE_EFFECTIVE, RuntimeIdentityStage
 from ...core.time_utils import now_iso
 from ..base import AgentHarness
@@ -415,17 +419,7 @@ class CodexHarness(AgentHarness):
             result = await handle.wait(timeout=timeout)
         finally:
             self._turn_handles.pop((conversation_id, turn_id), None)
-        agent_messages = [
-            message.strip()
-            for message in getattr(result, "agent_messages", []) or []
-            if isinstance(message, str) and message.strip()
-        ]
-        assistant_text = ""
-        final_message = getattr(result, "final_message", "")
-        if isinstance(final_message, str):
-            assistant_text = final_message.strip()
-        if not assistant_text:
-            assistant_text = "\n\n".join(agent_messages).strip()
+        assistant_text = _assemble_codex_assistant_text(result)
         return TerminalTurnResult(
             status=(
                 str(result.status)
@@ -479,6 +473,34 @@ class CodexHarness(AgentHarness):
                 "model_source": "unknown",
             },
         )
+
+
+def _assemble_codex_assistant_text(result: Any) -> str:
+    events: list[AssistantOutputEvent] = []
+    final_message = getattr(result, "final_message", "")
+    if isinstance(final_message, str) and final_message.strip():
+        events.append(
+            AssistantOutputEvent(
+                kind="final_message",
+                text=final_message.strip(),
+                scope="final-message",
+            )
+        )
+    else:
+        agent_messages = [
+            message.strip()
+            for message in getattr(result, "agent_messages", []) or []
+            if isinstance(message, str) and message.strip()
+        ]
+        if agent_messages:
+            events.append(
+                AssistantOutputEvent(
+                    kind="final_message",
+                    text="\n\n".join(agent_messages),
+                    scope="agent-messages",
+                )
+            )
+    return assemble_assistant_output(events)
 
 
 __all__ = ["CodexHarness"]

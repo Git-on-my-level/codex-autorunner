@@ -110,6 +110,24 @@ async def test_codex_harness_wait_for_turn_returns_plain_text_terminal_result() 
 
 
 @pytest.mark.asyncio
+async def test_codex_harness_wait_for_turn_falls_back_to_agent_messages() -> None:
+    harness = CodexHarness(supervisor=object(), events=object())  # type: ignore[arg-type]
+    harness._turn_handles[("thread-1", "turn-1")] = _TurnHandle(  # type: ignore[attr-defined]
+        SimpleNamespace(
+            status="completed",
+            final_message="",
+            agent_messages=["first line", "second line"],
+            errors=[],
+            raw_events=[],
+        )
+    )
+
+    result = await harness.wait_for_turn(Path("."), "thread-1", "turn-1")
+
+    assert result.assistant_text == "first line\n\nsecond line"
+
+
+@pytest.mark.asyncio
 async def test_codex_harness_resume_conversation_ignores_missing_thread_failures() -> (
     None
 ):

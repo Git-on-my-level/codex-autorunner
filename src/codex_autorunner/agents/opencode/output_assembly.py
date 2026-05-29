@@ -19,6 +19,10 @@ import httpx
 
 from ...core.coercion import coerce_int
 from ...core.logging_utils import log_event
+from ...core.orchestration.assistant_output_assembly import (
+    AssistantOutputAssembler,
+    AssistantOutputEvent,
+)
 from ...core.orchestration.stream_text_merge import (
     append_assistant_stream_text_readably,
 )
@@ -46,6 +50,7 @@ from .usage_decoder import extract_usage
 
 PartHandler = Callable[[str, dict[str, Any], Optional[str]], Awaitable[None]]
 _CODE_SPAN_PATTERN = re.compile(r"`([^`]*)`")
+_NO_MESSAGE_SCOPE = "<no-message>"
 
 
 @dataclass(frozen=True)
@@ -136,13 +141,15 @@ class OutputAssembler:
         self._logger = logger or logging.getLogger(__name__)
 
         self._text_parts: list[str] = []
+        self._assistant_output = AssistantOutputAssembler()
         self._part_lengths: dict[str, int] = {}
         self._part_accumulated_text: dict[str, str] = {}
-        self._last_full_text = ""
+        self._last_full_text_by_scope: dict[str, str] = {}
         self._error: Optional[str] = None
         self._message_roles: dict[str, str] = {}
         self._message_roles_seen = False
         self._message_text_parts: dict[str, list[str]] = {}
+        self._last_text_message_id: Optional[str] = None
         self._pending_text: dict[str, list[str]] = {}
         self._pending_no_id: list[str] = []
         self._no_id_role: Optional[str] = None
@@ -166,6 +173,8 @@ class OutputAssembler:
         self._latest_usage_snapshot: Optional[dict[str, Any]] = None
         self._output_source: OpenCodeTurnOutputSource = "none"
         self._part_types: dict[str, str] = {}
+        self._part_type_fallbacks: dict[str, str] = {}
+        self._ambiguous_part_type_ids: set[str] = set()
         self._providers_cache: Optional[list[dict[str, Any]]] = None
         self._context_window_cache: dict[str, Optional[int]] = {}
         self._session_model_ids: Optional[tuple[Optional[str], Optional[str]]] = None
@@ -274,17 +283,31 @@ class OutputAssembler:
         Also checks whether the completion phase is ``commentary`` — commentary
         completions do not override ``last_completed_assistant_text``.
         """
+        message_result = parse_message_response(payload)
         if message_role != "assistant":
-            return
+            if message_role is not None:
+                return
+            if not message_result.text or prompt_echo_matches(
+                message_result.text,
+                prompt=self._prompt,
+            ):
+                return
         if not message_completion_is_turn_terminal(payload):
             return
         msg_id = extract_event_message_id(payload)
         if msg_id:
             self._last_terminal_assistant_message_id = msg_id
-        message_result = parse_message_response(payload)
         self._last_completed_assistant_text = (
             message_result.text if message_result.text else None
         )
+        if self._last_completed_assistant_text:
+            self._assistant_output.note(
+                AssistantOutputEvent(
+                    kind="final_message",
+                    text=self._last_completed_assistant_text,
+                    scope=msg_id,
+                )
+            )
 
     async def on_text_delta(
         self,
@@ -296,10 +319,11 @@ class OutputAssembler:
     ) -> None:
         """Append a text delta to the output, with dedupe bookkeeping."""
         if isinstance(part_id, str) and part_id:
+            part_key = self._part_key(part_message_id, part_id)
             if isinstance(part_dict, dict):
                 text = part_dict.get("text")
                 if isinstance(text, str):
-                    last_len = self._part_lengths.get(part_id, 0)
+                    last_len = self._part_lengths.get(part_key, 0)
                     if len(text) > last_len:
                         self._append_text_for_message(
                             part_message_id,
@@ -308,30 +332,32 @@ class OutputAssembler:
                         )
                     elif delta_text:
                         self._append_text_for_message(part_message_id, delta_text)
-                    self._part_lengths[part_id] = len(text)
-                    self._part_accumulated_text[part_id] = text
+                    self._part_lengths[part_key] = len(text)
+                    self._part_accumulated_text[part_key] = text
                 else:
                     self._append_text_for_message(part_message_id, delta_text)
-                    self._track_part_delta(part_id, delta_text)
+                    self._track_part_delta(part_message_id, part_id, delta_text)
             else:
                 self._append_text_for_message(part_message_id, delta_text)
-                self._track_part_delta(part_id, delta_text)
+                self._track_part_delta(part_message_id, part_id, delta_text)
         elif isinstance(part_dict, dict):
             text = part_dict.get("text")
             if isinstance(text, str):
-                if self._last_full_text and text.startswith(self._last_full_text):
+                scope = self._full_text_scope(part_message_id)
+                last_full_text = self._last_full_text_by_scope.get(scope, "")
+                if last_full_text and text.startswith(last_full_text):
                     self._append_text_for_message(
                         part_message_id,
-                        text[len(self._last_full_text) :],
+                        text[len(last_full_text) :],
                         preserve_word_boundaries=False,
                     )
-                elif text != self._last_full_text:
+                elif text != last_full_text:
                     self._append_text_for_message(
                         part_message_id,
                         text,
                         preserve_word_boundaries=False,
                     )
-                self._last_full_text = text
+                self._last_full_text_by_scope[scope] = text
             else:
                 self._append_text_for_message(part_message_id, delta_text)
         else:
@@ -349,19 +375,22 @@ class OutputAssembler:
             return
         part_id = part_dict.get("id") or part_dict.get("partId")
         if isinstance(part_id, str) and part_id:
-            last_len = self._part_lengths.get(part_id, 0)
+            part_key = self._part_key(part_message_id, part_id)
+            last_len = self._part_lengths.get(part_key, 0)
             if len(text) > last_len:
                 self._append_text_for_message(part_message_id, text[last_len:])
-                self._part_lengths[part_id] = len(text)
-                self._part_accumulated_text[part_id] = text
+                self._part_lengths[part_key] = len(text)
+                self._part_accumulated_text[part_key] = text
         else:
-            if self._last_full_text and text.startswith(self._last_full_text):
+            scope = self._full_text_scope(part_message_id)
+            last_full_text = self._last_full_text_by_scope.get(scope, "")
+            if last_full_text and text.startswith(last_full_text):
                 self._append_text_for_message(
-                    part_message_id, text[len(self._last_full_text) :]
+                    part_message_id, text[len(last_full_text) :]
                 )
-            elif text != self._last_full_text:
+            elif text != last_full_text:
                 self._append_text_for_message(part_message_id, text)
-            self._last_full_text = text
+            self._last_full_text_by_scope[scope] = text
 
     def flush_pending(self) -> None:
         """Flush all pending text when no final text has been assembled yet."""
@@ -417,29 +446,44 @@ class OutputAssembler:
                 await self._part_handler("usage", usage_snapshot, None)
 
     def remember_part_type(
-        self, part_id: Optional[str], part_type: Optional[str]
+        self,
+        part_id: Optional[str],
+        part_type: Optional[str],
+        *,
+        message_id: Optional[str] = None,
     ) -> None:
-        if (
-            isinstance(part_id, str)
-            and part_id
-            and isinstance(part_type, str)
-            and part_type
-        ):
-            self._part_types[part_id] = part_type
-        elif (
-            isinstance(part_id, str)
-            and part_id
-            and not isinstance(part_type, str)
-            and part_id in self._part_types
-        ):
-            pass
-        else:
+        if not isinstance(part_id, str) or not part_id:
             return
+        part_key = self._part_key(message_id, part_id)
+        if isinstance(part_type, str) and part_type:
+            self._part_types[part_key] = part_type
+            self._remember_part_type_fallback(part_id, part_type)
 
-    def lookup_part_type(self, part_id: Optional[str]) -> Optional[str]:
-        if isinstance(part_id, str) and part_id:
-            return self._part_types.get(part_id)
+    def lookup_part_type(
+        self,
+        part_id: Optional[str],
+        *,
+        message_id: Optional[str] = None,
+    ) -> Optional[str]:
+        if not isinstance(part_id, str) or not part_id:
+            return None
+        scoped_type = self._part_types.get(self._part_key(message_id, part_id))
+        if scoped_type is not None:
+            return scoped_type
+        if message_id is None and part_id not in self._ambiguous_part_type_ids:
+            return self._part_type_fallbacks.get(part_id)
         return None
+
+    def _remember_part_type_fallback(self, part_id: str, part_type: str) -> None:
+        if part_id in self._ambiguous_part_type_ids:
+            return
+        remembered = self._part_type_fallbacks.get(part_id)
+        if remembered is None:
+            self._part_type_fallbacks[part_id] = part_type
+            return
+        if remembered != part_type:
+            self._part_type_fallbacks.pop(part_id, None)
+            self._ambiguous_part_type_ids.add(part_id)
 
     async def build_result(self) -> OutputAssemblyResult:
         """Build the final :class:`OutputAssemblyResult` after the stream loop.
@@ -461,11 +505,25 @@ class OutputAssembler:
                 and not prompt_echo_matches(text, prompt=self._prompt)
             ):
                 self._text_parts.append(text)
+                self._assistant_output.note(
+                    AssistantOutputEvent(
+                        kind="delta",
+                        text=text,
+                        scope=msg_id,
+                    )
+                )
 
         if not self._text_parts:
             recovered_text = await self._recover_text_from_messages()
             if recovered_text:
                 self._text_parts.append(recovered_text)
+                self._assistant_output.note(
+                    AssistantOutputEvent(
+                        kind="delta",
+                        text=recovered_text,
+                        scope=self._last_terminal_assistant_message_id,
+                    )
+                )
                 self._output_source = "messages_snapshot"
 
         streamed_text = self._streamed_text_for_final_message()
@@ -606,7 +664,16 @@ class OutputAssembler:
     def _flush_pending_no_id_as_assistant(self) -> None:
         if self._pending_no_id:
             self._text_parts.extend(self._pending_no_id)
+            for text in self._pending_no_id:
+                self._assistant_output.note(
+                    AssistantOutputEvent(
+                        kind="delta",
+                        text=text,
+                        scope=_NO_MESSAGE_SCOPE,
+                    )
+                )
             self._pending_no_id.clear()
+            self._last_text_message_id = _NO_MESSAGE_SCOPE
         self._no_id_role = "assistant"
 
     def _discard_pending_no_id(self) -> None:
@@ -629,6 +696,15 @@ class OutputAssembler:
                     text,
                     preserve_word_boundaries=preserve_word_boundaries,
                 )
+                self._assistant_output.note(
+                    AssistantOutputEvent(
+                        kind="delta",
+                        text=text,
+                        scope=_NO_MESSAGE_SCOPE,
+                        preserve_word_boundaries=preserve_word_boundaries,
+                    )
+                )
+                self._last_text_message_id = _NO_MESSAGE_SCOPE
             else:
                 self._append_readable_text(
                     self._pending_no_id,
@@ -652,11 +728,25 @@ class OutputAssembler:
             preserve_word_boundaries=preserve_word_boundaries,
         )
 
-    def _track_part_delta(self, part_id: str, delta_text: str) -> None:
-        accumulated = self._part_accumulated_text.get(part_id, "")
+    @staticmethod
+    def _part_key(message_id: Optional[str], part_id: str) -> str:
+        return f"{message_id or '<no-message>'}\x1f{part_id}"
+
+    @staticmethod
+    def _full_text_scope(message_id: Optional[str]) -> str:
+        return message_id or "<no-message>"
+
+    def _track_part_delta(
+        self,
+        message_id: Optional[str],
+        part_id: str,
+        delta_text: str,
+    ) -> None:
+        part_key = self._part_key(message_id, part_id)
+        accumulated = self._part_accumulated_text.get(part_key, "")
         updated = append_assistant_stream_text_readably(accumulated, delta_text)
-        self._part_accumulated_text[part_id] = updated
-        self._part_lengths[part_id] = len(updated)
+        self._part_accumulated_text[part_key] = updated
+        self._part_lengths[part_key] = len(updated)
 
     def _append_readable_text(
         self,
@@ -707,6 +797,15 @@ class OutputAssembler:
                 or not self._text_parts
             ):
                 self._text_parts.extend(self._pending_no_id)
+                for text in self._pending_no_id:
+                    self._assistant_output.note(
+                        AssistantOutputEvent(
+                            kind="delta",
+                            text=text,
+                            scope=_NO_MESSAGE_SCOPE,
+                        )
+                    )
+                self._last_text_message_id = _NO_MESSAGE_SCOPE
             self._pending_no_id.clear()
 
     def _append_assistant_text(
@@ -722,11 +821,23 @@ class OutputAssembler:
             text,
             preserve_word_boundaries=preserve_word_boundaries,
         )
-        self._append_readable_text(
-            self._text_parts,
-            text,
-            preserve_word_boundaries=preserve_word_boundaries,
+        if self._last_text_message_id not in {None, message_id} and self._text_parts:
+            self._text_parts.append(text)
+        else:
+            self._append_readable_text(
+                self._text_parts,
+                text,
+                preserve_word_boundaries=preserve_word_boundaries,
+            )
+        self._assistant_output.note(
+            AssistantOutputEvent(
+                kind="delta",
+                text=text,
+                scope=message_id,
+                preserve_word_boundaries=preserve_word_boundaries,
+            )
         )
+        self._last_text_message_id = message_id
 
     def _streamed_text_for_final_message(self) -> str:
         if self._last_terminal_assistant_message_id is not None:
@@ -734,10 +845,21 @@ class OutputAssembler:
                 self._last_terminal_assistant_message_id,
             )
             if terminal_parts:
-                return "".join(terminal_parts)
+                return self._join_text_segments(terminal_parts)
             if self._message_text_parts:
                 return ""
-        return "".join(self._text_parts)
+        return self._assistant_output.stream_text or self._join_text_segments(
+            self._text_parts
+        )
+
+    @staticmethod
+    def _join_text_segments(parts: list[str]) -> str:
+        merged = ""
+        for part in parts:
+            if not part:
+                continue
+            merged = append_assistant_stream_text_readably(merged, part)
+        return merged
 
     async def _resolve_session_model_ids(
         self,

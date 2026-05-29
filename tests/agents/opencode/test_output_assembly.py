@@ -114,6 +114,113 @@ async def test_text_delta_part_lengths_include_readable_inserted_spaces() -> Non
 
 
 @pytest.mark.anyio
+async def test_text_delta_preserves_markdown_and_code_spacing() -> None:
+    asm = OutputAssembler(session_id="s1")
+    msg_id, role = asm.on_register_message_role(
+        {"info": {"id": "a1", "role": "assistant"}}
+    )
+    asm.on_handle_role_update(msg_id, role)
+
+    for delta in (
+        "Confirmed:",
+        "**",
+        "`/car/hub/read-models/chats`",
+        "returns",
+        "500",
+        "**",
+        "everything",
+        "else",
+        "is",
+        "healthy.",
+    ):
+        await asm.on_text_delta(
+            part_message_id="a1",
+            delta_text=delta,
+            part_id="p1",
+            part_dict=None,
+        )
+
+    asm.on_primary_assistant_completion(
+        {"info": {"id": "a1", "role": "assistant", "finish": "stop"}, "parts": []},
+        message_role="assistant",
+    )
+
+    result = await asm.build_result()
+    assert (
+        result.text
+        == "Confirmed: **`/car/hub/read-models/chats` returns 500** everything else is healthy."
+    )
+
+
+@pytest.mark.anyio
+async def test_text_part_tracking_scoped_by_message_id() -> None:
+    asm = OutputAssembler(session_id="s1")
+    msg_id, role = asm.on_register_message_role(
+        {"info": {"id": "a1", "role": "assistant"}}
+    )
+    asm.on_handle_role_update(msg_id, role)
+    await asm.on_text_delta(
+        part_message_id="a1",
+        delta_text="",
+        part_id="text",
+        part_dict={"type": "text", "text": "Let me check."},
+    )
+
+    msg_id2, role2 = asm.on_register_message_role(
+        {"info": {"id": "a2", "role": "assistant"}}
+    )
+    asm.on_handle_role_update(msg_id2, role2)
+    await asm.on_text_delta(
+        part_message_id="a2",
+        delta_text="",
+        part_id="text",
+        part_dict={"type": "text", "text": "Done."},
+    )
+    asm.on_primary_assistant_completion(
+        {"info": {"id": "a2", "role": "assistant", "finish": "stop"}, "parts": []},
+        message_role="assistant",
+    )
+
+    result = await asm.build_result()
+    assert result.text == "Done."
+
+
+@pytest.mark.anyio
+async def test_reused_part_ids_track_delta_text_per_message() -> None:
+    asm = OutputAssembler(session_id="s1")
+    msg_id, role = asm.on_register_message_role(
+        {"info": {"id": "a1", "role": "assistant"}}
+    )
+    asm.on_handle_role_update(msg_id, role)
+    for delta in ("First", "message."):
+        await asm.on_text_delta(
+            part_message_id="a1",
+            delta_text=delta,
+            part_id="text",
+            part_dict=None,
+        )
+
+    msg_id2, role2 = asm.on_register_message_role(
+        {"info": {"id": "a2", "role": "assistant"}}
+    )
+    asm.on_handle_role_update(msg_id2, role2)
+    for delta in ("Second", "message."):
+        await asm.on_text_delta(
+            part_message_id="a2",
+            delta_text=delta,
+            part_id="text",
+            part_dict=None,
+        )
+    asm.on_primary_assistant_completion(
+        {"info": {"id": "a2", "role": "assistant", "finish": "stop"}, "parts": []},
+        message_role="assistant",
+    )
+
+    result = await asm.build_result()
+    assert result.text == "Second message."
+
+
+@pytest.mark.anyio
 async def test_full_text_part_incremental() -> None:
     asm = OutputAssembler(session_id="s1")
     await asm.on_full_text_part(
@@ -143,6 +250,35 @@ async def test_full_text_part_no_id_incremental() -> None:
     asm.flush_pending()
     result = await asm.build_result()
     assert result.text == "Hello world"
+
+
+@pytest.mark.anyio
+async def test_full_text_part_snapshot_tracking_scoped_by_message_id() -> None:
+    asm = OutputAssembler(session_id="s1")
+    msg_id, role = asm.on_register_message_role(
+        {"info": {"id": "a1", "role": "assistant"}}
+    )
+    asm.on_handle_role_update(msg_id, role)
+    await asm.on_full_text_part(
+        part_message_id="a1",
+        part_dict={"type": "text", "text": "First progress."},
+    )
+
+    msg_id2, role2 = asm.on_register_message_role(
+        {"info": {"id": "a2", "role": "assistant"}}
+    )
+    asm.on_handle_role_update(msg_id2, role2)
+    await asm.on_full_text_part(
+        part_message_id="a2",
+        part_dict={"type": "text", "text": "Final answer."},
+    )
+    asm.on_primary_assistant_completion(
+        {"info": {"id": "a2", "role": "assistant", "finish": "stop"}, "parts": []},
+        message_role="assistant",
+    )
+
+    result = await asm.build_result()
+    assert result.text == "Final answer."
 
 
 @pytest.mark.anyio
@@ -349,6 +485,22 @@ async def test_primary_assistant_completion_records_text() -> None:
 
 
 @pytest.mark.anyio
+async def test_roleless_primary_completion_accepts_final_answer_parts() -> None:
+    asm = OutputAssembler(session_id="s1", prompt="summarize status")
+
+    asm.on_primary_assistant_completion(
+        {
+            "info": {"id": "m1", "finish": "stop"},
+            "parts": [{"type": "text", "text": "All checks are green."}],
+        },
+        message_role=None,
+    )
+
+    result = await asm.build_result()
+    assert result.text == "All checks are green."
+
+
+@pytest.mark.anyio
 async def test_primary_assistant_completion_commentary_ignored() -> None:
     asm = OutputAssembler(session_id="s1")
 
@@ -395,6 +547,30 @@ async def test_primary_assistant_completion_non_assistant_role_ignored() -> None
 
     result = await asm.build_result()
     assert result.text == "stream text"
+
+
+@pytest.mark.anyio
+async def test_roleless_primary_completion_overrides_prior_stream_text() -> None:
+    asm = OutputAssembler(session_id="s1", prompt="release from origin main")
+
+    await asm.on_text_delta(
+        part_message_id=None,
+        delta_text="Current latest tag is `v 2.1.0`.",
+        part_id="p1",
+        part_dict=None,
+    )
+    asm.flush_pending()
+    asm.on_primary_assistant_completion(
+        {
+            "text": "Done. **v2.1.1** released.",
+            "phase": "final_answer",
+            "finish": "stop",
+        },
+        message_role=None,
+    )
+
+    result = await asm.build_result()
+    assert result.text == "Done. **v2.1.1** released."
 
 
 @pytest.mark.anyio
@@ -682,6 +858,39 @@ async def test_part_type_memory() -> None:
     asm.remember_part_type("r1", "reasoning")
     assert asm.lookup_part_type("r1") == "reasoning"
     assert asm.lookup_part_type("unknown") is None
+
+
+@pytest.mark.anyio
+async def test_part_type_memory_scoped_by_message_id_for_reused_part_ids() -> None:
+    asm = OutputAssembler(session_id="s1")
+
+    asm.remember_part_type("shared", "reasoning", message_id="m1")
+    asm.remember_part_type("shared", "text", message_id="m2")
+
+    assert asm.lookup_part_type("shared", message_id="m1") == "reasoning"
+    assert asm.lookup_part_type("shared", message_id="m2") == "text"
+    assert asm.lookup_part_type("shared", message_id="m3") is None
+
+
+@pytest.mark.anyio
+async def test_part_type_memory_falls_back_when_delta_omits_message_id() -> None:
+    asm = OutputAssembler(session_id="s1")
+
+    asm.remember_part_type("reason-1", "reasoning", message_id="m1")
+
+    assert asm.lookup_part_type("reason-1") == "reasoning"
+
+
+@pytest.mark.anyio
+async def test_part_type_memory_omitted_message_id_fallback_rejects_ambiguous_ids() -> (
+    None
+):
+    asm = OutputAssembler(session_id="s1")
+
+    asm.remember_part_type("shared", "reasoning", message_id="m1")
+    asm.remember_part_type("shared", "text", message_id="m2")
+
+    assert asm.lookup_part_type("shared") is None
 
 
 @pytest.mark.anyio

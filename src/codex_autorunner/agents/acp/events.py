@@ -38,11 +38,13 @@ class ACPTurnStartedEvent(ACPEventEnvelope):
 @dataclass(frozen=True)
 class ACPOutputDeltaEvent(ACPEventEnvelope):
     delta: str = ""
+    assembly_kind: str = "delta"
 
 
 @dataclass(frozen=True)
 class ACPMessageEvent(ACPEventEnvelope):
     message: str = ""
+    assembly_kind: str = "final_message"
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,7 @@ class ACPTurnTerminalEvent(ACPEventEnvelope):
     status: str = ""
     final_output: str = ""
     error_message: Optional[str] = None
+    assembly_kind: str = "final_message"
 
 
 @dataclass(frozen=True)
