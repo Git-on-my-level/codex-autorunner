@@ -574,6 +574,30 @@ async def test_roleless_primary_completion_overrides_prior_stream_text() -> None
 
 
 @pytest.mark.anyio
+async def test_roleless_primary_completion_uses_no_message_stream_scope() -> None:
+    asm = OutputAssembler(session_id="s1", prompt="release from origin main")
+
+    await asm.on_text_delta(
+        part_message_id=None,
+        delta_text="Current latest tag is `v 2.1.0`.",
+        part_id="p1",
+        part_dict=None,
+    )
+    asm.flush_pending()
+    asm.on_primary_assistant_completion(
+        {
+            "text": "Done. **v2.1.1** released.",
+            "phase": "final_answer",
+            "finish": "stop",
+        },
+        message_role=None,
+    )
+
+    assert asm._assistant_output.stream_text == "Current latest tag is `v 2.1.0`."
+    assert asm._assistant_output.text == "Done. **v2.1.1** released."
+
+
+@pytest.mark.anyio
 async def test_usage_deduplication() -> None:
     seen: list[dict] = []
 
