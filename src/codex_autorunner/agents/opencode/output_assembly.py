@@ -305,7 +305,7 @@ class OutputAssembler:
                 AssistantOutputEvent(
                     kind="final_message",
                     text=self._last_completed_assistant_text,
-                    scope=msg_id,
+                    scope=msg_id or _NO_MESSAGE_SCOPE,
                 )
             )
 
