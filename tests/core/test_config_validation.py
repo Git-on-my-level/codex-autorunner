@@ -135,6 +135,10 @@ class TestValidateServerSecurity:
     def test_non_loopback_with_allowed_hosts_ok(self) -> None:
         _validate_server_security({"host": "0.0.0.0", "allowed_hosts": ["example.com"]})
 
+    def test_non_loopback_with_wildcard_allowed_hosts_raises(self) -> None:
+        with pytest.raises(ConfigError, match="must not include '\\*'"):
+            _validate_server_security({"host": "0.0.0.0", "allowed_hosts": ["*"]})
+
     def test_allowed_hosts_must_be_list(self) -> None:
         with pytest.raises(ConfigError, match="must be a list of strings"):
             _validate_server_security({"allowed_hosts": "not-a-list"})

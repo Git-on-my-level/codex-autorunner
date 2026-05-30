@@ -128,6 +128,35 @@ def test_origin_rejects_prefixed_bootstrap_claim_without_configured_base_path():
     assert messages[0]["status"] == 403
 
 
+def test_origin_rejects_bootstrap_claim_from_mismatched_origin():
+    called = False
+
+    async def dummy_app(scope, receive, send):
+        nonlocal called
+        called = True
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    middleware = HostOriginMiddleware(dummy_app, ["4173-glad-arch-jvr2.pad.dev"], [])
+    scope = {
+        "type": "http",
+        "path": "/auth/bootstrap/claim",
+        "root_path": "",
+        "headers": [
+            (b"host", b"4173-glad-arch-jvr2.pad.dev"),
+            (b"origin", b"https://different.example"),
+        ],
+        "method": "POST",
+        "scheme": "http",
+        "http_version": "1.1",
+        "query_string": b"",
+    }
+
+    messages = anyio.run(_http_call, middleware, scope)
+    assert called is False
+    assert messages[0]["status"] == 403
+
+
 def test_origin_allows_no_origin_post():
     called = False
 

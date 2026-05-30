@@ -8,7 +8,7 @@ import time
 import uuid
 from http.cookies import SimpleCookie
 from typing import Callable, Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse
 
 from fastapi.responses import RedirectResponse, Response
 
@@ -141,7 +141,15 @@ class BasePathRouterMiddleware:
             target_path = f"{self.base_path}{path}"
             query_string = scope.get("query_string") or b""
             if query_string:
-                target_path = f"{target_path}?{query_string.decode('latin-1')}"
+                query_pairs = [
+                    (key, value)
+                    for key, value in parse_qsl(
+                        query_string.decode("latin-1"), keep_blank_values=True
+                    )
+                    if key.lower() != "token"
+                ]
+                if query_pairs:
+                    target_path = f"{target_path}?{urlencode(query_pairs)}"
             if not target_path:
                 target_path = "/"
             return await self._redirect(scope, receive, send, target_path)
@@ -445,6 +453,14 @@ class HostOriginMiddleware:
         request_origin = self._request_origin(scheme, host)
         return request_origin == normalized
 
+    def _bootstrap_proxy_origin_allowed(
+        self, origin: str | None, host: str | None
+    ) -> bool:
+        if not origin or not host:
+            return False
+        parsed = urlparse(origin.strip().lower())
+        return parsed.scheme == "https" and parsed.netloc == host.strip().lower()
+
     def _is_bootstrap_claim_path(self, scope) -> bool:
         path = scope.get("path") or ""
         root_path = scope.get("root_path") or ""
@@ -496,7 +512,11 @@ class HostOriginMiddleware:
         method = (scope.get("method") or "GET").upper()
         if method in {"POST", "PUT", "PATCH", "DELETE"} and origin:
             if not self._origin_allowed(origin, scheme, host):
-                if method == "POST" and self._is_bootstrap_claim_path(scope):
+                if (
+                    method == "POST"
+                    and self._is_bootstrap_claim_path(scope)
+                    and self._bootstrap_proxy_origin_allowed(origin, host)
+                ):
                     return await self.app(scope, receive, send)
                 return await self._reject_http(
                     scope, receive, send, 403, "Origin not allowed"

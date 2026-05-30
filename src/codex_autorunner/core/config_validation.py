@@ -131,6 +131,14 @@ def _validate_server_security(server: Dict[str, Any]) -> None:
         raise ConfigError(
             "server.allowed_hosts must be set when binding to a non-loopback host"
         )
+    if not is_loopback_host(host) and isinstance(allowed_hosts, list):
+        has_wildcard_host = any(
+            entry.strip() == "*" for entry in allowed_hosts if isinstance(entry, str)
+        )
+        if has_wildcard_host:
+            raise ConfigError(
+                "server.allowed_hosts must not include '*' when binding to a non-loopback host"
+            )
 
 
 def _validate_browser_auth_config(cfg: Dict[str, Any]) -> None:

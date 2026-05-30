@@ -91,6 +91,7 @@ def create_hub_app(
             build_auth_routes(
                 browser_auth_store,
                 cookie_secure=context.config.browser_auth.cookie_secure,
+                require_secure_claim=remote_bind,
             )
         )
     web_app_assets_dir = web_static_dir / "_app"
