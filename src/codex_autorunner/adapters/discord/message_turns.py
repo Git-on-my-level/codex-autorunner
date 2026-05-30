@@ -40,7 +40,6 @@ from ...adapters.chat.forwarding import (
     compose_inbound_message_text,
 )
 from ...adapters.chat.managed_thread_direct_delivery import (
-    MANAGED_THREAD_DIRECT_DELIVERY_SEND_SUPPRESSED,
     begin_managed_thread_direct_delivery,
     complete_managed_thread_direct_delivery,
 )
@@ -184,6 +183,12 @@ _MAX_CHAT_WRAPUP_ARTIFACT_BYTES = 8 * 1024 * 1024
 _sanitize_runtime_thread_result_error = sanitize_runtime_thread_error
 
 
+@dataclass(frozen=True)
+class _DirectDeliveryBeginResult:
+    lease: Optional[Any] = None
+    suppress_send: bool = False
+
+
 def _begin_pending_discord_direct_delivery(
     service: Any,
     *,
@@ -191,9 +196,9 @@ def _begin_pending_discord_direct_delivery(
     claim_token: Optional[str],
     channel_id: str,
     session_key: str,
-) -> Optional[Any]:
+) -> _DirectDeliveryBeginResult:
     if not isinstance(delivery_id, str) or not delivery_id.strip():
-        return None
+        return _DirectDeliveryBeginResult()
     state_root = getattr(getattr(service, "_config", None), "root", None)
     if state_root is None:
         state_root = Path(".")
@@ -213,7 +218,7 @@ def _begin_pending_discord_direct_delivery(
             delivery_id=delivery_id,
             exc=exc,
         )
-        return None
+        return _DirectDeliveryBeginResult()
     if lease is None:
         log_event(
             service._logger,
@@ -223,8 +228,8 @@ def _begin_pending_discord_direct_delivery(
             session_key=session_key,
             delivery_id=delivery_id,
         )
-        return MANAGED_THREAD_DIRECT_DELIVERY_SEND_SUPPRESSED
-    return lease
+        return _DirectDeliveryBeginResult(suppress_send=True)
+    return _DirectDeliveryBeginResult(lease=lease)
 
 
 def _complete_pending_discord_direct_delivery(
@@ -1469,8 +1474,7 @@ async def _deliver_discord_turn_result(
         not send_final_message and not delivery_visibility_pending
     )
     visible_failure_notice = False
-    direct_delivery_begin = None
-    direct_delivery_lease = None
+    direct_delivery_begin = _DirectDeliveryBeginResult()
     durable_delivery_has_record = bool(durable_delivery_id)
     if delivery_visibility_pending and durable_delivery_has_record:
         direct_delivery_begin = _begin_pending_discord_direct_delivery(
@@ -1480,13 +1484,11 @@ async def _deliver_discord_turn_result(
             channel_id=dispatch.channel_id,
             session_key=dispatch.session_key,
         )
-        if direct_delivery_begin is not MANAGED_THREAD_DIRECT_DELIVERY_SEND_SUPPRESSED:
-            direct_delivery_lease = direct_delivery_begin
     if send_final_message:
         if (
             delivery_visibility_pending
             and durable_delivery_has_record
-            and direct_delivery_begin is MANAGED_THREAD_DIRECT_DELIVERY_SEND_SUPPRESSED
+            and direct_delivery_begin.suppress_send
         ):
             visible_terminal_delivery = False
         else:
@@ -1499,21 +1501,31 @@ async def _deliver_discord_turn_result(
                     attachment_filename="final-response.md",
                     attachment_caption="Final response too long; attached as final-response.md.",
                 )
-            finally:
-                if direct_delivery_lease is not None:
+            except asyncio.CancelledError:
+                if direct_delivery_begin.lease is not None:
                     _complete_pending_discord_direct_delivery(
                         dispatch.service,
-                        lease=direct_delivery_lease,
+                        lease=direct_delivery_begin.lease,
                         channel_id=dispatch.channel_id,
                         session_key=dispatch.session_key,
-                        delivered=visible_terminal_delivery,
+                        delivered=False,
                     )
-                    direct_delivery_lease = None
+                raise
+            except Exception:
+                if direct_delivery_begin.lease is not None:
+                    _complete_pending_discord_direct_delivery(
+                        dispatch.service,
+                        lease=direct_delivery_begin.lease,
+                        channel_id=dispatch.channel_id,
+                        session_key=dispatch.session_key,
+                        delivered=False,
+                    )
+                raise
     if delivery_visibility_pending and durable_delivery_has_record:
-        if direct_delivery_lease is not None:
+        if direct_delivery_begin.lease is not None:
             _complete_pending_discord_direct_delivery(
                 dispatch.service,
-                lease=direct_delivery_lease,
+                lease=direct_delivery_begin.lease,
                 channel_id=dispatch.channel_id,
                 session_key=dispatch.session_key,
                 delivered=visible_terminal_delivery,

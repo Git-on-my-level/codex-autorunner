@@ -160,10 +160,8 @@ from .commands import (
 from .commands.execution import (
     _begin_pending_telegram_direct_delivery,
     _complete_pending_telegram_direct_delivery,
+    _DirectDeliveryBeginResult,
     _TurnRunFailure,
-)
-from ...chat.managed_thread_direct_delivery import (
-    MANAGED_THREAD_DIRECT_DELIVERY_SEND_SUPPRESSED,
 )
 from .commands.shared import _RuntimeStub  # noqa: F401
 
@@ -446,9 +444,12 @@ class TelegramCommandHandlers(
                     thread_id=message.thread_id,
                 )
         else:
-            direct_delivery_begin = None
+            direct_delivery_begin = _DirectDeliveryBeginResult()
             durable_delivery_id = getattr(outcome, "durable_delivery_id", None)
-            if durable_delivery_id:
+            durable_delivery_pending = getattr(
+                outcome, "durable_delivery_pending", False
+            )
+            if durable_delivery_pending:
                 direct_delivery_begin = _begin_pending_telegram_direct_delivery(
                     self,
                     delivery_id=durable_delivery_id,
@@ -460,14 +461,9 @@ class TelegramCommandHandlers(
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
                 )
-            if (
-                durable_delivery_id
-                and direct_delivery_begin is MANAGED_THREAD_DIRECT_DELIVERY_SEND_SUPPRESSED
-            ):
+            if durable_delivery_pending and direct_delivery_begin.suppress_send:
                 response_sent = False
             else:
-                direct_delivery_lease = direct_delivery_begin
-                response_sent = False
                 try:
                     try:
                         response_sent = await self._deliver_turn_response(
@@ -482,7 +478,10 @@ class TelegramCommandHandlers(
                     except TypeError as exc:
                         if not any(
                             key in str(exc)
-                            for key in ("intermediate_response", "overflow_mode_override")
+                            for key in (
+                                "intermediate_response",
+                                "overflow_mode_override",
+                            )
                         ):
                             raise
                         response_sent = await self._deliver_turn_response(
@@ -492,11 +491,31 @@ class TelegramCommandHandlers(
                             placeholder_id=outcome.placeholder_id,
                             response=response_text,
                         )
-                finally:
-                    if direct_delivery_lease is not None:
+                except asyncio.CancelledError:
+                    if direct_delivery_begin.lease is not None:
                         _complete_pending_telegram_direct_delivery(
                             self,
-                            lease=direct_delivery_lease,
+                            lease=direct_delivery_begin.lease,
+                            chat_id=message.chat_id,
+                            thread_id=message.thread_id,
+                            delivered=False,
+                        )
+                    raise
+                except Exception:
+                    if direct_delivery_begin.lease is not None:
+                        _complete_pending_telegram_direct_delivery(
+                            self,
+                            lease=direct_delivery_begin.lease,
+                            chat_id=message.chat_id,
+                            thread_id=message.thread_id,
+                            delivered=False,
+                        )
+                    raise
+                else:
+                    if direct_delivery_begin.lease is not None:
+                        _complete_pending_telegram_direct_delivery(
+                            self,
+                            lease=direct_delivery_begin.lease,
                             chat_id=message.chat_id,
                             thread_id=message.thread_id,
                             delivered=response_sent,

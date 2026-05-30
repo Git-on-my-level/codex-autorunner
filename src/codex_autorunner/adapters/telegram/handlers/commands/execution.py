@@ -42,7 +42,6 @@ from .....adapters.chat.managed_thread_delivery_support import (
     managed_thread_terminal_delivery_send_key,
 )
 from .....adapters.chat.managed_thread_direct_delivery import (
-    MANAGED_THREAD_DIRECT_DELIVERY_SEND_SUPPRESSED,
     begin_managed_thread_direct_delivery,
     complete_managed_thread_direct_delivery,
 )
@@ -227,8 +226,15 @@ class _TurnRunResult:
     interrupt_status_turn_id: Optional[str] = None
     interrupt_status_fallback_text: Optional[str] = None
     durable_delivery_handled: bool = False
+    durable_delivery_pending: bool = False
     durable_delivery_id: Optional[str] = None
     durable_delivery_claim_token: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class _DirectDeliveryBeginResult:
+    lease: Optional[Any] = None
+    suppress_send: bool = False
 
 
 @dataclass
@@ -350,9 +356,9 @@ def _begin_pending_telegram_direct_delivery(
     claim_token: Optional[str],
     chat_id: int,
     thread_id: Optional[int],
-) -> Optional[Any]:
+) -> _DirectDeliveryBeginResult:
     if not isinstance(delivery_id, str) or not delivery_id.strip():
-        return None
+        return _DirectDeliveryBeginResult()
     try:
         lease = begin_managed_thread_direct_delivery(
             _telegram_state_root(handlers),
@@ -369,7 +375,7 @@ def _begin_pending_telegram_direct_delivery(
             delivery_id=delivery_id,
             exc=exc,
         )
-        return None
+        return _DirectDeliveryBeginResult()
     if lease is None:
         log_event(
             handlers._logger,
@@ -379,8 +385,8 @@ def _begin_pending_telegram_direct_delivery(
             thread_id=thread_id,
             delivery_id=delivery_id,
         )
-        return MANAGED_THREAD_DIRECT_DELIVERY_SEND_SUPPRESSED
-    return lease
+        return _DirectDeliveryBeginResult(suppress_send=True)
+    return _DirectDeliveryBeginResult(lease=lease)
 
 
 def _complete_pending_telegram_direct_delivery(
@@ -1517,7 +1523,7 @@ async def _run_telegram_managed_thread_turn(
             if send_failure_response and not getattr(
                 _flow, "durable_delivery_performed", False
             ):
-                direct_delivery_begin = None
+                direct_delivery_begin = _DirectDeliveryBeginResult()
                 if getattr(_flow, "durable_delivery_pending", False):
                     direct_delivery_begin = _begin_pending_telegram_direct_delivery(
                         handlers,
@@ -1532,16 +1538,8 @@ async def _run_telegram_managed_thread_turn(
                     )
                 if (
                     not getattr(_flow, "durable_delivery_pending", False)
-                    or direct_delivery_begin
-                    is not MANAGED_THREAD_DIRECT_DELIVERY_SEND_SUPPRESSED
+                    or not direct_delivery_begin.suppress_send
                 ):
-                    direct_delivery_lease = (
-                        direct_delivery_begin
-                        if direct_delivery_begin
-                        is not MANAGED_THREAD_DIRECT_DELIVERY_SEND_SUPPRESSED
-                        else None
-                    )
-                    response_sent = False
                     try:
                         response_sent = await handlers._deliver_turn_response(
                             chat_id=message.chat_id,
@@ -1550,15 +1548,34 @@ async def _run_telegram_managed_thread_turn(
                             placeholder_id=prepared_placeholder_id,
                             response=failure_message,
                         )
-                    finally:
-                        if direct_delivery_lease is not None:
+                    except asyncio.CancelledError:
+                        if direct_delivery_begin.lease is not None:
                             _complete_pending_telegram_direct_delivery(
                                 handlers,
-                                lease=direct_delivery_lease,
+                                lease=direct_delivery_begin.lease,
                                 chat_id=message.chat_id,
                                 thread_id=message.thread_id,
-                                delivered=response_sent,
+                                delivered=False,
                             )
+                        raise
+                    except Exception:
+                        if direct_delivery_begin.lease is not None:
+                            _complete_pending_telegram_direct_delivery(
+                                handlers,
+                                lease=direct_delivery_begin.lease,
+                                chat_id=message.chat_id,
+                                thread_id=message.thread_id,
+                                delivered=False,
+                            )
+                        raise
+                    if direct_delivery_begin.lease is not None:
+                        _complete_pending_telegram_direct_delivery(
+                            handlers,
+                            lease=direct_delivery_begin.lease,
+                            chat_id=message.chat_id,
+                            thread_id=message.thread_id,
+                            delivered=response_sent,
+                        )
             elif send_failure_response and prepared_placeholder_id is not None:
                 await handlers._delete_message(
                     message.chat_id,
@@ -1697,6 +1714,7 @@ async def _run_telegram_managed_thread_turn(
             interrupt_status_turn_id=backend_turn_id or None,
             interrupt_status_fallback_text=interrupt_status_fallback_text,
             durable_delivery_handled=_delivery_handled,
+            durable_delivery_pending=getattr(_flow, "durable_delivery_pending", False),
             durable_delivery_id=getattr(_flow, "durable_delivery_id", None),
             durable_delivery_claim_token=getattr(
                 _flow,
