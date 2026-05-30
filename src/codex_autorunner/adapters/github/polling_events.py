@@ -113,6 +113,13 @@ def _record_poll_event(
         return PollEventRecord(event=event, created=True)
     existing = event_store.get_event(event_id)
     if existing is None:
+        existing = event_store.get_event_by_comment_identity(
+            event_type=event_type,
+            repo_slug=watch.repo_slug,
+            pr_number=watch.pr_number,
+            comment_id=_mapping(payload).get("comment_id"),
+        )
+    if existing is None:
         raise RuntimeError("SCM event row missing after duplicate poll event")
     return PollEventRecord(event=existing, created=False)
 

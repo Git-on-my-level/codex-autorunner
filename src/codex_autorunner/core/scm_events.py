@@ -57,6 +57,7 @@ class ScmEvent:
     repo_slug: Optional[str] = None
     repo_id: Optional[str] = None
     pr_number: Optional[int] = None
+    comment_id: Optional[str] = None
     delivery_id: Optional[str] = None
     correlation_id: Optional[str] = None
     payload: dict[str, Any] = field(default_factory=dict)
@@ -77,6 +78,7 @@ def _event_from_row(row: Any) -> ScmEvent:
         repo_slug=_normalize_text(row["repo_slug"]),
         repo_id=_normalize_text(row["repo_id"]),
         pr_number=_normalize_int(row["pr_number"], field_name="pr_number"),
+        comment_id=_normalize_text(row["comment_id"]),
         delivery_id=_normalize_text(row["delivery_id"]),
         correlation_id=_normalize_text(row["correlation_id"]),
         payload=_json_loads_object(row["payload_json"]),
@@ -104,6 +106,7 @@ class ScmEventStore:
         repo_slug: Optional[str] = None,
         repo_id: Optional[str] = None,
         pr_number: Optional[int] = None,
+        comment_id: Optional[str] = None,
         delivery_id: Optional[str] = None,
         correlation_id: Optional[str] = None,
         payload: Optional[dict[str, Any]] = None,
@@ -119,6 +122,7 @@ class ScmEventStore:
             repo_slug=repo_slug,
             repo_id=repo_id,
             pr_number=pr_number,
+            comment_id=comment_id,
             delivery_id=delivery_id,
             correlation_id=correlation_id,
             payload=payload,
@@ -138,6 +142,7 @@ class ScmEventStore:
         repo_slug: Optional[str] = None,
         repo_id: Optional[str] = None,
         pr_number: Optional[int] = None,
+        comment_id: Optional[str] = None,
         delivery_id: Optional[str] = None,
         correlation_id: Optional[str] = None,
         payload: Optional[dict[str, Any]] = None,
@@ -153,6 +158,7 @@ class ScmEventStore:
             repo_slug=repo_slug,
             repo_id=repo_id,
             pr_number=pr_number,
+            comment_id=comment_id,
             delivery_id=delivery_id,
             correlation_id=correlation_id,
             payload=payload,
@@ -175,6 +181,7 @@ class ScmEventStore:
         repo_slug: Optional[str],
         repo_id: Optional[str],
         pr_number: Optional[int],
+        comment_id: Optional[str],
         delivery_id: Optional[str],
         correlation_id: Optional[str],
         payload: Optional[dict[str, Any]],
@@ -214,6 +221,9 @@ class ScmEventStore:
         )
         created_at = now_iso()
         normalized_pr_number = _normalize_int(pr_number, field_name="pr_number")
+        normalized_comment_id = _normalize_text(
+            payload_object.get("comment_id")
+        ) or _normalize_text(comment_id)
 
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
             verb = "INSERT" if require_new else "INSERT OR IGNORE"
@@ -226,6 +236,7 @@ class ScmEventStore:
                     repo_slug,
                     repo_id,
                     pr_number,
+                    comment_id,
                     delivery_id,
                     correlation_id,
                     occurred_at,
@@ -233,7 +244,7 @@ class ScmEventStore:
                     payload_json,
                     raw_payload_json,
                     created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     normalized_event_id,
@@ -242,6 +253,7 @@ class ScmEventStore:
                     _normalize_text(repo_slug),
                     _normalize_text(repo_id),
                     normalized_pr_number,
+                    normalized_comment_id,
                     _normalize_text(delivery_id),
                     _normalize_text(correlation_id),
                     resolved_occurred_at,
@@ -264,6 +276,47 @@ class ScmEventStore:
         if row is None:
             raise RuntimeError("SCM event row missing after insert")
         return _event_from_row(row)
+
+    def get_event_by_comment_identity(
+        self,
+        *,
+        event_type: str,
+        repo_slug: Optional[str],
+        pr_number: Optional[int],
+        comment_id: Optional[str],
+    ) -> Optional[ScmEvent]:
+        normalized_event_type = _normalize_text(event_type)
+        normalized_repo_slug = _normalize_text(repo_slug)
+        normalized_pr_number = _normalize_int(pr_number, field_name="pr_number")
+        normalized_comment_id = _normalize_text(comment_id)
+        if (
+            normalized_event_type is None
+            or normalized_repo_slug is None
+            or normalized_pr_number is None
+            or normalized_comment_id is None
+        ):
+            return None
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                  FROM orch_scm_events
+                 WHERE event_type = ?
+                   AND repo_slug = ?
+                   AND pr_number = ?
+                   AND comment_id = ?
+                   AND delivery_id IS NULL
+                 ORDER BY occurred_at ASC, created_at ASC, event_id ASC
+                 LIMIT 1
+                """,
+                (
+                    normalized_event_type,
+                    normalized_repo_slug,
+                    normalized_pr_number,
+                    normalized_comment_id,
+                ),
+            ).fetchone()
+        return _event_from_row(row) if row is not None else None
 
     def list_events(
         self,

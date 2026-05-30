@@ -28,7 +28,7 @@ from .turn_execution_storage import (
     build_turn_execution_request_from_storage,
 )
 
-ORCHESTRATION_SCHEMA_VERSION = 44
+ORCHESTRATION_SCHEMA_VERSION = 45
 
 
 @dataclass(frozen=True)
@@ -2653,6 +2653,92 @@ def _apply_v44(conn: sqlite3.Connection) -> None:
     _backfill_automation_edge_runtime_identity(conn)
 
 
+def _normalize_migration_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _scm_comment_id_from_payload(payload_json: object) -> str | None:
+    if not isinstance(payload_json, str) or not payload_json.strip():
+        return None
+    try:
+        payload = json.loads(payload_json)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return _normalize_migration_text(payload.get("comment_id"))
+
+
+def _backfill_scm_event_comment_ids(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "orch_scm_events"):
+        return
+    rows = conn.execute("""
+        SELECT event_id, payload_json
+          FROM orch_scm_events
+         WHERE comment_id IS NULL
+        """).fetchall()
+    for row in rows:
+        comment_id = _scm_comment_id_from_payload(row["payload_json"])
+        if comment_id is None:
+            continue
+        conn.execute(
+            """
+            UPDATE orch_scm_events
+               SET comment_id = ?
+             WHERE event_id = ?
+            """,
+            (comment_id, row["event_id"]),
+        )
+
+
+def _clear_duplicate_scm_event_comment_ids(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "orch_scm_events"):
+        return
+    conn.execute("""
+        UPDATE orch_scm_events
+           SET comment_id = NULL
+         WHERE rowid IN (
+            SELECT rowid
+              FROM (
+                SELECT rowid,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY event_type, repo_slug, pr_number, comment_id
+                           ORDER BY occurred_at ASC, created_at ASC, event_id ASC
+                       ) AS duplicate_rank
+                  FROM orch_scm_events
+                 WHERE delivery_id IS NULL
+                   AND repo_slug IS NOT NULL
+                   AND pr_number IS NOT NULL
+                   AND comment_id IS NOT NULL
+              )
+             WHERE duplicate_rank > 1
+         )
+        """)
+
+
+def _apply_v45(conn: sqlite3.Connection) -> None:
+    _ensure_column(
+        conn,
+        "orch_scm_events",
+        "comment_id",
+        "comment_id TEXT",
+    )
+    _backfill_scm_event_comment_ids(conn)
+    _clear_duplicate_scm_event_comment_ids(conn)
+    if _table_exists(conn, "orch_scm_events"):
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_scm_events_comment_identity
+                ON orch_scm_events(event_type, repo_slug, pr_number, comment_id)
+             WHERE delivery_id IS NULL
+               AND repo_slug IS NOT NULL
+               AND pr_number IS NOT NULL
+               AND comment_id IS NOT NULL
+            """)
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -2769,6 +2855,11 @@ _MIGRATIONS = (
         44,
         "backfill_historical_runtime_identity_envelopes",
         _apply_v44,
+    ),
+    _MigrationStep(
+        45,
+        "dedupe_scm_events_by_comment_identity",
+        _apply_v45,
     ),
 )
 

@@ -188,6 +188,7 @@ def test_initialize_orchestration_sqlite_creates_canonical_tables(
             "repo_slug",
             "repo_id",
             "pr_number",
+            "comment_id",
             "delivery_id",
             "correlation_id",
             "occurred_at",
