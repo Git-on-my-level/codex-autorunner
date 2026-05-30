@@ -3,22 +3,25 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import os
 import secrets
+import stat
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
-from urllib.parse import urlparse
 
 from fastapi import Request
 
 from ....core.config_types import BrowserAuthCookieSecure
 
 BOOTSTRAP_TOKEN_RELATIVE_PATH = Path(".codex-autorunner/bootstrap-token")
+BOOTSTRAP_TOKEN_METADATA_RELATIVE_PATH = Path(".codex-autorunner/bootstrap-token.json")
 SESSION_STORE_RELATIVE_PATH = Path(".codex-autorunner/browser-sessions.json")
 SESSION_COOKIE_NAME = "car_session"
+BOOTSTRAP_TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24
 SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
 
 
@@ -28,33 +31,95 @@ def _sha256(value: str) -> str:
 
 def _write_private_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    fd = os.open(path, flags, 0o600)
+    temp_path = path.with_name(f".{path.name}.{secrets.token_hex(12)}.tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(temp_path, flags, 0o600)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
-    finally:
+        os.replace(temp_path, path)
+    except Exception:
         try:
-            os.chmod(path, 0o600)
-        except OSError:
+            temp_path.unlink()
+        except FileNotFoundError:
             pass
+        raise
 
 
-def ensure_bootstrap_token(root: Path) -> tuple[Path, str]:
-    path = root / BOOTSTRAP_TOKEN_RELATIVE_PATH
+def _read_private_text(path: Path) -> str:
     try:
-        existing = path.read_text(encoding="utf-8").strip()
+        mode = path.lstat().st_mode
     except FileNotFoundError:
-        existing = ""
+        return ""
+    if not stat.S_ISREG(mode):
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def ensure_bootstrap_token(root: Path, now: Optional[float] = None) -> tuple[Path, str]:
+    path = root / BOOTSTRAP_TOKEN_RELATIVE_PATH
+    metadata_path = root / BOOTSTRAP_TOKEN_METADATA_RELATIVE_PATH
+    observed_now = time.time() if now is None else now
+    existing = _read_private_text(path).strip()
     if existing:
+        issued_at = _read_bootstrap_issued_at(metadata_path)
+        if (
+            issued_at is not None
+            and issued_at <= observed_now + 60
+            and issued_at + BOOTSTRAP_TOKEN_MAX_AGE_SECONDS > observed_now
+        ):
+            try:
+                if not path.is_symlink():
+                    os.chmod(path, 0o600)
+            except OSError:
+                pass
+            return path, existing
         try:
-            os.chmod(path, 0o600)
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        try:
+            metadata_path.unlink()
         except OSError:
             pass
-        return path, existing
     token = secrets.token_urlsafe(48)
     _write_private_text(path, f"{token}\n")
+    _write_bootstrap_metadata(metadata_path, issued_at=observed_now)
     return path, token
+
+
+def _read_bootstrap_issued_at(path: Path) -> Optional[float]:
+    try:
+        data = json.loads(_read_private_text(path))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    issued_at = data.get("issued_at")
+    if not isinstance(issued_at, (int, float)):
+        return None
+    value = float(issued_at)
+    return value if math.isfinite(value) else None
+
+
+def _write_bootstrap_metadata(path: Path, *, issued_at: float) -> None:
+    _write_private_text(
+        path,
+        json.dumps(
+            {
+                "issued_at": issued_at,
+                "expires_at": issued_at + BOOTSTRAP_TOKEN_MAX_AGE_SECONDS,
+            },
+            sort_keys=True,
+            indent=2,
+        )
+        + "\n",
+    )
 
 
 @dataclass(frozen=True)
@@ -67,16 +132,7 @@ def resolve_cookie_secure(
     request: Request, cookie_secure: BrowserAuthCookieSecure
 ) -> bool:
     if cookie_secure == "auto":
-        if request.url.scheme == "https":
-            return True
-        origin = request.headers.get("origin", "")
-        parsed_origin = urlparse(origin)
-        host = request.headers.get("host", "").strip().lower()
-        return (
-            parsed_origin.scheme.lower() == "https"
-            and bool(parsed_origin.netloc)
-            and parsed_origin.netloc.lower() == host
-        )
+        return request.url.scheme == "https"
     return bool(cookie_secure)
 
 
@@ -89,24 +145,37 @@ class BrowserAuthStore:
         self._lock = threading.Lock()
 
     def ensure_bootstrap_token(self) -> tuple[Path, str]:
-        return ensure_bootstrap_token(self.root)
+        return ensure_bootstrap_token(self.root, now=self._now())
 
     def claim_bootstrap_token(self, token: str) -> Optional[BootstrapClaim]:
         candidate = token.strip()
         if not candidate:
             return None
         with self._lock:
-            try:
-                expected = self.bootstrap_token_path.read_text(encoding="utf-8").strip()
-            except FileNotFoundError:
+            expected = _read_private_text(self.bootstrap_token_path).strip()
+            if not expected:
                 return None
-            if not expected or not hmac.compare_digest(candidate, expected):
+            issued_at = _read_bootstrap_issued_at(
+                self.root / BOOTSTRAP_TOKEN_METADATA_RELATIVE_PATH
+            )
+            now = self._now()
+            if (
+                issued_at is None
+                or issued_at > now + 60
+                or issued_at + BOOTSTRAP_TOKEN_MAX_AGE_SECONDS <= now
+            ):
+                return None
+            if not hmac.compare_digest(candidate, expected):
                 return None
 
             session_token = secrets.token_urlsafe(48)
             self._add_session(session_token)
             try:
                 self.bootstrap_token_path.unlink()
+            except FileNotFoundError:
+                pass
+            try:
+                (self.root / BOOTSTRAP_TOKEN_METADATA_RELATIVE_PATH).unlink()
             except FileNotFoundError:
                 pass
             return BootstrapClaim(session_token=session_token)
@@ -148,6 +217,40 @@ class BrowserAuthStore:
                 self._write_store(data)
             return valid
 
+    def revoke_session_token(self, token: Optional[str]) -> bool:
+        if not token:
+            return False
+        token_hash = _sha256(token.strip())
+        with self._lock:
+            data = self._read_store()
+            sessions = data.get("sessions")
+            if not isinstance(sessions, list):
+                return False
+            retained = [
+                entry
+                for entry in sessions
+                if not (
+                    isinstance(entry, dict)
+                    and hmac.compare_digest(
+                        str(entry.get("token_hash", "")), token_hash
+                    )
+                )
+            ]
+            if len(retained) == len(sessions):
+                return False
+            data["sessions"] = retained
+            self._write_store(data)
+            return True
+
+    def revoke_all_sessions(self) -> int:
+        with self._lock:
+            data = self._read_store()
+            sessions = data.get("sessions")
+            count = len(sessions) if isinstance(sessions, list) else 0
+            data["sessions"] = []
+            self._write_store(data)
+            return count
+
     def _add_session(self, token: str) -> None:
         data = self._read_store()
         sessions = data.get("sessions")
@@ -180,8 +283,8 @@ class BrowserAuthStore:
 
     def _read_store(self) -> dict[str, Any]:
         try:
-            data = json.loads(self.session_store_path.read_text(encoding="utf-8"))
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            data = json.loads(_read_private_text(self.session_store_path))
+        except json.JSONDecodeError:
             return {"sessions": []}
         return data if isinstance(data, dict) else {"sessions": []}
 

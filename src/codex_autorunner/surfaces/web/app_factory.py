@@ -22,10 +22,14 @@ def resolve_auth_token(
 def resolve_allowed_hosts(host: str, allowed_hosts: list[str]) -> list[str]:
     cleaned = [entry.strip() for entry in allowed_hosts if entry and entry.strip()]
     if cleaned:
+        if not is_loopback_host(host) and any(entry == "*" for entry in cleaned):
+            raise ValueError(
+                "server.allowed_hosts must not include '*' when binding to a non-loopback host"
+            )
         return cleaned
     if is_loopback_host(host):
         return ["localhost", "127.0.0.1", "::1", "testserver"]
-    return []
+    return [host.strip().lower()] if host and host.strip() else []
 
 
 _STATIC_CACHE_CONTROL = "public, max-age=31536000, immutable"

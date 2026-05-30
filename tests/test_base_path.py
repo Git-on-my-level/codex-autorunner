@@ -3,6 +3,7 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from codex_autorunner.server import BasePathRouterMiddleware
+from codex_autorunner.surfaces.web.app_factory import resolve_allowed_hosts
 
 
 def _build_app():
@@ -32,6 +33,23 @@ def test_redirects_preserve_query_string():
     resp = client.get("/api/ping?foo=bar&nested=1", follow_redirects=False)
     assert resp.status_code == 308
     assert resp.headers["location"] == "/car/api/ping?foo=bar&nested=1"
+
+
+def test_redirects_drop_token_query_string():
+    app = BasePathRouterMiddleware(_build_app(), "/car")
+    client = TestClient(app)
+    resp = client.get("/api/ping?foo=bar&token=secret&nested=1", follow_redirects=False)
+    assert resp.status_code == 308
+    assert resp.headers["location"] == "/car/api/ping?foo=bar&nested=1"
+
+
+def test_resolve_allowed_hosts_rejects_wildcard_for_effective_remote_bind():
+    try:
+        resolve_allowed_hosts("0.0.0.0", ["*"])
+    except ValueError as exc:
+        assert "must not include '*'" in str(exc)
+    else:
+        raise AssertionError("wildcard allowed_hosts should fail for remote bind")
 
 
 def test_strips_base_and_sets_root_path():

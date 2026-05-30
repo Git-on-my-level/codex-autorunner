@@ -10,6 +10,27 @@ interface and how to secure it.
 - The UI/API can run code and modify files in bound workspaces.
 - There is no built-in multi-user auth or per-endpoint role separation.
 
+## Internet-accessible surfaces
+
+Treat any internet-accessible CAR web deployment as a privileged remote-control
+surface for the host account running CAR:
+
+- Authenticated users can access terminal WebSockets, run controls, system
+  update routes, filebox uploads, contextspace and ticket mutation routes, and
+  repo/worktree management routes.
+- CAR does not provide read-only users, least-privilege roles, or per-repo
+  browser authorization. A valid browser session or bearer token is equivalent
+  to administrative access to the exposed hub.
+- The only intentionally unauthenticated web routes are the public endpoints
+  listed below. They are kept narrow for health checks, static asset loading, and
+  first browser bootstrap.
+- Public internet deployments should use HTTPS, explicit `server.allowed_hosts`,
+  explicit `server.allowed_origins`, bootstrap browser auth, and preferably an
+  additional reverse-proxy auth layer such as SSO or basic auth.
+- Do not expose a repo app or hub directly over plain HTTP on a public network.
+  Remote bootstrap is designed to fail closed unless the app receives a trusted
+  HTTPS request scheme.
+
 ## Bootstrap browser auth
 
 Remote hub deployments can use a one-time bootstrap token to create a browser
@@ -21,17 +42,23 @@ session without putting a bearer token in browser storage:
 - The browser posts the fragment token to `/auth/bootstrap/claim`; URL fragments
   are not sent in HTTP requests.
 - The bootstrap claim endpoint accepts the browser `Origin` from an HTTPS
-  reverse proxy so first login does not require pre-populating
-  `server.allowed_origins`; Host header validation still applies.
+  reverse proxy only when that origin host matches the request `Host`, so first
+  login does not require pre-populating `server.allowed_origins`; Host header
+  validation still applies.
 - A successful claim deletes the bootstrap token and sets an HttpOnly Secure
   `car_session` cookie with `SameSite=Lax`.
+- Bootstrap tokens expire after 24 hours. Restarting the hub after expiration
+  writes a fresh token.
 - Because the session cookie is `Secure`, expose remote browser deployments over
-  HTTPS, including when a reverse proxy terminates TLS in front of CAR.
+  HTTPS, including when a reverse proxy terminates TLS in front of CAR. Remote
+  bootstrap claims over plain HTTP are rejected; reverse proxies must pass a
+  trusted HTTPS request scheme to the ASGI app.
 
-To recover or rotate browser access, remove the old session file
-`.codex-autorunner/browser-sessions.json`, remove any stale
-`.codex-autorunner/bootstrap-token`, and restart the hub. CAR will write a fresh
-bootstrap token on the next authenticated or remote boot.
+To recover or rotate browser access, use `/auth/session/revoke` for the current
+browser session or `/auth/sessions/revoke-all` for all browser sessions. If the
+hub is inaccessible, remove `.codex-autorunner/browser-sessions.json`, remove
+any stale `.codex-autorunner/bootstrap-token`, and restart the hub. CAR will
+write a fresh bootstrap token on the next authenticated or remote boot.
 
 ## API bearer token
 
@@ -41,7 +68,9 @@ CAR also supports a bearer token enforced by middleware when configured:
 - Export the token in the environment before starting the server.
 - API and CLI requests can use `Authorization: Bearer <token>`.
 - WebSockets accept the token via `Sec-WebSocket-Protocol: car-token-b64.<base64url(token)>`.
-  The legacy `?token=...` query string is still accepted for backward compatibility.
+  The legacy `?token=...` query string is still accepted for backward compatibility,
+  but base-path redirects strip `token` query parameters to avoid writing bearer
+  tokens into redirect logs.
 
 ## Public endpoints
 
@@ -72,7 +101,8 @@ localhost CSRF/DNS rebinding risk:
 Config:
 
 - `server.allowed_hosts`: explicit host allowlist. Required when binding to a
-  non-loopback host.
+  non-loopback host. Do not use `*` for internet-exposed deployments; wildcard
+  hosts disable Host-header protection.
 - `server.allowed_origins`: extra allowed origins (scheme + host + port).
   Configure this for normal browser API/WebSocket use when CAR is exposed
   through a public reverse proxy.

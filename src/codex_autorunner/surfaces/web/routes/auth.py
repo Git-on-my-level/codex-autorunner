@@ -102,7 +102,10 @@ def _bootstrap_html() -> str:
 
 
 def build_auth_routes(
-    store: BrowserAuthStore, cookie_secure: BrowserAuthCookieSecure = "auto"
+    store: BrowserAuthStore,
+    cookie_secure: BrowserAuthCookieSecure = "auto",
+    *,
+    require_secure_claim: bool = False,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -123,6 +126,12 @@ def build_auth_routes(
     def claim_bootstrap(
         payload: BootstrapClaimRequest, request: Request
     ) -> JSONResponse:
+        secure = resolve_cookie_secure(request, cookie_secure)
+        if require_secure_claim and (request.url.scheme != "https" or not secure):
+            raise HTTPException(
+                status_code=400,
+                detail="Browser bootstrap requires HTTPS and Secure cookies",
+            )
         claim = store.claim_bootstrap_token(payload.token)
         if claim is None:
             raise HTTPException(status_code=401, detail="Invalid bootstrap token")
@@ -132,8 +141,28 @@ def build_auth_routes(
             claim.session_token,
             max_age=claim.max_age_seconds,
             httponly=True,
-            secure=resolve_cookie_secure(request, cookie_secure),
+            secure=secure,
             samesite="lax",
+            path=request.scope.get("root_path") or "/",
+        )
+        return response
+
+    @router.post("/auth/session/revoke", include_in_schema=False)
+    def revoke_current_session(request: Request) -> JSONResponse:
+        revoked = store.revoke_session_token(request.cookies.get(SESSION_COOKIE_NAME))
+        response = JSONResponse({"ok": True, "revoked": revoked})
+        response.delete_cookie(
+            SESSION_COOKIE_NAME,
+            path=request.scope.get("root_path") or "/",
+        )
+        return response
+
+    @router.post("/auth/sessions/revoke-all", include_in_schema=False)
+    def revoke_all_sessions(request: Request) -> JSONResponse:
+        revoked = store.revoke_all_sessions()
+        response = JSONResponse({"ok": True, "revoked": revoked})
+        response.delete_cookie(
+            SESSION_COOKIE_NAME,
             path=request.scope.get("root_path") or "/",
         )
         return response
