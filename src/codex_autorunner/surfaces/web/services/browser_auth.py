@@ -10,6 +10,11 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
+from urllib.parse import urlparse
+
+from fastapi import Request
+
+from ....core.config_types import BrowserAuthCookieSecure
 
 BOOTSTRAP_TOKEN_RELATIVE_PATH = Path(".codex-autorunner/bootstrap-token")
 SESSION_STORE_RELATIVE_PATH = Path(".codex-autorunner/browser-sessions.json")
@@ -56,6 +61,23 @@ def ensure_bootstrap_token(root: Path) -> tuple[Path, str]:
 class BootstrapClaim:
     session_token: str
     max_age_seconds: int = SESSION_MAX_AGE_SECONDS
+
+
+def resolve_cookie_secure(
+    request: Request, cookie_secure: BrowserAuthCookieSecure
+) -> bool:
+    if cookie_secure == "auto":
+        if request.url.scheme == "https":
+            return True
+        origin = request.headers.get("origin", "")
+        parsed_origin = urlparse(origin)
+        host = request.headers.get("host", "").strip().lower()
+        return (
+            parsed_origin.scheme.lower() == "https"
+            and bool(parsed_origin.netloc)
+            and parsed_origin.netloc.lower() == host
+        )
+    return bool(cookie_secure)
 
 
 class BrowserAuthStore:

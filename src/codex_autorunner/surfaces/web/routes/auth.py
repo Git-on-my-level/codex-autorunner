@@ -4,9 +4,11 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
+from ....core.config_types import BrowserAuthCookieSecure
 from ..services.browser_auth import (
     SESSION_COOKIE_NAME,
     BrowserAuthStore,
+    resolve_cookie_secure,
 )
 
 
@@ -99,7 +101,9 @@ def _bootstrap_html() -> str:
 """
 
 
-def build_auth_routes(store: BrowserAuthStore) -> APIRouter:
+def build_auth_routes(
+    store: BrowserAuthStore, cookie_secure: BrowserAuthCookieSecure = "auto"
+) -> APIRouter:
     router = APIRouter()
 
     @router.get("/auth/bootstrap", include_in_schema=False)
@@ -128,7 +132,7 @@ def build_auth_routes(store: BrowserAuthStore) -> APIRouter:
             claim.session_token,
             max_age=claim.max_age_seconds,
             httponly=True,
-            secure=True,
+            secure=resolve_cookie_secure(request, cookie_secure),
             samesite="lax",
             path=request.scope.get("root_path") or "/",
         )

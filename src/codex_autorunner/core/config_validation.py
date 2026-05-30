@@ -133,6 +133,22 @@ def _validate_server_security(server: Dict[str, Any]) -> None:
         )
 
 
+def _validate_browser_auth_config(cfg: Dict[str, Any]) -> None:
+    browser_auth = cfg.get("browser_auth")
+    if browser_auth is None:
+        return
+    if not isinstance(browser_auth, dict):
+        raise ConfigError("browser_auth section must be a mapping if provided")
+    if "cookie_secure" not in browser_auth:
+        return
+    value = browser_auth.get("cookie_secure")
+    if isinstance(value, bool):
+        return
+    if isinstance(value, str) and value.strip().lower() in {"auto", "true", "false"}:
+        return
+    raise ConfigError("browser_auth.cookie_secure must be one of auto, true, or false")
+
+
 def _validate_app_server_config(cfg: Dict[str, Any]) -> None:
     app_server_cfg = cfg.get("app_server")
     if app_server_cfg is None:
@@ -1019,6 +1035,7 @@ def _validate_hub_config(cfg: Dict[str, Any], *, root: Path) -> None:
     ):
         raise ConfigError("server.auth_token_env must be a string if provided")
     _validate_server_security(server)
+    _validate_browser_auth_config(cfg)
     _validate_agents_config(cfg)
     _validate_app_server_config(cfg)
     _validate_opencode_config(cfg)

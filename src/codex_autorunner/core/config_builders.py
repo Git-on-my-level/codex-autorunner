@@ -46,6 +46,8 @@ from .config_sources import (
     resolve_hub_config_data,
 )
 from .config_types import (
+    BrowserAuthConfig,
+    BrowserAuthCookieSecure,
     DestinationConfigSection,
     HubConfig,
     LogConfig,
@@ -66,6 +68,23 @@ def _parse_agents_config(
     cfg: Dict[str, Any], defaults: Dict[str, Any]
 ) -> Dict[str, Any]:
     return parse_agents_config(cfg, defaults)
+
+
+def _parse_browser_auth_config(cfg: Any) -> BrowserAuthConfig:
+    section = cfg if isinstance(cfg, dict) else {}
+    raw_cookie_secure = section.get("cookie_secure", "auto")
+    cookie_secure: BrowserAuthCookieSecure
+    if isinstance(raw_cookie_secure, bool):
+        cookie_secure = raw_cookie_secure
+    else:
+        normalized = str(raw_cookie_secure).strip().lower()
+        if normalized == "true":
+            cookie_secure = True
+        elif normalized == "false":
+            cookie_secure = False
+        else:
+            cookie_secure = "auto"
+    return BrowserAuthConfig(cookie_secure=cookie_secure)
 
 
 def _resolve_hub_config_path(start: Path) -> Path:
@@ -438,6 +457,7 @@ def build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         server_auth_token_env=str(cfg["server"].get("auth_token_env", "")),
         server_allowed_hosts=list(cfg["server"].get("allowed_hosts") or []),
         server_allowed_origins=list(cfg["server"].get("allowed_origins") or []),
+        browser_auth=_parse_browser_auth_config(cfg.get("browser_auth")),
         log=LogConfig(
             path=log_path,
             max_bytes=int(log_cfg["max_bytes"]),

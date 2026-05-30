@@ -74,6 +74,9 @@
       }
     ]
   },
+  "browser_auth": {
+    "cookie_secure": "auto"
+  },
   "discord_bot": {
     "allowed_channel_ids": [],
     "allowed_guild_ids": [],
