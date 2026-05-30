@@ -336,7 +336,7 @@ def create_hub_app(
     mount_manager.mount_initial(initial_snapshots)
 
     allowed_hosts = resolve_allowed_hosts(
-        bind_host, context.config.server_allowed_hosts
+        context.config.server_host, context.config.server_allowed_hosts
     )
     allowed_origins = context.config.server_allowed_origins
     app.state.auth_token = auth_token
