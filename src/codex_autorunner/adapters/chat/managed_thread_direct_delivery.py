@@ -15,18 +15,18 @@ from ...core.orchestration.managed_thread_delivery_ledger import (
 
 
 @dataclass(frozen=True)
-class ManagedThreadDirectDeliveryReservation:
+class ManagedThreadDirectDeliveryLease:
     engine: SQLiteManagedThreadDeliveryEngine
     delivery_id: str
     claim_token: str
 
 
-def reserve_managed_thread_direct_delivery(
+def begin_managed_thread_direct_delivery(
     state_root: Path,
     *,
     delivery_id: Optional[str],
     claim_token: Optional[str] = None,
-) -> Optional[ManagedThreadDirectDeliveryReservation]:
+) -> Optional[ManagedThreadDirectDeliveryLease]:
     normalized_delivery_id = str(delivery_id or "").strip()
     if not normalized_delivery_id:
         return None
@@ -38,15 +38,15 @@ def reserve_managed_thread_direct_delivery(
     )
     if claim is None:
         return None
-    return ManagedThreadDirectDeliveryReservation(
+    return ManagedThreadDirectDeliveryLease(
         engine=engine,
         delivery_id=normalized_delivery_id,
         claim_token=claim.claim_token,
     )
 
 
-def record_managed_thread_direct_delivery(
-    reservation: ManagedThreadDirectDeliveryReservation,
+def complete_managed_thread_direct_delivery(
+    lease: ManagedThreadDirectDeliveryLease,
     *,
     delivered: bool,
     detail: Optional[str],
@@ -62,15 +62,15 @@ def record_managed_thread_direct_delivery(
         error=str(detail or "").strip() or None,
         metadata=dict(metadata or {}),
     )
-    return reservation.engine.record_attempt_result(
-        reservation.delivery_id,
-        claim_token=reservation.claim_token,
+    return lease.engine.record_attempt_result(
+        lease.delivery_id,
+        claim_token=lease.claim_token,
         result=result,
     )
 
 
 __all__ = [
-    "ManagedThreadDirectDeliveryReservation",
-    "record_managed_thread_direct_delivery",
-    "reserve_managed_thread_direct_delivery",
+    "ManagedThreadDirectDeliveryLease",
+    "begin_managed_thread_direct_delivery",
+    "complete_managed_thread_direct_delivery",
 ]

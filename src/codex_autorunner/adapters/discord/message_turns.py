@@ -40,8 +40,8 @@ from ...adapters.chat.forwarding import (
     compose_inbound_message_text,
 )
 from ...adapters.chat.managed_thread_direct_delivery import (
-    record_managed_thread_direct_delivery,
-    reserve_managed_thread_direct_delivery,
+    begin_managed_thread_direct_delivery,
+    complete_managed_thread_direct_delivery,
 )
 from ...adapters.chat.models import ChatMessageEvent
 from ...adapters.chat.runtime_thread_errors import (
@@ -183,30 +183,60 @@ _MAX_CHAT_WRAPUP_ARTIFACT_BYTES = 8 * 1024 * 1024
 _sanitize_runtime_thread_result_error = sanitize_runtime_thread_error
 
 
-def _record_pending_discord_direct_delivery(
+def _begin_pending_discord_direct_delivery(
     service: Any,
     *,
     delivery_id: Optional[str],
     claim_token: Optional[str],
     channel_id: str,
     session_key: str,
-    delivered: bool,
-) -> None:
+) -> Optional[Any]:
     if not isinstance(delivery_id, str) or not delivery_id.strip():
-        return
+        return None
     state_root = getattr(getattr(service, "_config", None), "root", None)
     if state_root is None:
         state_root = Path(".")
     try:
-        reservation = reserve_managed_thread_direct_delivery(
+        lease = begin_managed_thread_direct_delivery(
             Path(state_root),
             delivery_id=delivery_id,
             claim_token=claim_token,
         )
-        if reservation is None:
-            return
-        updated = record_managed_thread_direct_delivery(
-            reservation,
+    except Exception as exc:
+        log_event(
+            service._logger,
+            logging.WARNING,
+            "discord.turn.direct_delivery_begin_failed",
+            channel_id=channel_id,
+            session_key=session_key,
+            delivery_id=delivery_id,
+            exc=exc,
+        )
+        return None
+    if lease is None:
+        log_event(
+            service._logger,
+            logging.INFO,
+            "discord.turn.direct_delivery_suppressed",
+            channel_id=channel_id,
+            session_key=session_key,
+            delivery_id=delivery_id,
+        )
+        return None
+    return lease
+
+
+def _complete_pending_discord_direct_delivery(
+    service: Any,
+    *,
+    lease: Any,
+    channel_id: str,
+    session_key: str,
+    delivered: bool,
+) -> None:
+    try:
+        updated = complete_managed_thread_direct_delivery(
+            lease,
             delivered=delivered,
             detail=(
                 "direct_discord_surface_delivery"
@@ -222,7 +252,7 @@ def _record_pending_discord_direct_delivery(
             "discord.turn.direct_delivery_record_failed",
             channel_id=channel_id,
             session_key=session_key,
-            delivery_id=delivery_id,
+            delivery_id=getattr(lease, "delivery_id", None),
             delivered=delivered,
             exc=exc,
         )
@@ -234,7 +264,7 @@ def _record_pending_discord_direct_delivery(
             "discord.turn.direct_delivery_recorded",
             channel_id=channel_id,
             session_key=session_key,
-            delivery_id=delivery_id,
+            delivery_id=getattr(lease, "delivery_id", None),
             delivered=delivered,
             delivery_state=updated.state.value,
         )
@@ -1438,24 +1468,41 @@ async def _deliver_discord_turn_result(
         not send_final_message and not delivery_visibility_pending
     )
     visible_failure_notice = False
-    if send_final_message:
-        visible_terminal_delivery = await _send_discord_turn_section(
-            dispatch.service,
-            channel_id=dispatch.channel_id,
-            text=response_text or "(No response text returned.)",
-            record_prefix=f"turn:final:{dispatch.session_key}",
-            attachment_filename="final-response.md",
-            attachment_caption="Final response too long; attached as final-response.md.",
-        )
-    if delivery_visibility_pending:
-        _record_pending_discord_direct_delivery(
+    direct_delivery_lease = None
+    durable_delivery_has_record = bool(durable_delivery_id)
+    if delivery_visibility_pending and durable_delivery_has_record:
+        direct_delivery_lease = _begin_pending_discord_direct_delivery(
             dispatch.service,
             delivery_id=durable_delivery_id,
             claim_token=durable_delivery_claim_token,
             channel_id=dispatch.channel_id,
             session_key=dispatch.session_key,
-            delivered=visible_terminal_delivery,
         )
+    if send_final_message:
+        if (
+            delivery_visibility_pending
+            and durable_delivery_has_record
+            and direct_delivery_lease is None
+        ):
+            visible_terminal_delivery = False
+        else:
+            visible_terminal_delivery = await _send_discord_turn_section(
+                dispatch.service,
+                channel_id=dispatch.channel_id,
+                text=response_text or "(No response text returned.)",
+                record_prefix=f"turn:final:{dispatch.session_key}",
+                attachment_filename="final-response.md",
+                attachment_caption="Final response too long; attached as final-response.md.",
+            )
+    if delivery_visibility_pending and durable_delivery_has_record:
+        if direct_delivery_lease is not None:
+            _complete_pending_discord_direct_delivery(
+                dispatch.service,
+                lease=direct_delivery_lease,
+                channel_id=dispatch.channel_id,
+                session_key=dispatch.session_key,
+                delivered=visible_terminal_delivery,
+            )
     if visible_terminal_delivery:
         if not preserve_progress_lease:
             # Require execution_id or managed_thread_id so listing does not fall back to

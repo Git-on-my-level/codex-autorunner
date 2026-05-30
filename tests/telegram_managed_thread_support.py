@@ -1379,6 +1379,84 @@ async def test_handle_normal_message_marks_pending_durable_delivery_direct_surfa
 
 
 @pytest.mark.anyio
+async def test_handle_normal_message_suppresses_direct_send_when_durable_claim_is_active(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = TelegramTopicRecord(
+        pma_enabled=True,
+        workspace_path=None,
+        repo_id="repo-1",
+        agent="codex",
+    )
+    handler = _ManagedThreadPMAHandler(record, tmp_path)
+    engine = SQLiteManagedThreadDeliveryEngine(tmp_path)
+    finalized = execution_commands_module.ManagedThreadFinalizationResult(
+        status="ok",
+        assistant_text="telegram managed final reply",
+        error=None,
+        managed_thread_id="thread-1",
+        managed_turn_id="exec-1",
+        backend_thread_id="backend-1",
+    )
+    intent = build_managed_thread_delivery_intent(
+        finalized,
+        surface=execution_commands_module.ManagedThreadSurfaceInfo(
+            log_label="Telegram",
+            surface_kind="telegram",
+            surface_key="-1001:101",
+        ),
+        transport_target={"chat_id": -1001, "thread_id": 101},
+    )
+    record_entry = engine.create_intent(intent).record
+    active_claim = engine.claim_delivery(record_entry.delivery_id)
+    assert active_claim is not None
+
+    async def _fake_run_turn_and_collect_result(
+        *args: Any, **kwargs: Any
+    ) -> _TurnRunResult:
+        _ = args, kwargs
+        return _TurnRunResult(
+            record=record,
+            thread_id="backend-1",
+            turn_id="exec-1",
+            response="telegram managed final reply",
+            placeholder_id=None,
+            elapsed_seconds=None,
+            token_usage=None,
+            transcript_message_id=None,
+            transcript_text=None,
+            durable_delivery_handled=False,
+            durable_delivery_id=record_entry.delivery_id,
+            durable_delivery_claim_token="stale-direct-token",
+        )
+
+    monkeypatch.setattr(
+        handler,
+        "_run_turn_and_collect_result",
+        _fake_run_turn_and_collect_result,
+    )
+
+    message = TelegramMessage(
+        update_id=1,
+        message_id=10,
+        chat_id=-1001,
+        thread_id=101,
+        from_user_id=42,
+        text="hello",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_normal_message(message, runtime=_RuntimeStub())
+
+    current = engine._ledger.get_delivery(record_entry.delivery_id)
+    assert current is not None
+    assert current.state is ManagedThreadDeliveryState.CLAIMED
+    assert current.claim_token == active_claim.claim_token
+    assert handler._sent == []
+
+
+@pytest.mark.anyio
 async def test_pma_text_messages_route_repeated_messages_through_managed_thread_queue(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
