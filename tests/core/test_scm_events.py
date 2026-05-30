@@ -86,6 +86,70 @@ def test_record_event_if_new_returns_none_for_existing_event_id(tmp_path: Path) 
     ]
 
 
+def test_record_event_if_new_dedupes_rotating_ids_by_comment_identity(
+    tmp_path: Path,
+) -> None:
+    store = ScmEventStore(tmp_path)
+
+    created = store.record_event_if_new(
+        event_id="github:poll:pull_request_review_comment:first-nonce",
+        provider="github",
+        event_type="pull_request_review_comment",
+        repo_slug="acme/widgets",
+        repo_id="repo-1",
+        pr_number=17,
+        occurred_at="2026-03-25T00:00:00Z",
+        received_at="2026-03-25T00:00:01Z",
+        payload={"action": "created", "comment_id": "3328937952"},
+    )
+    duplicate = store.record_event_if_new(
+        event_id="github:poll:pull_request_review_comment:second-nonce",
+        provider="github",
+        event_type="pull_request_review_comment",
+        repo_slug="acme/widgets",
+        repo_id="repo-1",
+        pr_number=17,
+        occurred_at="2026-03-25T00:00:00Z",
+        received_at="2026-03-25T00:05:29Z",
+        payload={"action": "created", "comment_id": "3328937952"},
+    )
+
+    assert created is not None
+    assert created.comment_id == "3328937952"
+    assert duplicate is None
+    assert [event.event_id for event in store.list_events(limit=10)] == [
+        "github:poll:pull_request_review_comment:first-nonce"
+    ]
+
+
+def test_record_event_if_new_allows_different_comment_ids(tmp_path: Path) -> None:
+    store = ScmEventStore(tmp_path)
+
+    first = store.record_event_if_new(
+        event_id="github:poll:pull_request_review_comment:first",
+        provider="github",
+        event_type="pull_request_review_comment",
+        repo_slug="acme/widgets",
+        pr_number=17,
+        payload={"action": "created", "comment_id": "comment-1"},
+    )
+    second = store.record_event_if_new(
+        event_id="github:poll:pull_request_review_comment:second",
+        provider="github",
+        event_type="pull_request_review_comment",
+        repo_slug="acme/widgets",
+        pr_number=17,
+        payload={"action": "created", "comment_id": "comment-2"},
+    )
+
+    assert first is not None
+    assert second is not None
+    assert {event.comment_id for event in store.list_events(limit=10)} == {
+        "comment-1",
+        "comment-2",
+    }
+
+
 def test_record_event_rejects_oversized_raw_payload(tmp_path: Path) -> None:
     store = ScmEventStore(tmp_path)
 

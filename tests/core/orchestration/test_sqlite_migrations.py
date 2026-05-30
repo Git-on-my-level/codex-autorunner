@@ -342,12 +342,15 @@ def test_turn_execution_contract_migration_backfills_legacy_thread_rows(
         conn.execute("DELETE FROM orch_schema_migrations WHERE version >= 37")
 
         version = apply_orchestration_migrations(conn)
-        rows = {row["execution_id"]: row for row in conn.execute("""
+        rows = {
+            row["execution_id"]: row
+            for row in conn.execute("""
                 SELECT execution_id, turn_contract_version, turn_request_json,
                        turn_record_json, runtime_identity_json
                   FROM orch_thread_executions
                  WHERE thread_target_id = 'thread-legacy'
-                """).fetchall()}
+                """).fetchall()
+        }
 
     assert version == ORCHESTRATION_SCHEMA_VERSION
     queued_request = json.loads(rows["turn-queued"]["turn_request_json"])
@@ -751,11 +754,14 @@ def test_turn_execution_contract_migration_repairs_legacy_opencode_models(
         conn.execute("DELETE FROM orch_schema_migrations WHERE version >= 37")
 
         version = apply_orchestration_migrations(conn)
-        rows = {row["execution_id"]: row for row in conn.execute("""
+        rows = {
+            row["execution_id"]: row
+            for row in conn.execute("""
                 SELECT execution_id, turn_request_json, turn_record_json
                   FROM orch_thread_executions
                  WHERE thread_target_id = 'thread-opencode-legacy'
-                """).fetchall()}
+                """).fetchall()
+        }
 
     assert version == ORCHESTRATION_SCHEMA_VERSION
     unresolved_request = json.loads(rows["turn-unresolved"]["turn_request_json"])
@@ -1406,6 +1412,103 @@ def test_apply_orchestration_migrations_adds_chat_operation_ledger_from_v20(
     assert table is not None
 
 
+def test_apply_orchestration_migrations_dedupes_scm_events_by_comment_identity(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "orchestration.sqlite3"
+
+    with _connect(db_path) as conn:
+        conn.execute("""
+            CREATE TABLE orch_schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            """)
+        conn.execute("""
+            INSERT INTO orch_schema_migrations (version, name, applied_at)
+            VALUES (44, 'backfill_historical_runtime_identity_envelopes', '2026-05-30T00:00:00Z')
+            """)
+        conn.execute("""
+            CREATE TABLE orch_scm_events (
+                event_id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                repo_slug TEXT,
+                repo_id TEXT,
+                pr_number INTEGER,
+                delivery_id TEXT,
+                correlation_id TEXT,
+                occurred_at TEXT NOT NULL,
+                received_at TEXT NOT NULL,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                raw_payload_json TEXT,
+                created_at TEXT NOT NULL
+            )
+            """)
+        conn.executemany(
+            """
+            INSERT INTO orch_scm_events (
+                event_id, provider, event_type, repo_slug, repo_id, pr_number,
+                delivery_id, correlation_id, occurred_at, received_at,
+                payload_json, raw_payload_json, created_at
+            ) VALUES (?, 'github', 'pull_request_review_comment', 'acme/widgets',
+                'repo-1', 17, NULL, NULL, ?, ?, ?, NULL, ?)
+            """,
+            (
+                (
+                    "github:poll:pull_request_review_comment:first-nonce",
+                    "2026-05-30T15:30:07Z",
+                    "2026-05-30T15:30:07Z",
+                    json.dumps({"comment_id": "3328937952", "body": "same"}),
+                    "2026-05-30T15:30:07Z",
+                ),
+                (
+                    "github:poll:pull_request_review_comment:second-nonce",
+                    "2026-05-30T15:35:29Z",
+                    "2026-05-30T15:35:29Z",
+                    json.dumps({"comment_id": "3328937952", "body": "same"}),
+                    "2026-05-30T15:35:29Z",
+                ),
+                (
+                    "github:poll:pull_request_review_comment:different-comment",
+                    "2026-05-30T15:36:00Z",
+                    "2026-05-30T15:36:00Z",
+                    json.dumps({"comment_id": "3328937953", "body": "different"}),
+                    "2026-05-30T15:36:00Z",
+                ),
+            ),
+        )
+
+        version_after = apply_orchestration_migrations(conn)
+        rows = conn.execute(
+            """
+            SELECT event_id, comment_id
+              FROM orch_scm_events
+             ORDER BY occurred_at ASC
+            """
+        ).fetchall()
+        indexes = conn.execute(
+            """
+            SELECT name, sql
+              FROM sqlite_master
+             WHERE type = 'index'
+               AND tbl_name = 'orch_scm_events'
+            """
+        ).fetchall()
+
+    assert version_after == ORCHESTRATION_SCHEMA_VERSION
+    assert [(row["event_id"], row["comment_id"]) for row in rows] == [
+        ("github:poll:pull_request_review_comment:first-nonce", "3328937952"),
+        ("github:poll:pull_request_review_comment:second-nonce", None),
+        ("github:poll:pull_request_review_comment:different-comment", "3328937953"),
+    ]
+    assert any(
+        row["name"] == "idx_orch_scm_events_comment_identity" and "UNIQUE" in row["sql"]
+        for row in indexes
+    )
+
+
 def test_apply_orchestration_migrations_adds_chat_surface_event_journal_from_v29(
     tmp_path: Path,
 ) -> None:
@@ -1554,10 +1657,13 @@ def test_apply_orchestration_migrations_reconciles_stale_running_executions_from
         )
 
         version_after = apply_orchestration_migrations(conn)
-        rows = {row["execution_id"]: row for row in conn.execute("""
+        rows = {
+            row["execution_id"]: row
+            for row in conn.execute("""
                 SELECT execution_id, status, error_text, finished_at
                   FROM orch_thread_executions
-                """).fetchall()}
+                """).fetchall()
+        }
         unique_index = conn.execute("""
             SELECT name
               FROM sqlite_master

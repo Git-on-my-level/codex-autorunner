@@ -278,6 +278,18 @@ class TestSchemaOwnership:
         pk_cols = [row["name"] for row in info if row["pk"]]
         assert pk_cols == ["event_id"]
 
+    def test_scm_event_comment_identity_unique_index(self, tmp_path: Path) -> None:
+        with open_orchestration_sqlite(tmp_path) as conn:
+            indexes = conn.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='orch_scm_events'"
+            ).fetchall()
+        dedup_idx = [
+            i for i in indexes if i["name"] == "idx_orch_scm_events_comment_identity"
+        ]
+        assert len(dedup_idx) == 1
+        assert "event_type, repo_slug, pr_number, comment_id" in dedup_idx[0]["sql"]
+        assert "UNIQUE" in dedup_idx[0]["sql"]
+
     def test_pr_binding_unique_on_provider_repo_pr(self, tmp_path: Path) -> None:
         with open_orchestration_sqlite(tmp_path) as conn:
             indexes = conn.execute(
