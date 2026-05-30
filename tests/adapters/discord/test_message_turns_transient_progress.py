@@ -673,6 +673,214 @@ async def test_deliver_result_marks_pending_durable_delivery_direct_surface_deli
 
 
 @pytest.mark.anyio
+async def test_deliver_result_suppresses_direct_send_when_durable_claim_is_active(
+    tmp_path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = support.DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = support._FakeRest()
+    service = support.DiscordBotService(
+        support._config(tmp_path, allowed_channel_ids=frozenset({"channel-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=support._FakeGateway([]),
+        state_store=store,
+        outbox_manager=support._FakeOutboxManager(),
+    )
+    engine = SQLiteManagedThreadDeliveryEngine(tmp_path)
+    finalized = support.managed_thread_turns_module.ManagedThreadFinalizationResult(
+        status="ok",
+        assistant_text="fixture reply",
+        error=None,
+        managed_thread_id="thread-1",
+        managed_turn_id="exec-1",
+        backend_thread_id="backend-1",
+    )
+    intent = support.managed_thread_turns_module.build_managed_thread_delivery_intent(
+        finalized,
+        surface=support.managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Discord",
+            surface_kind="discord",
+            surface_key="channel-1",
+        ),
+        transport_target={"channel_id": "channel-1"},
+    )
+    record = engine.create_intent(intent).record
+    active_claim = engine.claim_delivery(record.delivery_id)
+    assert active_claim is not None
+    dispatch = SimpleNamespace(
+        service=service,
+        channel_id="channel-1",
+        session_key="session-1",
+        pending_compact_seed=None,
+        agent="codex",
+        model_override=None,
+    )
+
+    try:
+        await support.discord_message_turns_module._deliver_discord_turn_result(
+            dispatch,
+            workspace_root=workspace,
+            turn_result=support.DiscordMessageTurnResult(
+                final_message="done",
+                execution_id="exec-1",
+                send_final_message=True,
+                delivery_visibility_pending=True,
+                durable_delivery_id=record.delivery_id,
+                durable_delivery_claim_token="stale-direct-token",
+            ),
+        )
+
+        current = engine._ledger.get_delivery(record.delivery_id)
+        assert current is not None
+        assert current.state is ManagedThreadDeliveryState.CLAIMED
+        assert current.claim_token == active_claim.claim_token
+        assert rest.channel_messages == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_deliver_result_sends_when_direct_delivery_begin_fails(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = support.DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = support._FakeRest()
+    service = support.DiscordBotService(
+        support._config(tmp_path, allowed_channel_ids=frozenset({"channel-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=support._FakeGateway([]),
+        state_store=store,
+        outbox_manager=support._FakeOutboxManager(),
+    )
+    dispatch = SimpleNamespace(
+        service=service,
+        channel_id="channel-1",
+        session_key="session-1",
+        pending_compact_seed=None,
+        agent="codex",
+        model_override=None,
+    )
+
+    def _raise_begin(*args: Any, **kwargs: Any) -> Any:
+        _ = args, kwargs
+        raise RuntimeError("ledger unavailable")
+
+    monkeypatch.setattr(
+        support.discord_message_turns_module,
+        "begin_managed_thread_direct_delivery",
+        _raise_begin,
+    )
+
+    try:
+        await support.discord_message_turns_module._deliver_discord_turn_result(
+            dispatch,
+            workspace_root=workspace,
+            turn_result=support.DiscordMessageTurnResult(
+                final_message="done",
+                execution_id="exec-1",
+                send_final_message=True,
+                delivery_visibility_pending=True,
+                durable_delivery_id="delivery-1",
+                durable_delivery_claim_token="claim-token",
+            ),
+        )
+
+        assert len(rest.channel_messages) == 1
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_deliver_result_records_retry_when_direct_send_raises(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = support.DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = support._FakeRest()
+    service = support.DiscordBotService(
+        support._config(tmp_path, allowed_channel_ids=frozenset({"channel-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=support._FakeGateway([]),
+        state_store=store,
+        outbox_manager=support._FakeOutboxManager(),
+    )
+    engine = SQLiteManagedThreadDeliveryEngine(tmp_path)
+    finalized = support.managed_thread_turns_module.ManagedThreadFinalizationResult(
+        status="ok",
+        assistant_text="fixture reply",
+        error=None,
+        managed_thread_id="thread-1",
+        managed_turn_id="exec-1",
+        backend_thread_id="backend-1",
+    )
+    intent = support.managed_thread_turns_module.build_managed_thread_delivery_intent(
+        finalized,
+        surface=support.managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Discord",
+            surface_kind="discord",
+            surface_key="channel-1",
+        ),
+        transport_target={"channel_id": "channel-1"},
+    )
+    record = engine.create_intent(intent).record
+    claim = engine.claim_delivery(record.delivery_id)
+    assert claim is not None
+    dispatch = SimpleNamespace(
+        service=service,
+        channel_id="channel-1",
+        session_key="session-1",
+        pending_compact_seed=None,
+        agent="codex",
+        model_override=None,
+    )
+
+    async def _raise_send(*args: Any, **kwargs: Any) -> bool:
+        _ = args, kwargs
+        raise RuntimeError("discord send failed")
+
+    monkeypatch.setattr(
+        support.discord_message_turns_module,
+        "_send_discord_turn_section",
+        _raise_send,
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="discord send failed"):
+            await support.discord_message_turns_module._deliver_discord_turn_result(
+                dispatch,
+                workspace_root=workspace,
+                turn_result=support.DiscordMessageTurnResult(
+                    final_message="done",
+                    execution_id="exec-1",
+                    send_final_message=True,
+                    delivery_visibility_pending=True,
+                    durable_delivery_id=record.delivery_id,
+                    durable_delivery_claim_token=claim.claim_token,
+                ),
+            )
+
+        current = engine._ledger.get_delivery(record.delivery_id)
+        assert current is not None
+        assert current.state is ManagedThreadDeliveryState.RETRY_SCHEDULED
+        assert current.claim_token is None
+        assert current.last_error == "direct_discord_surface_delivery_failed"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_deliver_result_keeps_newer_pending_sibling_progress_lease(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,

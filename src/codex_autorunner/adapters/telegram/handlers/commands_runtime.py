@@ -158,7 +158,9 @@ from .commands import (
     WorkspaceCommands,
 )
 from .commands.execution import (
-    _record_pending_telegram_direct_delivery,
+    _begin_pending_telegram_direct_delivery,
+    _complete_pending_telegram_direct_delivery,
+    _DirectDeliveryBeginResult,
     _TurnRunFailure,
 )
 from .commands.shared import _RuntimeStub  # noqa: F401
@@ -442,55 +444,82 @@ class TelegramCommandHandlers(
                     thread_id=message.thread_id,
                 )
         else:
-            try:
-                response_sent = await self._deliver_turn_response(
+            direct_delivery_begin = _DirectDeliveryBeginResult()
+            durable_delivery_id = getattr(outcome, "durable_delivery_id", None)
+            durable_delivery_pending = getattr(
+                outcome, "durable_delivery_pending", False
+            )
+            if durable_delivery_pending:
+                direct_delivery_begin = _begin_pending_telegram_direct_delivery(
+                    self,
+                    delivery_id=durable_delivery_id,
+                    claim_token=getattr(
+                        outcome,
+                        "durable_delivery_claim_token",
+                        None,
+                    ),
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                    placeholder_id=outcome.placeholder_id,
-                    response=response_text,
-                    intermediate_response=intermediate_response,
-                    overflow_mode_override=overflow_mode_override,
                 )
-            except TypeError as exc:
-                if not any(
-                    key in str(exc)
-                    for key in ("intermediate_response", "overflow_mode_override")
-                ):
+            if durable_delivery_pending and direct_delivery_begin.suppress_send:
+                response_sent = False
+            else:
+                try:
+                    try:
+                        response_sent = await self._deliver_turn_response(
+                            chat_id=message.chat_id,
+                            thread_id=message.thread_id,
+                            reply_to=message.message_id,
+                            placeholder_id=outcome.placeholder_id,
+                            response=response_text,
+                            intermediate_response=intermediate_response,
+                            overflow_mode_override=overflow_mode_override,
+                        )
+                    except TypeError as exc:
+                        if not any(
+                            key in str(exc)
+                            for key in (
+                                "intermediate_response",
+                                "overflow_mode_override",
+                            )
+                        ):
+                            raise
+                        response_sent = await self._deliver_turn_response(
+                            chat_id=message.chat_id,
+                            thread_id=message.thread_id,
+                            reply_to=message.message_id,
+                            placeholder_id=outcome.placeholder_id,
+                            response=response_text,
+                        )
+                except asyncio.CancelledError:
+                    if direct_delivery_begin.lease is not None:
+                        _complete_pending_telegram_direct_delivery(
+                            self,
+                            lease=direct_delivery_begin.lease,
+                            chat_id=message.chat_id,
+                            thread_id=message.thread_id,
+                            delivered=False,
+                        )
                     raise
-                response_sent = await self._deliver_turn_response(
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                    placeholder_id=outcome.placeholder_id,
-                    response=response_text,
-                )
-            if response_sent:
-                _record_pending_telegram_direct_delivery(
-                    self,
-                    delivery_id=getattr(outcome, "durable_delivery_id", None),
-                    claim_token=getattr(
-                        outcome,
-                        "durable_delivery_claim_token",
-                        None,
-                    ),
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                    delivered=True,
-                )
-            elif getattr(outcome, "durable_delivery_id", None):
-                _record_pending_telegram_direct_delivery(
-                    self,
-                    delivery_id=getattr(outcome, "durable_delivery_id", None),
-                    claim_token=getattr(
-                        outcome,
-                        "durable_delivery_claim_token",
-                        None,
-                    ),
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                    delivered=False,
-                )
+                except Exception:
+                    if direct_delivery_begin.lease is not None:
+                        _complete_pending_telegram_direct_delivery(
+                            self,
+                            lease=direct_delivery_begin.lease,
+                            chat_id=message.chat_id,
+                            thread_id=message.thread_id,
+                            delivered=False,
+                        )
+                    raise
+                else:
+                    if direct_delivery_begin.lease is not None:
+                        _complete_pending_telegram_direct_delivery(
+                            self,
+                            lease=direct_delivery_begin.lease,
+                            chat_id=message.chat_id,
+                            thread_id=message.thread_id,
+                            delivered=response_sent,
+                        )
         if response_sent:
             key = await self._resolve_topic_key(message.chat_id, message.thread_id)
             log_event(

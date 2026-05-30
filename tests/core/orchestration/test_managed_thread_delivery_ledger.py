@@ -510,7 +510,9 @@ class TestEngineEnsureDirectDeliveryClaim:
         assert ensured is not None
         assert ensured.claim_token == first.claim_token
 
-    def test_reclaims_when_proposed_token_is_stale(self, tmp_path: Path) -> None:
+    def test_returns_none_when_another_active_claim_owns_delivery(
+        self, tmp_path: Path
+    ) -> None:
         engine = _engine(tmp_path)
         engine.create_intent(_intent(adapter_key="telegram"))
         first = engine.claim_delivery(
@@ -523,10 +525,7 @@ class TestEngineEnsureDirectDeliveryClaim:
             proposed_token="stale-token",
             now=datetime(2026, 4, 18, 1, 1, 0, tzinfo=timezone.utc),
         )
-        assert reclaimed is not None
-        assert reclaimed.claim_token != "stale-token"
-        assert reclaimed.claim_token != first.claim_token
-        assert reclaimed.record.state is ManagedThreadDeliveryState.CLAIMED
+        assert reclaimed is None
 
     def test_recovers_expired_claim_then_issues_fresh_token(
         self, tmp_path: Path

@@ -516,8 +516,10 @@ class SQLiteManagedThreadDeliveryEngine:
         """Return a claim suitable for direct-surface delivery bookkeeping.
 
         Validates *proposed_token* against the ledger when it still matches an
-        active lease; otherwise recovers expired claims for this adapter and
-        issues a fresh claim (same policy as :meth:`claim_delivery`).
+        active lease. A different active lease means another delivery actor owns
+        the send; direct fallback must suppress its transport call instead of
+        stealing the claim. Expired claims are recovered before issuing a fresh
+        direct-delivery claim.
         """
         current_at = now or datetime.now(timezone.utc)
         normalized_id = str(delivery_id or "").strip()
@@ -556,20 +558,21 @@ class SQLiteManagedThreadDeliveryEngine:
                     claim_expires_at=claim_expires_at,
                 )
 
-        if proposed and record.claim_token and proposed != record.claim_token:
-            if record.state in {
-                ManagedThreadDeliveryState.CLAIMED,
-                ManagedThreadDeliveryState.DELIVERING,
-            }:
-                self._ledger.patch_delivery(
-                    normalized_id,
-                    state=ManagedThreadDeliveryState.RETRY_SCHEDULED,
-                    claim_token=None,
-                    claimed_at=None,
-                    claim_expires_at=None,
-                    next_attempt_at=current_at.isoformat(),
-                    last_error="direct_delivery_claim_token_mismatch",
-                )
+        if record.state in {
+            ManagedThreadDeliveryState.CLAIMED,
+            ManagedThreadDeliveryState.DELIVERING,
+        }:
+            decision = plan_managed_thread_delivery_recovery(
+                record,
+                now=current_at,
+                claim_ttl=self._claim_ttl,
+                max_attempts=self._max_attempts,
+            )
+            if (
+                decision.action == ManagedThreadDeliveryRecoveryAction.NOOP
+                and decision.reason == "claim_active"
+            ):
+                return None
 
         refreshed = self._ledger.get_delivery(normalized_id)
         adapter_key = refreshed.target.adapter_key if refreshed is not None else ""

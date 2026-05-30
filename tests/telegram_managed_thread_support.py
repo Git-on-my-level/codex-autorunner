@@ -1349,6 +1349,7 @@ async def test_handle_normal_message_marks_pending_durable_delivery_direct_surfa
             transcript_message_id=None,
             transcript_text=None,
             durable_delivery_handled=False,
+            durable_delivery_pending=True,
             durable_delivery_id=record_entry.delivery_id,
             durable_delivery_claim_token=claim.claim_token,
         )
@@ -1376,6 +1377,287 @@ async def test_handle_normal_message_marks_pending_durable_delivery_direct_surfa
     assert delivered is not None
     assert delivered.state is ManagedThreadDeliveryState.DIRECT_SURFACE_DELIVERED
     assert "telegram managed final reply" in handler._sent
+
+
+@pytest.mark.anyio
+async def test_handle_normal_message_suppresses_direct_send_when_durable_claim_is_active(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = TelegramTopicRecord(
+        pma_enabled=True,
+        workspace_path=None,
+        repo_id="repo-1",
+        agent="codex",
+    )
+    handler = _ManagedThreadPMAHandler(record, tmp_path)
+    engine = SQLiteManagedThreadDeliveryEngine(tmp_path)
+    finalized = execution_commands_module.ManagedThreadFinalizationResult(
+        status="ok",
+        assistant_text="telegram managed final reply",
+        error=None,
+        managed_thread_id="thread-1",
+        managed_turn_id="exec-1",
+        backend_thread_id="backend-1",
+    )
+    intent = build_managed_thread_delivery_intent(
+        finalized,
+        surface=execution_commands_module.ManagedThreadSurfaceInfo(
+            log_label="Telegram",
+            surface_kind="telegram",
+            surface_key="-1001:101",
+        ),
+        transport_target={"chat_id": -1001, "thread_id": 101},
+    )
+    record_entry = engine.create_intent(intent).record
+    active_claim = engine.claim_delivery(record_entry.delivery_id)
+    assert active_claim is not None
+
+    async def _fake_run_turn_and_collect_result(
+        *args: Any, **kwargs: Any
+    ) -> _TurnRunResult:
+        _ = args, kwargs
+        return _TurnRunResult(
+            record=record,
+            thread_id="backend-1",
+            turn_id="exec-1",
+            response="telegram managed final reply",
+            placeholder_id=None,
+            elapsed_seconds=None,
+            token_usage=None,
+            transcript_message_id=None,
+            transcript_text=None,
+            durable_delivery_handled=False,
+            durable_delivery_pending=True,
+            durable_delivery_id=record_entry.delivery_id,
+            durable_delivery_claim_token="stale-direct-token",
+        )
+
+    monkeypatch.setattr(
+        handler,
+        "_run_turn_and_collect_result",
+        _fake_run_turn_and_collect_result,
+    )
+
+    message = TelegramMessage(
+        update_id=1,
+        message_id=10,
+        chat_id=-1001,
+        thread_id=101,
+        from_user_id=42,
+        text="hello",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_normal_message(message, runtime=_RuntimeStub())
+
+    current = engine._ledger.get_delivery(record_entry.delivery_id)
+    assert current is not None
+    assert current.state is ManagedThreadDeliveryState.CLAIMED
+    assert current.claim_token == active_claim.claim_token
+    assert handler._sent == []
+
+
+@pytest.mark.anyio
+async def test_handle_normal_message_sends_direct_response_for_non_pending_durable_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = TelegramTopicRecord(
+        pma_enabled=True,
+        workspace_path=None,
+        repo_id="repo-1",
+        agent="codex",
+    )
+    handler = _ManagedThreadPMAHandler(record, tmp_path)
+
+    async def _fake_run_turn_and_collect_result(
+        *args: Any, **kwargs: Any
+    ) -> _TurnRunResult:
+        _ = args, kwargs
+        return _TurnRunResult(
+            record=record,
+            thread_id="backend-1",
+            turn_id="exec-1",
+            response="telegram visible fallback reply",
+            placeholder_id=None,
+            elapsed_seconds=None,
+            token_usage=None,
+            transcript_message_id=None,
+            transcript_text=None,
+            durable_delivery_handled=False,
+            durable_delivery_pending=False,
+            durable_delivery_id="terminal-or-replayed-delivery",
+            durable_delivery_claim_token=None,
+        )
+
+    monkeypatch.setattr(
+        handler,
+        "_run_turn_and_collect_result",
+        _fake_run_turn_and_collect_result,
+    )
+
+    message = TelegramMessage(
+        update_id=1,
+        message_id=10,
+        chat_id=-1001,
+        thread_id=101,
+        from_user_id=42,
+        text="hello",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_normal_message(message, runtime=_RuntimeStub())
+
+    assert "telegram visible fallback reply" in handler._sent
+
+
+@pytest.mark.anyio
+async def test_handle_normal_message_sends_when_direct_delivery_begin_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = TelegramTopicRecord(
+        pma_enabled=True,
+        workspace_path=None,
+        repo_id="repo-1",
+        agent="codex",
+    )
+    handler = _ManagedThreadPMAHandler(record, tmp_path)
+
+    async def _fake_run_turn_and_collect_result(
+        *args: Any, **kwargs: Any
+    ) -> _TurnRunResult:
+        _ = args, kwargs
+        return _TurnRunResult(
+            record=record,
+            thread_id="backend-1",
+            turn_id="exec-1",
+            response="telegram visible fallback reply",
+            placeholder_id=None,
+            elapsed_seconds=None,
+            token_usage=None,
+            transcript_message_id=None,
+            transcript_text=None,
+            durable_delivery_handled=False,
+            durable_delivery_pending=True,
+            durable_delivery_id="delivery-1",
+            durable_delivery_claim_token="claim-token",
+        )
+
+    def _raise_begin(*args: Any, **kwargs: Any) -> Any:
+        _ = args, kwargs
+        raise RuntimeError("ledger unavailable")
+
+    monkeypatch.setattr(
+        handler,
+        "_run_turn_and_collect_result",
+        _fake_run_turn_and_collect_result,
+    )
+    monkeypatch.setattr(
+        execution_commands_module,
+        "begin_managed_thread_direct_delivery",
+        _raise_begin,
+    )
+
+    message = TelegramMessage(
+        update_id=1,
+        message_id=10,
+        chat_id=-1001,
+        thread_id=101,
+        from_user_id=42,
+        text="hello",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_normal_message(message, runtime=_RuntimeStub())
+
+    assert "telegram visible fallback reply" in handler._sent
+
+
+@pytest.mark.anyio
+async def test_handle_normal_message_records_retry_when_direct_send_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = TelegramTopicRecord(
+        pma_enabled=True,
+        workspace_path=None,
+        repo_id="repo-1",
+        agent="codex",
+    )
+    handler = _ManagedThreadPMAHandler(record, tmp_path)
+    engine = SQLiteManagedThreadDeliveryEngine(tmp_path)
+    finalized = execution_commands_module.ManagedThreadFinalizationResult(
+        status="ok",
+        assistant_text="telegram managed final reply",
+        error=None,
+        managed_thread_id="thread-1",
+        managed_turn_id="exec-1",
+        backend_thread_id="backend-1",
+    )
+    intent = build_managed_thread_delivery_intent(
+        finalized,
+        surface=execution_commands_module.ManagedThreadSurfaceInfo(
+            log_label="Telegram",
+            surface_kind="telegram",
+            surface_key="-1001:101",
+        ),
+        transport_target={"chat_id": -1001, "thread_id": 101},
+    )
+    record_entry = engine.create_intent(intent).record
+    claim = engine.claim_delivery(record_entry.delivery_id)
+    assert claim is not None
+
+    async def _fake_run_turn_and_collect_result(
+        *args: Any, **kwargs: Any
+    ) -> _TurnRunResult:
+        _ = args, kwargs
+        return _TurnRunResult(
+            record=record,
+            thread_id="backend-1",
+            turn_id="exec-1",
+            response="telegram managed final reply",
+            placeholder_id=None,
+            elapsed_seconds=None,
+            token_usage=None,
+            transcript_message_id=None,
+            transcript_text=None,
+            durable_delivery_handled=False,
+            durable_delivery_pending=True,
+            durable_delivery_id=record_entry.delivery_id,
+            durable_delivery_claim_token=claim.claim_token,
+        )
+
+    async def _raise_delivery(*args: Any, **kwargs: Any) -> bool:
+        _ = args, kwargs
+        raise RuntimeError("telegram send failed")
+
+    monkeypatch.setattr(
+        handler,
+        "_run_turn_and_collect_result",
+        _fake_run_turn_and_collect_result,
+    )
+    monkeypatch.setattr(handler, "_deliver_turn_response", _raise_delivery)
+
+    message = TelegramMessage(
+        update_id=1,
+        message_id=10,
+        chat_id=-1001,
+        thread_id=101,
+        from_user_id=42,
+        text="hello",
+        date=None,
+        is_topic_message=True,
+    )
+
+    with pytest.raises(RuntimeError, match="telegram send failed"):
+        await handler._handle_normal_message(message, runtime=_RuntimeStub())
+
+    current = engine._ledger.get_delivery(record_entry.delivery_id)
+    assert current is not None
+    assert current.state is ManagedThreadDeliveryState.RETRY_SCHEDULED
+    assert current.claim_token is None
+    assert current.last_error == "direct_telegram_surface_delivery_failed"
 
 
 @pytest.mark.anyio
