@@ -40,6 +40,7 @@ from ...adapters.chat.forwarding import (
     compose_inbound_message_text,
 )
 from ...adapters.chat.managed_thread_direct_delivery import (
+    MANAGED_THREAD_DIRECT_DELIVERY_SEND_SUPPRESSED,
     begin_managed_thread_direct_delivery,
     complete_managed_thread_direct_delivery,
 )
@@ -222,7 +223,7 @@ def _begin_pending_discord_direct_delivery(
             session_key=session_key,
             delivery_id=delivery_id,
         )
-        return None
+        return MANAGED_THREAD_DIRECT_DELIVERY_SEND_SUPPRESSED
     return lease
 
 
@@ -1468,32 +1469,46 @@ async def _deliver_discord_turn_result(
         not send_final_message and not delivery_visibility_pending
     )
     visible_failure_notice = False
+    direct_delivery_begin = None
     direct_delivery_lease = None
     durable_delivery_has_record = bool(durable_delivery_id)
     if delivery_visibility_pending and durable_delivery_has_record:
-        direct_delivery_lease = _begin_pending_discord_direct_delivery(
+        direct_delivery_begin = _begin_pending_discord_direct_delivery(
             dispatch.service,
             delivery_id=durable_delivery_id,
             claim_token=durable_delivery_claim_token,
             channel_id=dispatch.channel_id,
             session_key=dispatch.session_key,
         )
+        if direct_delivery_begin is not MANAGED_THREAD_DIRECT_DELIVERY_SEND_SUPPRESSED:
+            direct_delivery_lease = direct_delivery_begin
     if send_final_message:
         if (
             delivery_visibility_pending
             and durable_delivery_has_record
-            and direct_delivery_lease is None
+            and direct_delivery_begin is MANAGED_THREAD_DIRECT_DELIVERY_SEND_SUPPRESSED
         ):
             visible_terminal_delivery = False
         else:
-            visible_terminal_delivery = await _send_discord_turn_section(
-                dispatch.service,
-                channel_id=dispatch.channel_id,
-                text=response_text or "(No response text returned.)",
-                record_prefix=f"turn:final:{dispatch.session_key}",
-                attachment_filename="final-response.md",
-                attachment_caption="Final response too long; attached as final-response.md.",
-            )
+            try:
+                visible_terminal_delivery = await _send_discord_turn_section(
+                    dispatch.service,
+                    channel_id=dispatch.channel_id,
+                    text=response_text or "(No response text returned.)",
+                    record_prefix=f"turn:final:{dispatch.session_key}",
+                    attachment_filename="final-response.md",
+                    attachment_caption="Final response too long; attached as final-response.md.",
+                )
+            finally:
+                if direct_delivery_lease is not None:
+                    _complete_pending_discord_direct_delivery(
+                        dispatch.service,
+                        lease=direct_delivery_lease,
+                        channel_id=dispatch.channel_id,
+                        session_key=dispatch.session_key,
+                        delivered=visible_terminal_delivery,
+                    )
+                    direct_delivery_lease = None
     if delivery_visibility_pending and durable_delivery_has_record:
         if direct_delivery_lease is not None:
             _complete_pending_discord_direct_delivery(

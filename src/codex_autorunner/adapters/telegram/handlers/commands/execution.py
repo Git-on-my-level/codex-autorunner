@@ -42,6 +42,7 @@ from .....adapters.chat.managed_thread_delivery_support import (
     managed_thread_terminal_delivery_send_key,
 )
 from .....adapters.chat.managed_thread_direct_delivery import (
+    MANAGED_THREAD_DIRECT_DELIVERY_SEND_SUPPRESSED,
     begin_managed_thread_direct_delivery,
     complete_managed_thread_direct_delivery,
 )
@@ -378,7 +379,7 @@ def _begin_pending_telegram_direct_delivery(
             thread_id=thread_id,
             delivery_id=delivery_id,
         )
-        return None
+        return MANAGED_THREAD_DIRECT_DELIVERY_SEND_SUPPRESSED
     return lease
 
 
@@ -1516,9 +1517,9 @@ async def _run_telegram_managed_thread_turn(
             if send_failure_response and not getattr(
                 _flow, "durable_delivery_performed", False
             ):
-                direct_delivery_lease = None
+                direct_delivery_begin = None
                 if getattr(_flow, "durable_delivery_pending", False):
-                    direct_delivery_lease = _begin_pending_telegram_direct_delivery(
+                    direct_delivery_begin = _begin_pending_telegram_direct_delivery(
                         handlers,
                         delivery_id=getattr(_flow, "durable_delivery_id", None),
                         claim_token=getattr(
@@ -1531,23 +1532,33 @@ async def _run_telegram_managed_thread_turn(
                     )
                 if (
                     not getattr(_flow, "durable_delivery_pending", False)
-                    or direct_delivery_lease is not None
+                    or direct_delivery_begin
+                    is not MANAGED_THREAD_DIRECT_DELIVERY_SEND_SUPPRESSED
                 ):
-                    response_sent = await handlers._deliver_turn_response(
-                        chat_id=message.chat_id,
-                        thread_id=message.thread_id,
-                        reply_to=message.message_id,
-                        placeholder_id=prepared_placeholder_id,
-                        response=failure_message,
+                    direct_delivery_lease = (
+                        direct_delivery_begin
+                        if direct_delivery_begin
+                        is not MANAGED_THREAD_DIRECT_DELIVERY_SEND_SUPPRESSED
+                        else None
                     )
-                    if direct_delivery_lease is not None:
-                        _complete_pending_telegram_direct_delivery(
-                            handlers,
-                            lease=direct_delivery_lease,
+                    response_sent = False
+                    try:
+                        response_sent = await handlers._deliver_turn_response(
                             chat_id=message.chat_id,
                             thread_id=message.thread_id,
-                            delivered=response_sent,
+                            reply_to=message.message_id,
+                            placeholder_id=prepared_placeholder_id,
+                            response=failure_message,
                         )
+                    finally:
+                        if direct_delivery_lease is not None:
+                            _complete_pending_telegram_direct_delivery(
+                                handlers,
+                                lease=direct_delivery_lease,
+                                chat_id=message.chat_id,
+                                thread_id=message.thread_id,
+                                delivered=response_sent,
+                            )
             elif send_failure_response and prepared_placeholder_id is not None:
                 await handlers._delete_message(
                     message.chat_id,

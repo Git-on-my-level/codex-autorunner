@@ -21,6 +21,17 @@ class ManagedThreadDirectDeliveryLease:
     claim_token: str
 
 
+class ManagedThreadDirectDeliverySendSuppressed:
+    """Active foreign claim owns delivery; direct surface send must not run."""
+
+    __slots__ = ()
+
+
+MANAGED_THREAD_DIRECT_DELIVERY_SEND_SUPPRESSED = (
+    ManagedThreadDirectDeliverySendSuppressed()
+)
+
+
 def begin_managed_thread_direct_delivery(
     state_root: Path,
     *,
@@ -70,7 +81,9 @@ def complete_managed_thread_direct_delivery(
 
 
 __all__ = [
+    "MANAGED_THREAD_DIRECT_DELIVERY_SEND_SUPPRESSED",
     "ManagedThreadDirectDeliveryLease",
+    "ManagedThreadDirectDeliverySendSuppressed",
     "begin_managed_thread_direct_delivery",
     "complete_managed_thread_direct_delivery",
 ]
