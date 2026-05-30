@@ -122,6 +122,35 @@ def test_record_event_if_new_dedupes_rotating_ids_by_comment_identity(
     ]
 
 
+def test_record_event_allows_same_comment_id_for_distinct_webhook_deliveries(
+    tmp_path: Path,
+) -> None:
+    store = ScmEventStore(tmp_path)
+
+    created = store.record_event(
+        provider="github",
+        event_type="pull_request_review_comment",
+        repo_slug="acme/widgets",
+        pr_number=17,
+        delivery_id="delivery-created",
+        payload={"action": "created", "comment_id": "3328937952"},
+    )
+    edited = store.record_event(
+        provider="github",
+        event_type="pull_request_review_comment",
+        repo_slug="acme/widgets",
+        pr_number=17,
+        delivery_id="delivery-edited",
+        payload={"action": "edited", "comment_id": "3328937952"},
+    )
+
+    assert created.event_id != edited.event_id
+    assert {event.delivery_id for event in store.list_events(limit=10)} == {
+        "delivery-created",
+        "delivery-edited",
+    }
+
+
 def test_record_event_if_new_allows_different_comment_ids(tmp_path: Path) -> None:
     store = ScmEventStore(tmp_path)
 

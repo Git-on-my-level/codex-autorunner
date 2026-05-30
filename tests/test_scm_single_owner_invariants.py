@@ -288,6 +288,7 @@ class TestSchemaOwnership:
         ]
         assert len(dedup_idx) == 1
         assert "event_type, repo_slug, pr_number, comment_id" in dedup_idx[0]["sql"]
+        assert "delivery_id IS NULL" in dedup_idx[0]["sql"]
         assert "UNIQUE" in dedup_idx[0]["sql"]
 
     def test_pr_binding_unique_on_provider_repo_pr(self, tmp_path: Path) -> None:

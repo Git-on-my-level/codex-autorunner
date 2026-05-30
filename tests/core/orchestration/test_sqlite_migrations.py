@@ -342,15 +342,12 @@ def test_turn_execution_contract_migration_backfills_legacy_thread_rows(
         conn.execute("DELETE FROM orch_schema_migrations WHERE version >= 37")
 
         version = apply_orchestration_migrations(conn)
-        rows = {
-            row["execution_id"]: row
-            for row in conn.execute("""
+        rows = {row["execution_id"]: row for row in conn.execute("""
                 SELECT execution_id, turn_contract_version, turn_request_json,
                        turn_record_json, runtime_identity_json
                   FROM orch_thread_executions
                  WHERE thread_target_id = 'thread-legacy'
-                """).fetchall()
-        }
+                """).fetchall()}
 
     assert version == ORCHESTRATION_SCHEMA_VERSION
     queued_request = json.loads(rows["turn-queued"]["turn_request_json"])
@@ -754,14 +751,11 @@ def test_turn_execution_contract_migration_repairs_legacy_opencode_models(
         conn.execute("DELETE FROM orch_schema_migrations WHERE version >= 37")
 
         version = apply_orchestration_migrations(conn)
-        rows = {
-            row["execution_id"]: row
-            for row in conn.execute("""
+        rows = {row["execution_id"]: row for row in conn.execute("""
                 SELECT execution_id, turn_request_json, turn_record_json
                   FROM orch_thread_executions
                  WHERE thread_target_id = 'thread-opencode-legacy'
-                """).fetchall()
-        }
+                """).fetchall()}
 
     assert version == ORCHESTRATION_SCHEMA_VERSION
     unresolved_request = json.loads(rows["turn-unresolved"]["turn_request_json"])
@@ -1481,21 +1475,17 @@ def test_apply_orchestration_migrations_dedupes_scm_events_by_comment_identity(
         )
 
         version_after = apply_orchestration_migrations(conn)
-        rows = conn.execute(
-            """
+        rows = conn.execute("""
             SELECT event_id, comment_id
               FROM orch_scm_events
              ORDER BY occurred_at ASC
-            """
-        ).fetchall()
-        indexes = conn.execute(
-            """
+            """).fetchall()
+        indexes = conn.execute("""
             SELECT name, sql
               FROM sqlite_master
              WHERE type = 'index'
                AND tbl_name = 'orch_scm_events'
-            """
-        ).fetchall()
+            """).fetchall()
 
     assert version_after == ORCHESTRATION_SCHEMA_VERSION
     assert [(row["event_id"], row["comment_id"]) for row in rows] == [
@@ -1657,13 +1647,10 @@ def test_apply_orchestration_migrations_reconciles_stale_running_executions_from
         )
 
         version_after = apply_orchestration_migrations(conn)
-        rows = {
-            row["execution_id"]: row
-            for row in conn.execute("""
+        rows = {row["execution_id"]: row for row in conn.execute("""
                 SELECT execution_id, status, error_text, finished_at
                   FROM orch_thread_executions
-                """).fetchall()
-        }
+                """).fetchall()}
         unique_index = conn.execute("""
             SELECT name
               FROM sqlite_master

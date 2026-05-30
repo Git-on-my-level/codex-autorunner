@@ -2675,13 +2675,11 @@ def _scm_comment_id_from_payload(payload_json: object) -> str | None:
 def _backfill_scm_event_comment_ids(conn: sqlite3.Connection) -> None:
     if not _table_exists(conn, "orch_scm_events"):
         return
-    rows = conn.execute(
-        """
+    rows = conn.execute("""
         SELECT event_id, payload_json
           FROM orch_scm_events
          WHERE comment_id IS NULL
-        """
-    ).fetchall()
+        """).fetchall()
     for row in rows:
         comment_id = _scm_comment_id_from_payload(row["payload_json"])
         if comment_id is None:
@@ -2699,8 +2697,7 @@ def _backfill_scm_event_comment_ids(conn: sqlite3.Connection) -> None:
 def _clear_duplicate_scm_event_comment_ids(conn: sqlite3.Connection) -> None:
     if not _table_exists(conn, "orch_scm_events"):
         return
-    conn.execute(
-        """
+    conn.execute("""
         UPDATE orch_scm_events
            SET comment_id = NULL
          WHERE rowid IN (
@@ -2712,14 +2709,14 @@ def _clear_duplicate_scm_event_comment_ids(conn: sqlite3.Connection) -> None:
                            ORDER BY occurred_at ASC, created_at ASC, event_id ASC
                        ) AS duplicate_rank
                   FROM orch_scm_events
-                 WHERE repo_slug IS NOT NULL
+                 WHERE delivery_id IS NULL
+                   AND repo_slug IS NOT NULL
                    AND pr_number IS NOT NULL
                    AND comment_id IS NOT NULL
               )
              WHERE duplicate_rank > 1
          )
-        """
-    )
+        """)
 
 
 def _apply_v45(conn: sqlite3.Connection) -> None:
@@ -2735,7 +2732,8 @@ def _apply_v45(conn: sqlite3.Connection) -> None:
         conn.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_scm_events_comment_identity
                 ON orch_scm_events(event_type, repo_slug, pr_number, comment_id)
-             WHERE repo_slug IS NOT NULL
+             WHERE delivery_id IS NULL
+               AND repo_slug IS NOT NULL
                AND pr_number IS NOT NULL
                AND comment_id IS NOT NULL
             """)

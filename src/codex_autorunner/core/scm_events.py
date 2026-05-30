@@ -305,6 +305,7 @@ class ScmEventStore:
                    AND repo_slug = ?
                    AND pr_number = ?
                    AND comment_id = ?
+                   AND delivery_id IS NULL
                  ORDER BY occurred_at ASC, created_at ASC, event_id ASC
                  LIMIT 1
                 """,
