@@ -87,7 +87,12 @@ def create_hub_app(
         browser_auth_store = BrowserAuthStore(context.config.root)
         browser_auth_store.ensure_bootstrap_token()
         app.state.browser_auth_store = browser_auth_store
-        app.include_router(build_auth_routes(browser_auth_store))
+        app.include_router(
+            build_auth_routes(
+                browser_auth_store,
+                cookie_secure=context.config.browser_auth.cookie_secure,
+            )
+        )
     web_app_assets_dir = web_static_dir / "_app"
     if web_app_assets_dir.exists():
         app.mount(

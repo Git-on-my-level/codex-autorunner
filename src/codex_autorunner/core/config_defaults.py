@@ -254,6 +254,13 @@ def _default_server_section() -> Dict[str, Any]:
     }
 
 
+def _default_browser_auth_section() -> Dict[str, Any]:
+    """Build the default browser auth section."""
+    return {
+        "cookie_secure": "auto",
+    }
+
+
 def _default_static_assets_section() -> Dict[str, Any]:
     """Build the default static_assets section."""
     return {
@@ -785,6 +792,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
     "opencode": _default_opencode_section(),
     "usage": _default_usage_section(),
     "server": _default_server_section(),
+    "browser_auth": _default_browser_auth_section(),
     "server_log": None,
     "static_assets": _default_static_assets_section(),
     "housekeeping": _default_housekeeping_section(include_hub_update_rules=True),

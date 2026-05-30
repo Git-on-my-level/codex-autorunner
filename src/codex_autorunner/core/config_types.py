@@ -18,6 +18,8 @@ from .report_retention import (
 _DEFAULT_FLOW_RETENTION_DAYS = 7
 _DEFAULT_FLOW_SWEEP_INTERVAL_SECONDS = 24 * 60 * 60
 
+BrowserAuthCookieSecure = Union[Literal["auto"], bool]
+
 
 @dataclasses.dataclass(frozen=True)
 class FlowRetentionConfig:
@@ -37,6 +39,11 @@ class StaticAssetsConfig:
     cache_root: Path
     max_cache_entries: int
     max_cache_age_days: Optional[int]
+
+
+@dataclasses.dataclass
+class BrowserAuthConfig:
+    cookie_secure: BrowserAuthCookieSecure = "auto"
 
 
 @dataclasses.dataclass
@@ -424,6 +431,7 @@ class HubConfig(AgentConfigMixin):
     server_auth_token_env: str
     server_allowed_hosts: List[str]
     server_allowed_origins: List[str]
+    browser_auth: BrowserAuthConfig
     log: LogConfig
     server_log: LogConfig
     static_assets: StaticAssetsConfig
