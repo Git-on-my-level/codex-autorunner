@@ -41,7 +41,6 @@ def infer_managed_thread_chat_kind(
     *,
     metadata: Any = None,
     display_name: Any = None,
-    default: ManagedThreadChatKind = MANAGED_THREAD_CHAT_KIND_PMA,
 ) -> ManagedThreadChatKind:
     metadata_map = metadata if isinstance(metadata, dict) else {}
     explicit = normalize_managed_thread_chat_kind(
@@ -52,7 +51,7 @@ def infer_managed_thread_chat_kind(
         return explicit
     if isinstance(display_name, str) and "coding agent" in display_name.strip().lower():
         return MANAGED_THREAD_CHAT_KIND_CODING_AGENT
-    return default
+    return MANAGED_THREAD_CHAT_KIND_PMA
 
 
 __all__ = [

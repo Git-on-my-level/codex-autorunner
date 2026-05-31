@@ -56,7 +56,6 @@ def build_agent_definition(
     *,
     repo_id: Optional[str] = None,
     workspace_root: Optional[str] = None,
-    default_model: Optional[str] = None,
     description: Optional[str] = None,
     available: bool = True,
     runtime_capabilities: Optional[Iterable[RuntimeCapability]] = None,
@@ -71,7 +70,7 @@ def build_agent_definition(
         ),
         repo_id=repo_id,
         workspace_root=workspace_root,
-        default_model=default_model,
+        default_model=None,
         description=description,
         available=available,
     )

@@ -7,10 +7,10 @@ from ..text_utils import _normalize_optional_text
 BusyPolicy = Literal["queue", "interrupt", "reject"]
 
 
-def normalize_busy_policy(value: Any, *, default: BusyPolicy = "queue") -> BusyPolicy:
+def normalize_busy_policy(value: Any) -> BusyPolicy:
     normalized = _normalize_optional_text(value)
     if normalized is None:
-        return default
+        return "queue"
     busy_policy = normalized.lower()
     if busy_policy not in {"queue", "interrupt", "reject"}:
         raise ValueError("busy_policy must be one of: queue, interrupt, reject")
