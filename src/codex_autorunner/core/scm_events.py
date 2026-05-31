@@ -61,6 +61,52 @@ def scm_polling_dedupe_key(
     return f"{event_type}:{repo_slug}:{pr_number}:{normalized_comment_id}"
 
 
+def _find_polling_event_row_by_comment_identity(
+    conn: Any,
+    *,
+    provider: str,
+    event_type: str,
+    repo_slug: Optional[str],
+    pr_number: Optional[int],
+    comment_id: Optional[str],
+) -> Any:
+    if repo_slug is None or pr_number is None or comment_id is None:
+        return None
+    return conn.execute(
+        """
+        SELECT *
+          FROM orch_scm_events
+         WHERE provider = ?
+           AND source = 'polling'
+           AND event_type = ?
+           AND repo_slug = ?
+           AND pr_number = ?
+           AND comment_id = ?
+         ORDER BY occurred_at ASC, created_at ASC, event_id ASC
+         LIMIT 1
+        """,
+        (provider, event_type, repo_slug, pr_number, comment_id),
+    ).fetchone()
+
+
+def _reconcile_legacy_polling_dedupe_key(
+    conn: Any,
+    *,
+    row: Any,
+    content_dedupe_key: str,
+) -> None:
+    if _normalize_text(row["dedupe_key"]) == content_dedupe_key:
+        return
+    conn.execute(
+        """
+        UPDATE orch_scm_events
+           SET dedupe_key = ?
+         WHERE event_id = ?
+        """,
+        (content_dedupe_key, row["event_id"]),
+    )
+
+
 @dataclass(frozen=True)
 class ScmEvent:
     event_id: str
@@ -266,6 +312,25 @@ class ScmEventStore:
         ) or _normalize_text(dedupe_key)
 
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            if normalized_dedupe_key is not None:
+                duplicate_row = _find_polling_event_row_by_comment_identity(
+                    conn,
+                    provider=normalized_provider,
+                    event_type=normalized_event_type,
+                    repo_slug=normalized_repo_slug,
+                    pr_number=normalized_pr_number,
+                    comment_id=normalized_comment_id,
+                )
+                if duplicate_row is not None:
+                    _reconcile_legacy_polling_dedupe_key(
+                        conn,
+                        row=duplicate_row,
+                        content_dedupe_key=normalized_dedupe_key,
+                    )
+                    if not require_new:
+                        return None
+                    return _event_from_row(duplicate_row)
+
             verb = "INSERT" if require_new else "INSERT OR IGNORE"
             cursor = conn.execute(
                 f"""
@@ -332,17 +397,42 @@ class ScmEventStore:
         if normalized_source is None or normalized_dedupe_key is None:
             return None
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
-            row = conn.execute(
-                """
-                SELECT *
-                  FROM orch_scm_events
-                 WHERE source = ?
-                   AND dedupe_key = ?
-                 ORDER BY occurred_at ASC, created_at ASC, event_id ASC
-                 LIMIT 1
-                """,
-                (normalized_source, normalized_dedupe_key),
-            ).fetchone()
+            if normalized_source == "polling":
+                row = conn.execute(
+                    """
+                    SELECT *
+                      FROM orch_scm_events
+                     WHERE source = ?
+                       AND (
+                           dedupe_key = ?
+                        OR (
+                           dedupe_key = event_id
+                           AND comment_id IS NOT NULL
+                           AND repo_slug IS NOT NULL
+                           AND pr_number IS NOT NULL
+                           AND (
+                               event_type || ':' || repo_slug || ':' ||
+                               CAST(pr_number AS TEXT) || ':' || comment_id
+                           ) = ?
+                        )
+                       )
+                     ORDER BY occurred_at ASC, created_at ASC, event_id ASC
+                     LIMIT 1
+                    """,
+                    (normalized_source, normalized_dedupe_key, normalized_dedupe_key),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT *
+                      FROM orch_scm_events
+                     WHERE source = ?
+                       AND dedupe_key = ?
+                     ORDER BY occurred_at ASC, created_at ASC, event_id ASC
+                     LIMIT 1
+                    """,
+                    (normalized_source, normalized_dedupe_key),
+                ).fetchone()
         return _event_from_row(row) if row is not None else None
 
     def list_events(
