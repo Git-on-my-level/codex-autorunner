@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 from ...core.pr_bindings import PrBinding
-from ...core.scm_events import ScmEvent, ScmEventStore
+from ...core.scm_events import ScmEvent, ScmEventStore, scm_polling_dedupe_key
 from ...core.scm_polling_watches import ScmPollingWatch
 from ...core.text_utils import _mapping, _normalize_text
 from .polling_snapshot import _comment_timestamp, snapshot_map
@@ -97,12 +97,20 @@ def _record_poll_event(
         binding=binding,
         payload=payload,
     )
+    payload_map = _mapping(payload)
+    dedupe_key = scm_polling_dedupe_key(
+        event_type=event_type,
+        repo_slug=watch.repo_slug,
+        pr_number=watch.pr_number,
+        comment_id=payload_map.get("comment_id"),
+        source="polling",
+    )
     event = event_store.record_event_if_new(
         event_id=event_id,
         provider="github",
         event_type=event_type,
         source="polling",
-        dedupe_key=event_id,
+        dedupe_key=dedupe_key,
         occurred_at=occurred_at,
         received_at=received_at,
         repo_slug=watch.repo_slug,
@@ -117,7 +125,7 @@ def _record_poll_event(
     if existing is None:
         existing = event_store.get_event_by_dedupe_key(
             source="polling",
-            dedupe_key=event_id,
+            dedupe_key=dedupe_key,
         )
     if existing is None:
         raise RuntimeError("SCM event row missing after duplicate poll event")

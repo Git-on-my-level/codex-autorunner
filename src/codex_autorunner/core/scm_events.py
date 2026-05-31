@@ -46,6 +46,21 @@ def _normalize_json_object(value: Any, *, field_name: str) -> dict[str, Any]:
     raise ValueError(f"{field_name} must be a JSON object")
 
 
+def scm_polling_dedupe_key(
+    *,
+    event_type: str,
+    repo_slug: Optional[str],
+    pr_number: Optional[int],
+    comment_id: Optional[str],
+    source: Optional[str],
+) -> Optional[str]:
+    normalized_source = _normalize_text(source)
+    normalized_comment_id = _normalize_text(comment_id)
+    if normalized_source != "polling" or normalized_comment_id is None:
+        return None
+    return f"{event_type}:{repo_slug}:{pr_number}:{normalized_comment_id}"
+
+
 @dataclass(frozen=True)
 class ScmEvent:
     event_id: str
@@ -207,7 +222,6 @@ class ScmEventStore:
         normalized_provider = _normalize_text(provider)
         normalized_event_type = _normalize_text(event_type)
         normalized_source = _normalize_text(source)
-        normalized_dedupe_key = _normalize_text(dedupe_key)
         normalized_event_id = _normalize_text(event_id) or uuid.uuid4().hex
         if normalized_provider is None:
             raise ValueError("provider is required")
@@ -239,9 +253,17 @@ class ScmEventStore:
         )
         created_at = now_iso()
         normalized_pr_number = _normalize_int(pr_number, field_name="pr_number")
+        normalized_repo_slug = _normalize_text(repo_slug)
         normalized_comment_id = _normalize_text(
             payload_object.get("comment_id")
         ) or _normalize_text(comment_id)
+        normalized_dedupe_key = scm_polling_dedupe_key(
+            event_type=normalized_event_type,
+            repo_slug=normalized_repo_slug,
+            pr_number=normalized_pr_number,
+            comment_id=normalized_comment_id,
+            source=normalized_source,
+        ) or _normalize_text(dedupe_key)
 
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
             verb = "INSERT" if require_new else "INSERT OR IGNORE"
@@ -272,7 +294,7 @@ class ScmEventStore:
                     normalized_event_type,
                     normalized_source,
                     normalized_dedupe_key,
-                    _normalize_text(repo_slug),
+                    normalized_repo_slug,
                     _normalize_text(repo_id),
                     normalized_pr_number,
                     normalized_comment_id,
