@@ -895,10 +895,13 @@ class GitHubCommands(TelegramCommandSupportMixin):
                 topic_key = await self._resolve_topic_key(
                     message.chat_id, message.thread_id
                 )
+                canonical_review_prompt = (
+                    setup.review_args.strip() or "Review uncommitted changes."
+                )
                 message_request = MessageRequest(
                     target_id=setup.review_session_id,
                     target_kind="thread",
-                    message_text=setup.review_args,
+                    message_text=canonical_review_prompt,
                     kind="review",
                     busy_policy="reject",
                     model=record.model,

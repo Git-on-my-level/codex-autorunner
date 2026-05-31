@@ -373,6 +373,13 @@ class OpenCodeSupervisor:
         workspace_root: Path,
         agent_id: str,
         model: Optional[str] = None,
+        *,
+        title: Optional[str] = None,
+        description: Optional[str] = None,
+        mode: Optional[str] = None,
+        permission: Optional[dict[str, object]] = None,
+        steps: Optional[int] = None,
+        body: Optional[str] = None,
     ) -> None:
         """Ensure subagent agent config file exists with correct model.
 
@@ -392,8 +399,12 @@ class OpenCodeSupervisor:
             workspace_root=workspace_root,
             agent_id=agent_id,
             model=model,
-            title=agent_id,
-            description=f"Subagent for {agent_id} tasks",
+            title=title or agent_id,
+            description=description or f"Subagent for {agent_id} tasks",
+            mode=mode,
+            permission=permission,
+            steps=steps,
+            body=body,
         )
 
     async def _close_handle(self, handle: OpenCodeHandle, *, reason: str) -> None:

@@ -80,7 +80,11 @@ def test_build_opencode_supervisor_from_repo_config(
     assert captured["session_stall_timeout_seconds"] == 55
     assert captured["max_text_chars"] == 9999
     assert captured["base_env"] is env
-    assert captured["subagent_models"] == {"subagent": "model-x", "helper": "model-y"}
+    assert captured["subagent_models"] == {
+        "car-read-explore": "zai-coding-plan/glm-5.1",
+        "subagent": "model-x",
+        "helper": "model-y",
+    }
 
 
 def test_build_opencode_supervisor_from_repo_config_wraps_for_docker_destination(

@@ -25,7 +25,7 @@ def _default_agents_section() -> Dict[str, Any]:
         "opencode": {
             "binary": "opencode",
             "subagent_models": {
-                "subagent": "zai-coding-plan/glm-4.7-flashx",
+                "car-read-explore": "zai-coding-plan/glm-5.1",
             },
         },
         "hermes": {
@@ -498,8 +498,8 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "enabled": True,
         "agent": "opencode",
         "model": "zai-coding-plan/glm-5.1",
-        "subagent_agent": "subagent",
-        "subagent_model": "zai-coding-plan/glm-4.7-flashx",
+        "subagent_agent": "car-read-explore",
+        "subagent_model": "zai-coding-plan/glm-5.1",
         "reasoning": None,
         "max_wallclock_seconds": None,
     },

@@ -46,6 +46,14 @@ from .models import (
 REVIEW_STATE_VERSION = 1
 REVIEW_TIMEOUT_SECONDS = 3600
 REVIEW_INTERRUPT_GRACE_SECONDS = 10
+OPENCODE_REVIEW_COORDINATOR_AGENT = "car-review-coordinator"
+OPENCODE_REVIEW_READ_SUBAGENT = "car-read-explore"
+OPENCODE_REVIEW_READ_PERMISSION: dict[str, object] = {
+    "edit": "deny",
+    "write": "deny",
+    "bash": "deny",
+    "todowrite": "deny",
+}
 REVIEW_PROMPT = """# Multi-Agent Code Review Prompt (Coordinator + Subagents)
 
 You are coordinating a multi-agent, high-signal code review.
@@ -145,9 +153,10 @@ For each bucket:
 
 For each bucket, launch a subagent using the template below.
 
-**IMPORTANT**: Use the "subagent" agent type. Do NOT specify model in the prompt.
-- The subagent agent is pre-configured with GLM-4.7-FlashX
-- This avoids concurrency throttling while maintaining full GLM-4.7 for the coordinator
+**IMPORTANT**: Use only the configured read-only subagent agent type. Do NOT specify model in the prompt.
+- The subagent agent is pre-configured by CAR for read-only exploration
+- Do not ask subagents to write files, edit code, run shell commands, or commit changes
+- This keeps Task tool work isolated to analysis while the coordinator owns report writing
 
 Subagent prompt template:
 
@@ -214,7 +223,10 @@ Then:
 
 ### 5) Launch 2–3 Independent Pruning Agents
 
-Each pruning agent must read `{{scratchpad_dir}}/FINDINGS_RAW.md` first, then produce a pruned list.
+Each pruning agent must use the configured read-only subagent agent type. It must
+read `{{scratchpad_dir}}/FINDINGS_RAW.md` first, then produce a pruned list.
+Do not ask pruning agents to write files directly; the coordinator records their
+outputs.
 
 Pruning criteria:
 
@@ -314,12 +326,14 @@ Prepare scratchpad files under {{scratchpad_dir}} (see list above).
 
 ## Phase 2: Parallel Bucket Reviews (Subagents)
 
-Launch subagents by review dimension:
+Launch read-only subagents by review dimension:
 * Spec compliance agent: requirement → evidence mapping.
 * Risk & regression agent: likely failure modes introduced by recent changes.
 * Optional: Test adequacy agent if tests are in-scope.
 
-Each subagent must read AUTORUNNER_CONTEXT.md and BUCKETS.md first and write findings back to the scratchpad.
+Each subagent must read AUTORUNNER_CONTEXT.md and BUCKETS.md first and return
+findings to the coordinator. Do not ask subagents to edit code, write files, run
+shell commands, or commit changes.
 
 ## Phase 3: Aggregate (Coordinator)
 
@@ -327,7 +341,10 @@ Collect subagent outputs into FINDINGS_RAW.md. Deduplicate and normalize to the 
 
 ## Phase 4: Prune (Independent Agents)
 
-Run 2–3 pruning passes (PRUNE_A.md, PRUNE_B.md, optional PRUNE_C.md) to drop speculative or low-impact items. Keep credible security issues, regressions, data loss/corruption risks, and systemic failures.
+Run 2–3 read-only pruning passes (PRUNE_A.md, PRUNE_B.md, optional PRUNE_C.md)
+to drop speculative or low-impact items. Keep credible security issues,
+regressions, data loss/corruption risks, and systemic failures. The coordinator
+writes the pruning outputs.
 
 ## Phase 5: Final Synthesis (Coordinator)
 
@@ -922,17 +939,54 @@ class ReviewService:
             repo_config = self._repo_config()
             review_cfg = repo_config.raw.get("review") or {}
 
-            subagent_agent_id = review_cfg.get("subagent_agent")
-            subagent_model = review_cfg.get("subagent_model")
+            subagent_agent_id = (
+                review_cfg.get("subagent_agent") or OPENCODE_REVIEW_READ_SUBAGENT
+            )
+            subagent_model = review_cfg.get("subagent_model") or state.model
+            coordinator_agent_id = (
+                review_cfg.get("coordinator_agent") or OPENCODE_REVIEW_COORDINATOR_AGENT
+            )
+            coordinator_model = state.model
             if subagent_agent_id:
                 await self._opencode_supervisor.ensure_subagent_config(
                     workspace_root=self.ctx.repo_root,
                     agent_id=subagent_agent_id,
                     model=subagent_model,
+                    title="CAR read-only review explorer",
+                    description="Read-only CAR review subagent",
+                    mode="subagent",
+                    permission=OPENCODE_REVIEW_READ_PERMISSION,
+                    body=(
+                        "Read repository files and return findings to the coordinator. "
+                        "Do not edit files, write scratchpad artifacts, run shell commands, "
+                        "or commit changes.\n"
+                    ),
                 )
+            runtime_agent_id = agent_id
+            if coordinator_agent_id and coordinator_model:
+                await self._opencode_supervisor.ensure_subagent_config(
+                    workspace_root=self.ctx.repo_root,
+                    agent_id=coordinator_agent_id,
+                    model=coordinator_model,
+                    title="CAR review coordinator",
+                    description="CAR OpenCode review coordinator",
+                    mode="primary",
+                    permission={
+                        "task": {
+                            "*": "deny",
+                            str(subagent_agent_id): "allow",
+                        }
+                    },
+                    body=(
+                        "Coordinate CAR review work. Use Task only for configured "
+                        "read-only review subagents; keep writing and synthesis in the "
+                        "coordinator session.\n"
+                    ),
+                )
+                runtime_agent_id = coordinator_agent_id
 
             config = OpenCodeRunConfig(
-                agent=agent_id,
+                agent=runtime_agent_id,
                 model=state.model,
                 reasoning=state.reasoning,
                 prompt=prompt,

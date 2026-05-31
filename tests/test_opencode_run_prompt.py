@@ -16,6 +16,7 @@ class _ClientStub:
     def __init__(self, session_id: str) -> None:
         self._session_id = session_id
         self.dispose_calls: list[str] = []
+        self.prompt_calls: list[dict[str, Any]] = []
 
     async def create_session(
         self, *, directory: Optional[str] = None
@@ -24,6 +25,7 @@ class _ClientStub:
         return {"sessionId": self._session_id}
 
     async def prompt_async(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        self.prompt_calls.append(dict(_kwargs))
         return {}
 
     async def abort(self, _session_id: str) -> None:
@@ -93,6 +95,7 @@ async def test_run_opencode_prompt_disposes_temporary_session_after_completion(
     assert result.turn_id == "session-1:turn"
     assert result.output_text == "done"
     assert client.dispose_calls == ["session-1"]
+    assert client.prompt_calls[0].get("agent") is None
     assert supervisor.started == [tmp_path]
     assert supervisor.finished == [tmp_path]
 
@@ -140,6 +143,42 @@ async def test_run_opencode_prompt_restarts_after_empty_pre_prompt_stream(
     assert client.dispose_calls == ["session-late-output"]
     assert supervisor.started == [tmp_path]
     assert supervisor.finished == [tmp_path]
+
+
+@pytest.mark.anyio
+async def test_run_opencode_prompt_passes_runtime_agent_when_configured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from codex_autorunner.agents.opencode import run_prompt as run_prompt_module
+
+    client = _ClientStub("session-agent")
+    supervisor = _SupervisorStub(client)
+
+    async def _fake_collect(*_args: Any, **_kwargs: Any) -> OpenCodeTurnOutput:
+        ready_event = _kwargs.get("ready_event")
+        if ready_event is not None:
+            ready_event.set()
+        return OpenCodeTurnOutput(text="done")
+
+    async def _fake_missing_env(*_args: Any, **_kwargs: Any) -> list[str]:
+        return []
+
+    monkeypatch.setattr(run_prompt_module, "collect_opencode_output", _fake_collect)
+    monkeypatch.setattr(run_prompt_module, "opencode_missing_env", _fake_missing_env)
+
+    await run_opencode_prompt(
+        supervisor,  # type: ignore[arg-type]
+        OpenCodeRunConfig(
+            agent="car-review-coordinator",
+            model=None,
+            reasoning=None,
+            prompt="hello",
+            workspace_root=str(tmp_path),
+            timeout_seconds=5,
+        ),
+    )
+
+    assert client.prompt_calls[0].get("agent") == "car-review-coordinator"
 
 
 @pytest.mark.anyio
