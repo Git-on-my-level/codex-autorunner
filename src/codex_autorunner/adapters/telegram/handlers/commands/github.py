@@ -950,7 +950,7 @@ class GitHubCommands(TelegramCommandSupportMixin):
                 turn_ref = await harness.start_review(
                     setup.workspace_root,
                     setup.review_session_id,
-                    prompt=setup.review_args,
+                    prompt=canonical_review_prompt,
                     model=record.model,
                     reasoning=None,
                     approval_mode=setup.approval_mode,
