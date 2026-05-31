@@ -32,9 +32,9 @@ def _state_default_model(agent: str, state: Any) -> Optional[str]:
     return None
 
 
-def normalize_agent_id(agent: object, *, default: str = "codex") -> str:
+def normalize_agent_id(agent: object) -> str:
     value = str(agent or "").strip().lower()
-    return value or default
+    return value or "codex"
 
 
 def builtin_default_model_for_agent(agent: object) -> Optional[str]:

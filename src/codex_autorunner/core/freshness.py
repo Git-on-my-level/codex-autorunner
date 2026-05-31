@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 DEFAULT_STALE_THRESHOLD_SECONDS = 30 * 60
+DEFAULT_RECENCY_BASIS = "snapshot_generated_at"
 
 
 def iso_now() -> str:
@@ -47,20 +48,21 @@ def build_freshness_payload(
     generated_at: Optional[str],
     stale_threshold_seconds: Any,
     candidates: Sequence[tuple[str, Any]],
-    fallback_basis: str = "snapshot_generated_at",
 ) -> dict[str, Any]:
     generated_at_text = normalize_iso_datetime(generated_at) or iso_now()
     generated_dt = parse_iso_datetime(generated_at_text) or datetime.now(timezone.utc)
     threshold_seconds = resolve_stale_threshold_seconds(stale_threshold_seconds)
 
-    recency_basis = fallback_basis
+    recency_basis = DEFAULT_RECENCY_BASIS
     basis_at = generated_at_text
     fallback_used = True
     for label, value in candidates:
         candidate_at = normalize_iso_datetime(value)
         if candidate_at is None:
             continue
-        recency_basis = str(label or fallback_basis).strip() or fallback_basis
+        recency_basis = (
+            str(label or DEFAULT_RECENCY_BASIS).strip() or DEFAULT_RECENCY_BASIS
+        )
         basis_at = candidate_at
         fallback_used = False
         break

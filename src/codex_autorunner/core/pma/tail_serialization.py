@@ -157,13 +157,6 @@ def _running_turn_stall_flags(
     return (True, reason)
 
 
-def _truncate_tool_name(value: Any) -> str | None:
-    text = normalize_optional_text(value)
-    if text is None:
-        return None
-    return truncate_text(text, 80)
-
-
 def _parse_inline_sse(raw_event: str) -> tuple[str, dict[str, Any]]:
     event_name = "message"
     data_lines: list[str] = []
@@ -1219,5 +1212,4 @@ __all__ = [
     "_serialize_persisted_timeline_tail_events",
     "_serialize_runtime_raw_tail_events",
     "_tail_event_from_run_event",
-    "_truncate_tool_name",
 ]

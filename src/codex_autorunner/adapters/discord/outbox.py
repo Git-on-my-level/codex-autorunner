@@ -15,7 +15,6 @@ from ...core.flows.archive_helpers import flow_run_archive_root
 from ..chat.outbox_kernel import (
     ChatOutboxKernel,
     OutboxAttemptResult,
-    parse_next_attempt_at,
 )
 from .rendering import DISCORD_MAX_MESSAGE_LENGTH, chunk_discord_message
 from .state import ChannelBinding, DiscordStateStore, OutboxRecord
@@ -31,10 +30,6 @@ SendMessageFn = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 EditMessageFn = Callable[[str, str, dict[str, Any]], Awaitable[Any]]
 DeleteMessageFn = Callable[[str, str], Awaitable[None]]
 DeliveredCallback = Callable[[OutboxRecord, Optional[str]], Awaitable[None]]
-
-
-def _parse_next_attempt_at(next_at_str: Optional[str]) -> Optional[datetime]:
-    return parse_next_attempt_at(next_at_str)
 
 
 def _extract_retry_after_seconds(exc: Exception) -> Optional[float]:
