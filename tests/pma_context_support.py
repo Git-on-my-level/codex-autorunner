@@ -111,6 +111,7 @@ def _format_seeded_pma_prompt(
         _STUB_SNAPSHOT if snapshot is None else snapshot,
         message,
         hub_root=hub_root if include_workspace_docs else None,
+        user_input_texts=[message],
         **prompt_kwargs,
     )
 

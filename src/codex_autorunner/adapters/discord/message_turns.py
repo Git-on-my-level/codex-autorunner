@@ -1137,6 +1137,7 @@ async def _execute_discord_thread_message(
                 prompt_text,
                 hub_root=dispatch.service._config.root,
                 prompt_state_key=dispatch.session_key,
+                user_input_texts=[dispatch.text],
             )
             prompt_text = prompt_variants.new_session_prompt
             existing_session_prompt_text = prompt_variants.existing_session_prompt
