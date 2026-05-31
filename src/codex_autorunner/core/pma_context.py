@@ -251,7 +251,6 @@ from .pma_rendering import _render_hub_snapshot  # noqa: E402
 from .pma_ticket_flow_state import (  # noqa: E402, F401
     TicketFlowRunState,
     TicketFlowWorkerCrash,
-    _dispatch_is_actionable,
     _latest_dispatch,
     _latest_reply_history_seq,
     _resolve_paused_dispatch_state,
@@ -280,7 +279,6 @@ __all__ = [
     "TicketFlowWorkerCrash",
     "_build_snapshot_freshness_summary",
     "_build_templates_snapshot",
-    "_dispatch_is_actionable",
     "_gather_inbox",
     "_latest_dispatch",
     "_latest_reply_history_seq",

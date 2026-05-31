@@ -600,7 +600,6 @@ HELPER_OWNERSHIP_RULES = (
     HelperOwnershipRule(
         owner_path="src/codex_autorunner/adapters/telegram/handlers/utils.py",
         helper_names=(
-            "_flatten_opencode_tokens",
             "_extract_opencode_usage_payload",
             "_build_opencode_token_usage",
         ),

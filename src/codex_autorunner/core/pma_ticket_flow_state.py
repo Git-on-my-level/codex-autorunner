@@ -17,9 +17,6 @@ from .ticket_flow_operator import (
     build_ticket_flow_run_state as _build_ticket_flow_run_state,
 )
 from .ticket_flow_operator import (
-    dispatch_is_actionable as _dispatch_is_actionable_impl,
-)
-from .ticket_flow_operator import (
     get_latest_ticket_flow_run_state_with_record as _get_latest_run_state_with_record,
 )
 from .ticket_flow_operator import (
@@ -31,7 +28,6 @@ from .ticket_flow_operator import (
 from .ticket_flow_operator import (
     resolve_paused_dispatch_state as _resolve_paused_dispatch_state_impl,
 )
-from .ticket_flow_summary import build_ticket_flow_summary
 
 _logger = logging.getLogger(__name__)
 
@@ -39,8 +35,6 @@ __all__ = [
     "PMA_MAX_TEXT",
     "TicketFlowRunState",
     "TicketFlowWorkerCrash",
-    "_dispatch_is_actionable",
-    "_get_ticket_flow_summary",
     "_latest_dispatch",
     "_latest_reply_history_seq",
     "_resolve_paused_dispatch_state",
@@ -79,18 +73,10 @@ def _trim_extra(extra: Any, limit: int) -> Any:
     }
 
 
-def _get_ticket_flow_summary(repo_path: Path) -> Optional[dict[str, Any]]:
-    return build_ticket_flow_summary(repo_path, include_failure=False)
-
-
 def _latest_reply_history_seq(
     repo_root: Path, run_id: str, record_input: dict[str, Any]
 ) -> int:
     return _latest_reply_history_seq_impl(repo_root, run_id, record_input)
-
-
-def _dispatch_is_actionable(dispatch_payload: Any) -> bool:
-    return _dispatch_is_actionable_impl(dispatch_payload)
 
 
 def _resolve_paused_dispatch_state(

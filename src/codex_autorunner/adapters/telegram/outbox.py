@@ -13,7 +13,6 @@ from ...core.state import now_iso
 from ..chat.outbox_kernel import (
     ChatOutboxKernel,
     OutboxAttemptResult,
-    parse_next_attempt_at,
 )
 from .client import TelegramAPIError
 from .constants import (
@@ -61,10 +60,6 @@ def _should_delete_placeholder_on_delivery(record: OutboxRecord) -> bool:
         return True
     # Backward-compatible default for existing outbox records.
     return True
-
-
-def _parse_next_attempt_at(next_at_str: Optional[str]) -> Optional[datetime]:
-    return parse_next_attempt_at(next_at_str)
 
 
 def _coalesce_key(record: OutboxRecord) -> Optional[str]:
