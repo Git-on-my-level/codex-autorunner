@@ -162,6 +162,14 @@ def test_initialize_orchestration_sqlite_creates_canonical_tables(
             "orch_chat_surface_events",
         }.issubset(names)
         assert {
+            "event_id",
+            "provider",
+            "event_type",
+            "source",
+            "dedupe_key",
+            "comment_id",
+        }.issubset(_column_names(conn, "orch_scm_events"))
+        assert {
             "operation_id",
             "operation_key",
             "operation_kind",

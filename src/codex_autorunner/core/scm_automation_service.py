@@ -950,6 +950,7 @@ def _scm_event_from_automation_event(event: AutomationEvent) -> ScmEvent:
         event_id=source_event_id or event.event_id.removeprefix("scm:"),
         provider=_normalize_text(payload.get("provider")) or "github",
         event_type=source_event_type or event.event_type,
+        source=_normalize_text(payload.get("source")) or "manual",
         occurred_at=observed_at,
         received_at=observed_at,
         created_at=observed_at,

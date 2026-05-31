@@ -28,7 +28,7 @@ from .turn_execution_storage import (
     build_turn_execution_request_from_storage,
 )
 
-ORCHESTRATION_SCHEMA_VERSION = 45
+ORCHESTRATION_SCHEMA_VERSION = 46
 
 
 @dataclass(frozen=True)
@@ -752,6 +752,8 @@ def _apply_v9(conn: sqlite3.Connection) -> None:
             event_id TEXT PRIMARY KEY,
             provider TEXT NOT NULL,
             event_type TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'polling',
+            dedupe_key TEXT,
             repo_slug TEXT,
             repo_id TEXT,
             pr_number INTEGER,
@@ -2739,6 +2741,45 @@ def _apply_v45(conn: sqlite3.Connection) -> None:
             """)
 
 
+def _apply_v46(conn: sqlite3.Connection) -> None:
+    _ensure_column(
+        conn,
+        "orch_scm_events",
+        "source",
+        "source TEXT NOT NULL DEFAULT 'polling'",
+    )
+    _ensure_column(
+        conn,
+        "orch_scm_events",
+        "dedupe_key",
+        "dedupe_key TEXT",
+    )
+    if not _table_exists(conn, "orch_scm_events"):
+        return
+    conn.execute("""
+        UPDATE orch_scm_events
+           SET source = 'webhook'
+         WHERE provider = 'github'
+           AND event_type != 'polling.discovery'
+           AND event_id NOT LIKE 'github:poll:%'
+        """)
+    conn.execute("""
+        UPDATE orch_scm_events
+           SET dedupe_key = event_id
+         WHERE source = 'polling'
+           AND dedupe_key IS NULL
+           AND event_id LIKE 'github:poll:%'
+        """)
+    conn.execute("DROP INDEX IF EXISTS idx_orch_scm_events_comment_identity")
+    conn.execute("DROP INDEX IF EXISTS idx_orch_scm_events_polling_dedupe_key")
+    conn.execute("""
+        CREATE UNIQUE INDEX idx_orch_scm_events_polling_dedupe_key
+            ON orch_scm_events(provider, source, dedupe_key)
+         WHERE source = 'polling'
+           AND dedupe_key IS NOT NULL
+        """)
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -2860,6 +2901,11 @@ _MIGRATIONS = (
         45,
         "dedupe_scm_events_by_comment_identity",
         _apply_v45,
+    ),
+    _MigrationStep(
+        46,
+        "add_scm_event_source_and_polling_dedupe_key",
+        _apply_v46,
     ),
 )
 

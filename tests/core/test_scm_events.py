@@ -11,6 +11,7 @@ def test_record_event_and_list_filtered_events(tmp_path: Path) -> None:
     first = store.record_event(
         provider="github",
         event_type="pull_request",
+        source="webhook",
         repo_slug="acme/widgets",
         repo_id="repo-1",
         pr_number=17,
@@ -23,6 +24,7 @@ def test_record_event_and_list_filtered_events(tmp_path: Path) -> None:
     second = store.record_event(
         provider="github",
         event_type="issue_comment",
+        source="webhook",
         repo_slug="acme/widgets",
         repo_id="repo-1",
         pr_number=17,
@@ -44,6 +46,7 @@ def test_record_event_and_list_filtered_events(tmp_path: Path) -> None:
     by_pr = store.list_events(
         provider="github",
         event_type="pull_request",
+        source="webhook",
         pr_number=17,
         occurred_after="2026-03-24T23:59:59Z",
         occurred_before="2026-03-25T00:00:00Z",
@@ -60,6 +63,7 @@ def test_record_event_if_new_returns_none_for_existing_event_id(tmp_path: Path) 
         event_id="github:poll:pull_request_review_comment:comment-1",
         provider="github",
         event_type="pull_request_review_comment",
+        source="polling",
         repo_slug="acme/widgets",
         repo_id="repo-1",
         pr_number=17,
@@ -71,6 +75,7 @@ def test_record_event_if_new_returns_none_for_existing_event_id(tmp_path: Path) 
         event_id="github:poll:pull_request_review_comment:comment-1",
         provider="github",
         event_type="pull_request_review_comment",
+        source="polling",
         repo_slug="acme/widgets",
         repo_id="repo-1",
         pr_number=17,
@@ -86,7 +91,7 @@ def test_record_event_if_new_returns_none_for_existing_event_id(tmp_path: Path) 
     ]
 
 
-def test_record_event_if_new_dedupes_rotating_ids_by_comment_identity(
+def test_record_event_if_new_dedupes_rotating_polling_ids_by_dedupe_key(
     tmp_path: Path,
 ) -> None:
     store = ScmEventStore(tmp_path)
@@ -95,6 +100,8 @@ def test_record_event_if_new_dedupes_rotating_ids_by_comment_identity(
         event_id="github:poll:pull_request_review_comment:first-nonce",
         provider="github",
         event_type="pull_request_review_comment",
+        source="polling",
+        dedupe_key="poll:comment:3328937952",
         repo_slug="acme/widgets",
         repo_id="repo-1",
         pr_number=17,
@@ -106,6 +113,8 @@ def test_record_event_if_new_dedupes_rotating_ids_by_comment_identity(
         event_id="github:poll:pull_request_review_comment:second-nonce",
         provider="github",
         event_type="pull_request_review_comment",
+        source="polling",
+        dedupe_key="poll:comment:3328937952",
         repo_slug="acme/widgets",
         repo_id="repo-1",
         pr_number=17,
@@ -130,6 +139,7 @@ def test_record_event_allows_same_comment_id_for_distinct_webhook_deliveries(
     created = store.record_event(
         provider="github",
         event_type="pull_request_review_comment",
+        source="webhook",
         repo_slug="acme/widgets",
         pr_number=17,
         delivery_id="delivery-created",
@@ -138,6 +148,7 @@ def test_record_event_allows_same_comment_id_for_distinct_webhook_deliveries(
     edited = store.record_event(
         provider="github",
         event_type="pull_request_review_comment",
+        source="webhook",
         repo_slug="acme/widgets",
         pr_number=17,
         delivery_id="delivery-edited",
@@ -158,6 +169,7 @@ def test_record_event_if_new_allows_different_comment_ids(tmp_path: Path) -> Non
         event_id="github:poll:pull_request_review_comment:first",
         provider="github",
         event_type="pull_request_review_comment",
+        source="polling",
         repo_slug="acme/widgets",
         pr_number=17,
         payload={"action": "created", "comment_id": "comment-1"},
@@ -166,6 +178,7 @@ def test_record_event_if_new_allows_different_comment_ids(tmp_path: Path) -> Non
         event_id="github:poll:pull_request_review_comment:second",
         provider="github",
         event_type="pull_request_review_comment",
+        source="polling",
         repo_slug="acme/widgets",
         pr_number=17,
         payload={"action": "created", "comment_id": "comment-2"},
@@ -186,6 +199,7 @@ def test_record_event_rejects_oversized_raw_payload(tmp_path: Path) -> None:
         store.record_event(
             provider="github",
             event_type="pull_request",
+            source="webhook",
             raw_payload={"blob": "x" * 128},
             max_raw_payload_bytes=32,
         )
@@ -203,6 +217,7 @@ def test_record_event_canonicalizes_timestamps_and_filters_in_utc_order(
     first = store.record_event(
         provider="github",
         event_type="pull_request",
+        source="webhook",
         delivery_id="delivery-1",
         occurred_at="2026-03-25T01:30:00+01:00",
         received_at="2026-03-25T01:31:00+01:00",
@@ -211,6 +226,7 @@ def test_record_event_canonicalizes_timestamps_and_filters_in_utc_order(
     second = store.record_event(
         provider="github",
         event_type="pull_request",
+        source="webhook",
         delivery_id="delivery-2",
         occurred_at="2026-03-25T00:45:00Z",
         received_at="2026-03-25T00:46:00Z",

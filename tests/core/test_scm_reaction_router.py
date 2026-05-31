@@ -22,6 +22,7 @@ def _event(
         event_id=event_id,
         provider="github",
         event_type=event_type,
+        source="webhook",
         occurred_at="2026-03-25T00:00:00Z",
         received_at="2026-03-25T00:00:01Z",
         created_at="2026-03-25T00:00:02Z",

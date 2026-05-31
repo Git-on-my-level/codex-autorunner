@@ -34,6 +34,7 @@ def _make_event(
         event_id=f"github:delivery:{pr_number}:{action}",
         provider="github",
         event_type="pull_request",
+        source="webhook",
         occurred_at="2026-03-26T00:00:00Z",
         received_at="2026-03-26T00:00:01Z",
         created_at="2026-03-26T00:00:01Z",

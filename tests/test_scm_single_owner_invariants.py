@@ -56,6 +56,7 @@ def _event(
         event_id=event_id,
         provider="github",
         event_type=event_type,
+        source="webhook",
         occurred_at="2026-04-01T00:00:00Z",
         received_at="2026-04-01T00:00:01Z",
         created_at="2026-04-01T00:00:02Z",
@@ -284,11 +285,11 @@ class TestSchemaOwnership:
                 "SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='orch_scm_events'"
             ).fetchall()
         dedup_idx = [
-            i for i in indexes if i["name"] == "idx_orch_scm_events_comment_identity"
+            i for i in indexes if i["name"] == "idx_orch_scm_events_polling_dedupe_key"
         ]
         assert len(dedup_idx) == 1
-        assert "event_type, repo_slug, pr_number, comment_id" in dedup_idx[0]["sql"]
-        assert "delivery_id IS NULL" in dedup_idx[0]["sql"]
+        assert "provider, source, dedupe_key" in dedup_idx[0]["sql"]
+        assert "source = 'polling'" in dedup_idx[0]["sql"]
         assert "UNIQUE" in dedup_idx[0]["sql"]
 
     def test_pr_binding_unique_on_provider_repo_pr(self, tmp_path: Path) -> None:
@@ -362,6 +363,7 @@ class TestEventStoreOwnership:
         store.record_event(
             provider="github",
             event_type="pull_request",
+            source="webhook",
             repo_slug="acme/test",
             pr_number=1,
         )
@@ -369,6 +371,7 @@ class TestEventStoreOwnership:
             store.record_event(
                 provider="github",
                 event_type="pull_request",
+                source="webhook",
                 repo_slug="acme/test",
                 pr_number=1,
                 event_id=store.list_events(limit=1)[0].event_id,
@@ -379,6 +382,7 @@ class TestEventStoreOwnership:
         store.record_event(
             provider="github",
             event_type="pull_request",
+            source="webhook",
             delivery_id="del-1",
             repo_slug="acme/a",
             pr_number=1,
@@ -386,6 +390,7 @@ class TestEventStoreOwnership:
         store.record_event(
             provider="github",
             event_type="pull_request_review",
+            source="webhook",
             delivery_id="del-1",
             repo_slug="acme/a",
             pr_number=1,
@@ -397,6 +402,7 @@ class TestEventStoreOwnership:
         event = store.record_event(
             provider="github",
             event_type="push",
+            source="webhook",
             repo_slug="acme/repo",
         )
         reopened = ScmEventStore(tmp_path)

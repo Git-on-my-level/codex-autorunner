@@ -115,6 +115,7 @@ def test_scm_inspect_endpoints_list_recent_rows(tmp_path: Path) -> None:
         event_id="github:delivery-123",
         provider="github",
         event_type="pull_request",
+        source="webhook",
         occurred_at="2026-03-25T10:00:00Z",
         received_at="2026-03-25T10:00:01Z",
         repo_slug="acme/widgets",
