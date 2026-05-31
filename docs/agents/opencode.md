@@ -34,7 +34,7 @@ OpenCode Task subagents are a reliability fault boundary. CAR review now uses:
 - a primary coordinator agent with `permission.task` denying `*` and allowing
   only the configured read-only review subagent
 - a read-only subagent with write-like permissions denied: `edit`, `write`,
-  `bash`, and `todowrite`
+  `bash`, `task`, and `todowrite`
 
 The parent coordinator still owns scratchpad/final report writing. Subagents
 should return analysis to the coordinator; they should not edit files or write

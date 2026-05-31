@@ -45,6 +45,10 @@ def test_review_module_imports() -> None:
     assert ReviewStatus is not None
 
 
+def test_opencode_read_review_subagent_denies_nested_task() -> None:
+    assert review_service_module.OPENCODE_REVIEW_READ_PERMISSION["task"] == "deny"
+
+
 def test_review_status_recovers_interrupted_state(repo) -> None:
     service = _build_service(repo)
     service._save_state(

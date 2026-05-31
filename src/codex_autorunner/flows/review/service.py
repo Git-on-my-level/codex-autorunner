@@ -52,6 +52,7 @@ OPENCODE_REVIEW_READ_PERMISSION: dict[str, object] = {
     "edit": "deny",
     "write": "deny",
     "bash": "deny",
+    "task": "deny",
     "todowrite": "deny",
 }
 REVIEW_PROMPT = """# Multi-Agent Code Review Prompt (Coordinator + Subagents)

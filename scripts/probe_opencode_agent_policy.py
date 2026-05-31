@@ -71,6 +71,7 @@ async def probe(workspace: Path) -> None:
             "edit": "deny",
             "write": "deny",
             "bash": "deny",
+            "task": "deny",
             "todowrite": "deny",
         },
         body="Read repository files and return findings to the coordinator.\n",
@@ -102,6 +103,7 @@ Write-capable helper.
         '"permission": "edit"',
         '"permission": "write"',
         '"permission": "bash"',
+        '"permission": "task"',
         '"permission": "todowrite"',
         "car-write-helper (subagent)",
     ):
