@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, cast
 
 from .config_contract import ConfigError
+from .context_awareness import maybe_inject_worktree_pr_hint
 from .hub import HubSupervisor
 from .managed_thread_snapshot import (
     snapshot_managed_threads as _snapshot_managed_threads,
@@ -95,6 +96,10 @@ def format_pma_prompt(
     force_full_context: bool = False,
     force_full_base_prompt: bool = False,
 ) -> str:
+    message, _ = maybe_inject_worktree_pr_hint(
+        message,
+        user_input_texts=[message],
+    )
     limits = PmaPromptRenderLimits.from_snapshot(snapshot)
     snapshot_text = _render_hub_snapshot(
         snapshot,

@@ -27,7 +27,21 @@ ROLE_ADDENDUM_END = "</role addendum>"
 PROMPT_WRITING_HINT = (
     "If the user asks to write a prompt, put the prompt in a ```code block```."
 )
+WORKTREE_PR_HINT = (
+    "For PMA-managed implementation work that should produce a PR, spawn a "
+    "PR-mode managed thread: "
+    "`car pma thread spawn --agent <agent_id> --repo <repo_id> --pr --name <label> "
+    "--path <hub_root>`. This keeps lifecycle/progress visible and provisions a "
+    "fresh hub-owned worktree from `origin/<default-branch>` by default. Do not "
+    "use raw `git worktree add ... main` for PMA-managed PR work. If a standalone "
+    "hub worktree is explicitly required outside managed-thread creation, use "
+    "`car hub worktree create <base_repo_id> <branch> --path <hub_root>`."
+)
 _PROMPT_CONTEXT_RE = re.compile(r"\bprompt\b", re.IGNORECASE)
+_WORKTREE_PR_CONTEXT_RE = re.compile(
+    r"\b(?:worktree|worktrees|branch|branches|pr|prs|pull\s+request|pull\s+requests)\b",
+    re.IGNORECASE,
+)
 _FILE_CONTEXT_SIGNAL_RE = re.compile(
     r"(?:<file\s+path=|Inbound Discord attachments:|PMA File Inbox:)",
     re.IGNORECASE,
@@ -79,6 +93,47 @@ def maybe_inject_prompt_writing_hint(
         return prompt_text, False
     return append_capsules_to_prompt(
         prompt_text, (build_prompt_writing_capsule(PROMPT_WRITING_HINT),)
+    )
+
+
+def has_user_worktree_pr_hint_request(
+    user_input_texts: Sequence[str | None] | None,
+) -> bool:
+    """Return True when raw user text mentions PR/worktree/branch coordination."""
+    if not user_input_texts:
+        return False
+    for text in user_input_texts:
+        if not isinstance(text, str):
+            continue
+        if _WORKTREE_PR_CONTEXT_RE.search(text):
+            return True
+    return False
+
+
+def maybe_inject_worktree_pr_hint(
+    prompt_text: str,
+    *,
+    hint_text: str = WORKTREE_PR_HINT,
+    user_input_texts: Sequence[str | None] | None = None,
+) -> tuple[str, bool]:
+    """Inject PMA worktree/PR creation guidance only from raw user signals."""
+    if not prompt_text or not prompt_text.strip():
+        return prompt_text, False
+    if "worktree.pr_mode" in prompt_text or "PR-mode managed thread" in prompt_text:
+        return prompt_text, False
+    if not has_user_worktree_pr_hint_request(user_input_texts):
+        return prompt_text, False
+    from .surface_context_capsules import build_model_only_text_capsule
+
+    return append_capsules_to_prompt(
+        prompt_text,
+        (
+            build_model_only_text_capsule(
+                capsule_id="worktree.pr_mode",
+                text=hint_text,
+                reason="worktree_pr_keyword_detected",
+            ),
+        ),
     )
 
 
