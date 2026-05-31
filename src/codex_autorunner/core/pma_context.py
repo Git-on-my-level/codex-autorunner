@@ -238,6 +238,10 @@ async def build_hub_snapshot(
 
 
 from .pma_action_queue import build_pma_action_queue  # noqa: E402
+from .pma_attention import (  # noqa: E402
+    build_pma_attention_state,
+    render_pma_attention_state,
+)
 from .pma_inbox import _gather_inbox  # noqa: E402
 from .pma_prompt_state import (  # noqa: E402, F401
     PMA_PROMPT_TURN_SECTION,
@@ -299,6 +303,7 @@ __all__ = [
     "build_hub_snapshot",
     "build_hub_snapshot_payload",
     "build_pma_action_queue",
+    "build_pma_attention_state",
     "build_ticket_flow_run_state",
     "clear_pma_prompt_state_sessions",
     "default_pma_prompt_state_path",
@@ -312,4 +317,5 @@ __all__ = [
     "load_pma_prompt",
     "load_pma_workspace_docs",
     "maybe_auto_prune_active_context",
+    "render_pma_attention_state",
 ]
