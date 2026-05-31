@@ -28,7 +28,7 @@ from .turn_execution_storage import (
     build_turn_execution_request_from_storage,
 )
 
-ORCHESTRATION_SCHEMA_VERSION = 44
+ORCHESTRATION_SCHEMA_VERSION = 45
 
 
 @dataclass(frozen=True)
@@ -760,7 +760,10 @@ def _apply_v9(conn: sqlite3.Connection) -> None:
             received_at TEXT NOT NULL,
             payload_json TEXT NOT NULL DEFAULT '{}',
             raw_payload_json TEXT,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            source TEXT,
+            comment_id TEXT,
+            dedupe_key TEXT
         )
         """)
     conn.execute("""
@@ -782,6 +785,11 @@ def _apply_v9(conn: sqlite3.Connection) -> None:
     conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_scm_events_delivery_timestamp
             ON orch_scm_events(delivery_id, occurred_at, created_at)
+        """)
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_scm_events_polling_dedupe_key
+            ON orch_scm_events(provider, source, dedupe_key)
+         WHERE source = 'polling' AND dedupe_key IS NOT NULL
         """)
 
 
@@ -2653,6 +2661,19 @@ def _apply_v44(conn: sqlite3.Connection) -> None:
     _backfill_automation_edge_runtime_identity(conn)
 
 
+def _apply_v45(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "orch_scm_events"):
+        return
+    _ensure_column(conn, "orch_scm_events", "source", "source TEXT")
+    _ensure_column(conn, "orch_scm_events", "comment_id", "comment_id TEXT")
+    _ensure_column(conn, "orch_scm_events", "dedupe_key", "dedupe_key TEXT")
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_scm_events_polling_dedupe_key
+            ON orch_scm_events(provider, source, dedupe_key)
+         WHERE source = 'polling' AND dedupe_key IS NOT NULL
+        """)
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -2769,6 +2790,11 @@ _MIGRATIONS = (
         44,
         "backfill_historical_runtime_identity_envelopes",
         _apply_v44,
+    ),
+    _MigrationStep(
+        45,
+        "add_scm_polling_dedupe_identity",
+        _apply_v45,
     ),
 )
 

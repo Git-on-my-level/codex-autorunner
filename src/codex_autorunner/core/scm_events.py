@@ -46,6 +46,19 @@ def _normalize_json_object(value: Any, *, field_name: str) -> dict[str, Any]:
     raise ValueError(f"{field_name} must be a JSON object")
 
 
+def _polling_dedupe_key(
+    *,
+    source: Optional[str],
+    event_type: Optional[str],
+    repo_slug: Optional[str],
+    pr_number: Optional[int],
+    comment_id: Optional[str],
+) -> Optional[str]:
+    if source != "polling" or comment_id is None:
+        return None
+    return f"{event_type}:{repo_slug}:{pr_number}:{comment_id}"
+
+
 @dataclass(frozen=True)
 class ScmEvent:
     event_id: str
@@ -59,6 +72,9 @@ class ScmEvent:
     pr_number: Optional[int] = None
     delivery_id: Optional[str] = None
     correlation_id: Optional[str] = None
+    source: Optional[str] = None
+    comment_id: Optional[str] = None
+    dedupe_key: Optional[str] = None
     payload: dict[str, Any] = field(default_factory=dict)
     raw_payload: Optional[dict[str, Any]] = None
 
@@ -79,6 +95,9 @@ def _event_from_row(row: Any) -> ScmEvent:
         pr_number=_normalize_int(row["pr_number"], field_name="pr_number"),
         delivery_id=_normalize_text(row["delivery_id"]),
         correlation_id=_normalize_text(row["correlation_id"]),
+        source=_normalize_text(row["source"]),
+        comment_id=_normalize_text(row["comment_id"]),
+        dedupe_key=_normalize_text(row["dedupe_key"]),
         payload=_json_loads_object(row["payload_json"]),
         raw_payload=(
             _json_loads_object(row["raw_payload_json"])
@@ -106,6 +125,8 @@ class ScmEventStore:
         pr_number: Optional[int] = None,
         delivery_id: Optional[str] = None,
         correlation_id: Optional[str] = None,
+        source: Optional[str] = None,
+        comment_id: Optional[str] = None,
         payload: Optional[dict[str, Any]] = None,
         raw_payload: Optional[dict[str, Any]] = None,
         event_id: str,
@@ -121,6 +142,8 @@ class ScmEventStore:
             pr_number=pr_number,
             delivery_id=delivery_id,
             correlation_id=correlation_id,
+            source=source,
+            comment_id=comment_id,
             payload=payload,
             raw_payload=raw_payload,
             event_id=event_id,
@@ -140,6 +163,8 @@ class ScmEventStore:
         pr_number: Optional[int] = None,
         delivery_id: Optional[str] = None,
         correlation_id: Optional[str] = None,
+        source: Optional[str] = None,
+        comment_id: Optional[str] = None,
         payload: Optional[dict[str, Any]] = None,
         raw_payload: Optional[dict[str, Any]] = None,
         event_id: Optional[str] = None,
@@ -155,6 +180,8 @@ class ScmEventStore:
             pr_number=pr_number,
             delivery_id=delivery_id,
             correlation_id=correlation_id,
+            source=source,
+            comment_id=comment_id,
             payload=payload,
             raw_payload=raw_payload,
             event_id=event_id,
@@ -177,6 +204,8 @@ class ScmEventStore:
         pr_number: Optional[int],
         delivery_id: Optional[str],
         correlation_id: Optional[str],
+        source: Optional[str],
+        comment_id: Optional[str],
         payload: Optional[dict[str, Any]],
         raw_payload: Optional[dict[str, Any]],
         event_id: Optional[str],
@@ -214,6 +243,16 @@ class ScmEventStore:
         )
         created_at = now_iso()
         normalized_pr_number = _normalize_int(pr_number, field_name="pr_number")
+        normalized_source = _normalize_text(source)
+        normalized_comment_id = _normalize_text(comment_id)
+        normalized_repo_slug = _normalize_text(repo_slug)
+        dedupe_key = _polling_dedupe_key(
+            source=normalized_source,
+            event_type=normalized_event_type,
+            repo_slug=normalized_repo_slug,
+            pr_number=normalized_pr_number,
+            comment_id=normalized_comment_id,
+        )
 
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
             verb = "INSERT" if require_new else "INSERT OR IGNORE"
@@ -232,14 +271,17 @@ class ScmEventStore:
                     received_at,
                     payload_json,
                     raw_payload_json,
-                    created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at,
+                    source,
+                    comment_id,
+                    dedupe_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     normalized_event_id,
                     normalized_provider,
                     normalized_event_type,
-                    _normalize_text(repo_slug),
+                    normalized_repo_slug,
                     _normalize_text(repo_id),
                     normalized_pr_number,
                     _normalize_text(delivery_id),
@@ -249,6 +291,9 @@ class ScmEventStore:
                     _json_dumps(payload_object),
                     raw_payload_json,
                     created_at,
+                    normalized_source,
+                    normalized_comment_id,
+                    dedupe_key,
                 ),
             )
             if not require_new and cursor.rowcount == 0:
@@ -356,6 +401,42 @@ class ScmEventStore:
                  WHERE event_id = ?
                 """,
                 (normalized_event_id,),
+            ).fetchone()
+        return _event_from_row(row) if row is not None else None
+
+    def get_polling_event_by_dedupe_key(
+        self,
+        *,
+        provider: str,
+        event_type: str,
+        repo_slug: Optional[str],
+        pr_number: Optional[int],
+        comment_id: Optional[str],
+    ) -> Optional[ScmEvent]:
+        normalized_provider = _normalize_text(provider)
+        normalized_event_type = _normalize_text(event_type)
+        normalized_pr_number = _normalize_int(pr_number, field_name="pr_number")
+        dedupe_key = _polling_dedupe_key(
+            source="polling",
+            event_type=normalized_event_type,
+            repo_slug=_normalize_text(repo_slug),
+            pr_number=normalized_pr_number,
+            comment_id=_normalize_text(comment_id),
+        )
+        if normalized_provider is None or dedupe_key is None:
+            return None
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                  FROM orch_scm_events
+                 WHERE provider = ?
+                   AND source = 'polling'
+                   AND dedupe_key = ?
+                 ORDER BY occurred_at DESC, created_at DESC, event_id DESC
+                 LIMIT 1
+                """,
+                (normalized_provider, dedupe_key),
             ).fetchone()
         return _event_from_row(row) if row is not None else None
 

@@ -91,11 +91,13 @@ def _record_poll_event(
     received_at: str,
     payload: Mapping[str, Any],
 ) -> PollEventRecord:
+    payload_map = _mapping(payload)
+    comment_id = _normalize_text(payload_map.get("comment_id"))
     event_id = _stable_poll_event_id(
         event_type=event_type,
         watch=watch,
         binding=binding,
-        payload=payload,
+        payload=payload_map,
     )
     event = event_store.record_event_if_new(
         event_id=event_id,
@@ -107,11 +109,21 @@ def _record_poll_event(
         repo_id=binding.repo_id or watch.repo_id,
         pr_number=watch.pr_number,
         correlation_id=f"scm-poll:{watch.watch_id}",
-        payload=dict(payload),
+        source="polling",
+        comment_id=comment_id,
+        payload=dict(payload_map),
     )
     if event is not None:
         return PollEventRecord(event=event, created=True)
     existing = event_store.get_event(event_id)
+    if existing is None:
+        existing = event_store.get_polling_event_by_dedupe_key(
+            provider="github",
+            event_type=event_type,
+            repo_slug=watch.repo_slug,
+            pr_number=watch.pr_number,
+            comment_id=comment_id,
+        )
     if existing is None:
         raise RuntimeError("SCM event row missing after duplicate poll event")
     return PollEventRecord(event=existing, created=False)

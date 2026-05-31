@@ -195,6 +195,9 @@ def test_initialize_orchestration_sqlite_creates_canonical_tables(
             "payload_json",
             "raw_payload_json",
             "created_at",
+            "source",
+            "comment_id",
+            "dedupe_key",
         }.issubset(_column_names(conn, "orch_scm_events"))
         assert {
             "binding_id",
