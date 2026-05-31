@@ -4,9 +4,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, TypedDict
 
+from .pma_attention import build_pma_attention_state, render_pma_attention_state
 from .pma_context_shared import PMA_MAX_MESSAGES, PMA_MAX_REPOS, PMA_MAX_TEXT
 from .pma_prompt_state import (
     PMA_PROMPT_SECTION_ORDER,
+    PMA_PROMPT_TURN_SECTION,
     _digest_preview,
     _digest_text,
 )
@@ -284,31 +286,22 @@ def _render_pma_actionable_state(
     *,
     render_hub_snapshot: Any,
     limits: PmaPromptRenderLimits,
+    mode: str = "overview",
 ) -> str:
-    actionable_snapshot: dict[str, Any] = {}
-    if snapshot.get("availability") is not None:
-        actionable_snapshot["availability"] = snapshot.get("availability")
-    if snapshot.get("generated_at") is not None:
-        actionable_snapshot["generated_at"] = snapshot.get("generated_at")
-    if snapshot.get("freshness") is not None:
-        actionable_snapshot["freshness"] = snapshot.get("freshness")
-
-    action_queue = snapshot.get("action_queue") or []
-    if action_queue:
-        actionable_snapshot["action_queue"] = action_queue
-    else:
-        for key in ("inbox", "managed_threads", "pma_files_detail", "automation"):
-            value = snapshot.get(key)
-            if value:
-                actionable_snapshot[key] = value
-
-    rendered = render_hub_snapshot(
-        actionable_snapshot,
-        max_repos=limits.max_repos,
-        max_messages=limits.max_messages,
-        max_text_chars=limits.max_text_chars,
+    del render_hub_snapshot, limits
+    rendered = render_pma_attention_state(
+        build_pma_attention_state(snapshot),
+        mode=mode,
     ).strip()
     return rendered or "No current PMA actions."
+
+
+def _attention_semantic_ref_from_content(content: Any) -> str:
+    text = str(content or "")
+    for line in text.splitlines():
+        if line.startswith("semantic_ref="):
+            return line.split("=", 1)[1].strip()
+    return ""
 
 
 def _render_prompt_delta_header(
@@ -421,6 +414,63 @@ def _render_prompt_delta_header(
     return "\n".join(lines) + "\n\n"
 
 
+def _is_context_unchanged_delta(
+    *,
+    sections: Mapping[str, Mapping[str, str]],
+    prior_sections: Optional[Mapping[str, Any]],
+) -> bool:
+    prior_section_map = prior_sections if isinstance(prior_sections, Mapping) else {}
+    turn_prior = prior_section_map.get(PMA_PROMPT_TURN_SECTION)
+    turn_digest = str((sections.get(PMA_PROMPT_TURN_SECTION) or {}).get("digest") or "")
+    turn_previous_digest = (
+        str(turn_prior.get("digest") or "") if isinstance(turn_prior, Mapping) else ""
+    )
+    turn_payload = turn_prior.get("payload") if isinstance(turn_prior, Mapping) else {}
+    turn_previous_content = (
+        str(turn_payload.get("content") or "")
+        if isinstance(turn_payload, Mapping)
+        else ""
+    )
+    turn_semantic_ref = _attention_semantic_ref_from_content(
+        (sections.get(PMA_PROMPT_TURN_SECTION) or {}).get("content")
+    )
+    turn_previous_semantic_ref = _attention_semantic_ref_from_content(
+        turn_previous_content
+    )
+    if (
+        turn_semantic_ref
+        and turn_previous_semantic_ref
+        and turn_semantic_ref != turn_previous_semantic_ref
+    ):
+        return False
+    turn_decision = (
+        str(turn_prior.get("decision") or "") if isinstance(turn_prior, Mapping) else ""
+    )
+    turn_unchanged = turn_decision == "skip_duplicate" or bool(
+        turn_digest and turn_previous_digest == turn_digest
+    )
+    if not turn_unchanged:
+        return False
+
+    changed_sections: list[str] = []
+    for name in PMA_PROMPT_SECTION_ORDER:
+        section = sections.get(name) or {}
+        current_digest = str(section.get("digest") or "")
+        previous = prior_section_map.get(name)
+        previous_digest = (
+            str(previous.get("digest") or "") if isinstance(previous, Mapping) else ""
+        )
+        decision = (
+            str(previous.get("decision") or "") if isinstance(previous, Mapping) else ""
+        )
+        if decision == "skip_duplicate" or (
+            current_digest and previous_digest == current_digest
+        ):
+            continue
+        changed_sections.append(name)
+    return not changed_sections or changed_sections == ["hub_snapshot"]
+
+
 def render_pma_prompt(
     *,
     base_prompt: str,
@@ -448,23 +498,35 @@ def render_pma_prompt(
         prompt += _render_pma_workspace_docs(pma_docs)
     if not use_delta:
         prompt += f"{PMA_FASTPATH}\n\n"
+    context_unchanged = False
     if prompt_state_key:
-        prompt += _render_prompt_delta_header(
-            sections=sections,
-            prior_sections=prior_sections,
-            prompt_state_key=prompt_state_key,
-            current_mode="delta" if use_delta else "full",
-            reason=delta_reason,
-            prior_updated_at=prior_updated_at,
+        context_unchanged = bool(
+            use_delta
+            and _is_context_unchanged_delta(
+                sections=sections,
+                prior_sections=prior_sections,
+            )
         )
-    prompt += (
-        "<current_actionable_state>\n"
-        f"{actionable_state_text}\n"
-        "</current_actionable_state>\n\n"
-    )
+        if context_unchanged:
+            prompt += "<context_unchanged />\n\n"
+        else:
+            prompt += _render_prompt_delta_header(
+                sections=sections,
+                prior_sections=prior_sections,
+                prompt_state_key=prompt_state_key,
+                current_mode="delta" if use_delta else "full",
+                reason=delta_reason,
+                prior_updated_at=prior_updated_at,
+            )
+    if not context_unchanged:
+        prompt += (
+            "<current_actionable_state>\n"
+            f"{actionable_state_text}\n"
+            "</current_actionable_state>\n\n"
+        )
     if not use_delta:
         prompt += f"<hub_snapshot>\n{snapshot_text}\n</hub_snapshot>\n\n"
-    elif prompt_state_key:
+    elif prompt_state_key and not context_unchanged:
         prompt += (
             "<hub_snapshot_ref "
             f"digest='{_digest_preview(str((sections.get('hub_snapshot') or {}).get('digest') or ''))}' "
