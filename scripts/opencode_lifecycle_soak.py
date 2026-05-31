@@ -318,7 +318,7 @@ async def _one_shot_phase(
                 supervisor,
                 OpenCodeRunConfig(
                     agent="opencode",
-                    model="zai-coding-plan/glm-4.7-flashx",
+                    model="zai-coding-plan/glm-5.1",
                     reasoning=None,
                     prompt="Reply with exactly OK.",
                     workspace_root=str(repo_root),

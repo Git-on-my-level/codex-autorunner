@@ -236,18 +236,18 @@ CAR can run review coordinators on one model while spawning cheaper/faster subag
 agents:
   opencode:
     subagent_models:
-      subagent: zai-coding-plan/glm-4.7-flashx
+      car-read-explore: zai-coding-plan/glm-5.1
 
 repo_defaults:
   review:
-    subagent_agent: subagent
-    subagent_model: zai-coding-plan/glm-4.7-flashx
+    subagent_agent: car-read-explore
+    subagent_model: zai-coding-plan/glm-5.1
 ```
 
 How it works:
-1. CAR ensures `.opencode/agent/subagent.md` exists with the FlashX model before starting review.
-2. The review coordinator runs on the full GLM-4.7 model.
-3. The coordinator spawns subagents via the `task` tool with `agent="subagent"`, inheriting the configured model.
+1. CAR ensures `.opencode/agent/car-read-explore.md` exists with the configured read-only model before starting review.
+2. The review coordinator runs on the configured parent review model.
+3. The coordinator spawns subagents via the `task` tool with `agent="car-read-explore"`, inheriting the configured read-only model.
 
 If you are adding an agent directly to the CAR codebase, register it in:
 

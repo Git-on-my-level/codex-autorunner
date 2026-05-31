@@ -508,6 +508,7 @@ async def test_telegram_review_opencode_tracks_thinking_and_tool_progress_via_ha
     monkeypatch.setattr(
         github_commands, "opencode_missing_env", _fake_opencode_missing_env
     )
+    start_review_prompts: list[str] = []
 
     class _FakeHarness:
         def __init__(self, _supervisor: object) -> None:
@@ -524,10 +525,10 @@ async def test_telegram_review_opencode_tracks_thinking_and_tool_progress_via_ha
             approval_mode: Optional[str],
             sandbox_policy: Optional[object],
         ) -> SimpleNamespace:
+            start_review_prompts.append(prompt)
             _ = (
                 workspace_root,
                 conversation_id,
-                prompt,
                 model,
                 reasoning,
                 approval_mode,
@@ -615,6 +616,7 @@ async def test_telegram_review_opencode_tracks_thinking_and_tool_progress_via_ha
 
     await handler._handle_review(_message(), "", runtime)
 
+    assert start_review_prompts == ["Review uncommitted changes."]
     assert handler._turn_progress_trackers
     progress_traces = [
         (

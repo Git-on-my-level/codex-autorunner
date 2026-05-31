@@ -178,11 +178,11 @@ repo_defaults:
     enabled: true
     agent: opencode
     # Model for parent coordinator agent
-    model: zai-coding-plan/glm-5
-    # Agent ID to use for subtasks (bucket reviews, pruning agents)
-    subagent_agent: subagent
+    model: zai-coding-plan/glm-5.1
+    # Read-only OpenCode agent ID to use for review subtasks
+    subagent_agent: car-read-explore
     # Model to use for subagents (default to model if not specified)
-    subagent_model: zai-coding-plan/glm-4.7-flashx
+    subagent_model: zai-coding-plan/glm-5.1
     reasoning: null
     max_wallclock_seconds: null
 
@@ -202,10 +202,10 @@ agents:
   opencode:
     binary: opencode
     # Optional: map subagent agent IDs to models
-    # Example: subagent_models: { subagent: zai-coding-plan/glm-4.7-flashx }
+    # Example: subagent_models: { car-read-explore: zai-coding-plan/glm-5.1 }
     # This allows different models for parent vs subagent sessions
     subagent_models:
-      subagent: zai-coding-plan/glm-4.7-flashx
+      car-read-explore: zai-coding-plan/glm-5.1
     # Optional: override the default serve command derived from binary.
     # serve_command:
     #   - /absolute/path/to/opencode

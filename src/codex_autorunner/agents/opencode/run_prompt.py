@@ -46,6 +46,13 @@ class OpenCodeRunConfig:
     permission_policy: str = PERMISSION_ALLOW
 
 
+def _runtime_agent_for_prompt(agent: str) -> Optional[str]:
+    normalized = (agent or "").strip()
+    if not normalized or normalized == "opencode":
+        return None
+    return normalized
+
+
 async def _create_session(
     client: Any,
     workspace_root: str,
@@ -260,6 +267,7 @@ async def _run_turn(
         client.prompt_async(
             session_id,
             message=config.prompt,
+            agent=_runtime_agent_for_prompt(config.agent),
             model=model_payload,
             variant=config.reasoning,
         )

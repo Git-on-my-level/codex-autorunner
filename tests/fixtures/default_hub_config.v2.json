@@ -9,7 +9,7 @@
     "opencode": {
       "binary": "opencode",
       "subagent_models": {
-        "subagent": "zai-coding-plan/glm-4.7-flashx"
+        "car-read-explore": "zai-coding-plan/glm-5.1"
       }
     }
   },
@@ -394,8 +394,8 @@
       "max_wallclock_seconds": null,
       "model": "zai-coding-plan/glm-5.1",
       "reasoning": null,
-      "subagent_agent": "subagent",
-      "subagent_model": "zai-coding-plan/glm-4.7-flashx"
+      "subagent_agent": "car-read-explore",
+      "subagent_model": "zai-coding-plan/glm-5.1"
     },
     "runner": {
       "max_wallclock_seconds": null,
