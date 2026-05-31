@@ -15,6 +15,20 @@ def test_classify_core_lane_for_core_paths() -> None:
     assert selection.lanes_touched == ("core",)
 
 
+def test_classify_core_lane_for_github_adapter_paths() -> None:
+    selection = classify_changed_files(
+        [
+            "src/codex_autorunner/adapters/github/polling_events.py",
+            "tests/adapters/github/test_polling_events.py",
+        ]
+    )
+
+    assert selection.lane == "core"
+    assert selection.reason == "single-lane-diff"
+    assert selection.lanes_touched == ("core",)
+    assert selection.unknown_paths == ()
+
+
 def test_classify_web_ui_lane_for_web_paths() -> None:
     selection = classify_changed_files(
         ["src/codex_autorunner/web_frontend/src/routes/+page.svelte"]

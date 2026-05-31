@@ -899,6 +899,7 @@ class GitHubScmPollingService:
             self._event_store.record_event(
                 provider="github",
                 event_type="polling.discovery",
+                source="polling",
                 repo_slug=binding.repo_slug if binding is not None else None,
                 repo_id=binding.repo_id if binding is not None else None,
                 pr_number=binding.pr_number if binding is not None else None,

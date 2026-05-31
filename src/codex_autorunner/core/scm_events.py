@@ -51,9 +51,11 @@ class ScmEvent:
     event_id: str
     provider: str
     event_type: str
+    source: str
     occurred_at: str
     received_at: str
     created_at: str
+    dedupe_key: Optional[str] = None
     repo_slug: Optional[str] = None
     repo_id: Optional[str] = None
     pr_number: Optional[int] = None
@@ -72,6 +74,8 @@ def _event_from_row(row: Any) -> ScmEvent:
         event_id=str(row["event_id"]),
         provider=str(row["provider"]),
         event_type=str(row["event_type"]),
+        source=str(row["source"]),
+        dedupe_key=_normalize_text(row["dedupe_key"]),
         occurred_at=str(row["occurred_at"]),
         received_at=str(row["received_at"]),
         created_at=str(row["created_at"]),
@@ -101,6 +105,8 @@ class ScmEventStore:
         *,
         provider: str,
         event_type: str,
+        source: str,
+        dedupe_key: Optional[str] = None,
         occurred_at: Optional[str] = None,
         received_at: Optional[str] = None,
         repo_slug: Optional[str] = None,
@@ -117,6 +123,8 @@ class ScmEventStore:
         return self._record_event(
             provider=provider,
             event_type=event_type,
+            source=source,
+            dedupe_key=dedupe_key,
             occurred_at=occurred_at,
             received_at=received_at,
             repo_slug=repo_slug,
@@ -137,6 +145,8 @@ class ScmEventStore:
         *,
         provider: str,
         event_type: str,
+        source: str,
+        dedupe_key: Optional[str] = None,
         occurred_at: Optional[str] = None,
         received_at: Optional[str] = None,
         repo_slug: Optional[str] = None,
@@ -153,6 +163,8 @@ class ScmEventStore:
         event = self._record_event(
             provider=provider,
             event_type=event_type,
+            source=source,
+            dedupe_key=dedupe_key,
             occurred_at=occurred_at,
             received_at=received_at,
             repo_slug=repo_slug,
@@ -176,6 +188,8 @@ class ScmEventStore:
         *,
         provider: str,
         event_type: str,
+        source: str,
+        dedupe_key: Optional[str],
         occurred_at: Optional[str],
         received_at: Optional[str],
         repo_slug: Optional[str],
@@ -192,11 +206,15 @@ class ScmEventStore:
     ) -> Optional[ScmEvent]:
         normalized_provider = _normalize_text(provider)
         normalized_event_type = _normalize_text(event_type)
+        normalized_source = _normalize_text(source)
+        normalized_dedupe_key = _normalize_text(dedupe_key)
         normalized_event_id = _normalize_text(event_id) or uuid.uuid4().hex
         if normalized_provider is None:
             raise ValueError("provider is required")
         if normalized_event_type is None:
             raise ValueError("event_type is required")
+        if normalized_source is None:
+            raise ValueError("source is required")
 
         payload_object = _normalize_json_object(payload, field_name="payload")
         raw_payload_object = (
@@ -233,6 +251,8 @@ class ScmEventStore:
                     event_id,
                     provider,
                     event_type,
+                    source,
+                    dedupe_key,
                     repo_slug,
                     repo_id,
                     pr_number,
@@ -244,12 +264,14 @@ class ScmEventStore:
                     payload_json,
                     raw_payload_json,
                     created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     normalized_event_id,
                     normalized_provider,
                     normalized_event_type,
+                    normalized_source,
+                    normalized_dedupe_key,
                     _normalize_text(repo_slug),
                     _normalize_text(repo_id),
                     normalized_pr_number,
@@ -277,44 +299,27 @@ class ScmEventStore:
             raise RuntimeError("SCM event row missing after insert")
         return _event_from_row(row)
 
-    def get_event_by_comment_identity(
+    def get_event_by_dedupe_key(
         self,
         *,
-        event_type: str,
-        repo_slug: Optional[str],
-        pr_number: Optional[int],
-        comment_id: Optional[str],
+        source: str,
+        dedupe_key: Optional[str],
     ) -> Optional[ScmEvent]:
-        normalized_event_type = _normalize_text(event_type)
-        normalized_repo_slug = _normalize_text(repo_slug)
-        normalized_pr_number = _normalize_int(pr_number, field_name="pr_number")
-        normalized_comment_id = _normalize_text(comment_id)
-        if (
-            normalized_event_type is None
-            or normalized_repo_slug is None
-            or normalized_pr_number is None
-            or normalized_comment_id is None
-        ):
+        normalized_source = _normalize_text(source)
+        normalized_dedupe_key = _normalize_text(dedupe_key)
+        if normalized_source is None or normalized_dedupe_key is None:
             return None
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
             row = conn.execute(
                 """
                 SELECT *
                   FROM orch_scm_events
-                 WHERE event_type = ?
-                   AND repo_slug = ?
-                   AND pr_number = ?
-                   AND comment_id = ?
-                   AND delivery_id IS NULL
+                 WHERE source = ?
+                   AND dedupe_key = ?
                  ORDER BY occurred_at ASC, created_at ASC, event_id ASC
                  LIMIT 1
                 """,
-                (
-                    normalized_event_type,
-                    normalized_repo_slug,
-                    normalized_pr_number,
-                    normalized_comment_id,
-                ),
+                (normalized_source, normalized_dedupe_key),
             ).fetchone()
         return _event_from_row(row) if row is not None else None
 
@@ -323,6 +328,7 @@ class ScmEventStore:
         *,
         provider: Optional[str] = None,
         event_type: Optional[str] = None,
+        source: Optional[str] = None,
         repo_slug: Optional[str] = None,
         repo_id: Optional[str] = None,
         pr_number: Optional[int] = None,
@@ -347,6 +353,11 @@ class ScmEventStore:
         if normalized_event_type is not None:
             where_clauses.append("event_type = ?")
             params.append(normalized_event_type)
+
+        normalized_source = _normalize_text(source)
+        if normalized_source is not None:
+            where_clauses.append("source = ?")
+            params.append(normalized_source)
 
         normalized_repo_slug = _normalize_text(repo_slug)
         if normalized_repo_slug is not None:

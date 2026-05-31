@@ -1406,7 +1406,7 @@ def test_apply_orchestration_migrations_adds_chat_operation_ledger_from_v20(
     assert table is not None
 
 
-def test_apply_orchestration_migrations_dedupes_scm_events_by_comment_identity(
+def test_apply_orchestration_migrations_adds_polling_scm_dedupe_key(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "orchestration.sqlite3"
@@ -1476,7 +1476,7 @@ def test_apply_orchestration_migrations_dedupes_scm_events_by_comment_identity(
 
         version_after = apply_orchestration_migrations(conn)
         rows = conn.execute("""
-            SELECT event_id, comment_id
+            SELECT event_id, source, dedupe_key, comment_id
               FROM orch_scm_events
              ORDER BY occurred_at ASC
             """).fetchall()
@@ -1488,15 +1488,136 @@ def test_apply_orchestration_migrations_dedupes_scm_events_by_comment_identity(
             """).fetchall()
 
     assert version_after == ORCHESTRATION_SCHEMA_VERSION
-    assert [(row["event_id"], row["comment_id"]) for row in rows] == [
-        ("github:poll:pull_request_review_comment:first-nonce", "3328937952"),
-        ("github:poll:pull_request_review_comment:second-nonce", None),
-        ("github:poll:pull_request_review_comment:different-comment", "3328937953"),
+    assert [
+        (row["event_id"], row["source"], row["dedupe_key"], row["comment_id"])
+        for row in rows
+    ] == [
+        (
+            "github:poll:pull_request_review_comment:first-nonce",
+            "polling",
+            "github:poll:pull_request_review_comment:first-nonce",
+            "3328937952",
+        ),
+        (
+            "github:poll:pull_request_review_comment:second-nonce",
+            "polling",
+            "github:poll:pull_request_review_comment:second-nonce",
+            None,
+        ),
+        (
+            "github:poll:pull_request_review_comment:different-comment",
+            "polling",
+            "github:poll:pull_request_review_comment:different-comment",
+            "3328937953",
+        ),
     ]
     assert any(
-        row["name"] == "idx_orch_scm_events_comment_identity" and "UNIQUE" in row["sql"]
+        row["name"] == "idx_orch_scm_events_polling_dedupe_key"
+        and "UNIQUE" in row["sql"]
+        and "source = 'polling'" in row["sql"]
+        and "provider, source, dedupe_key" in row["sql"]
         for row in indexes
     )
+
+
+def test_apply_orchestration_migrations_classifies_existing_scm_webhooks(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "orchestration.sqlite3"
+
+    with _connect(db_path) as conn:
+        conn.execute("""
+            CREATE TABLE orch_schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            """)
+        conn.execute("""
+            INSERT INTO orch_schema_migrations (version, name, applied_at)
+            VALUES (45, 'dedupe_scm_events_by_comment_identity', '2026-05-30T00:00:00Z')
+            """)
+        conn.execute("""
+            CREATE TABLE orch_scm_events (
+                event_id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                repo_slug TEXT,
+                repo_id TEXT,
+                pr_number INTEGER,
+                delivery_id TEXT,
+                correlation_id TEXT,
+                occurred_at TEXT NOT NULL,
+                received_at TEXT NOT NULL,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                raw_payload_json TEXT,
+                created_at TEXT NOT NULL,
+                comment_id TEXT
+            )
+            """)
+        conn.executemany(
+            """
+            INSERT INTO orch_scm_events (
+                event_id, provider, event_type, repo_slug, repo_id, pr_number,
+                delivery_id, correlation_id, occurred_at, received_at,
+                payload_json, raw_payload_json, created_at, comment_id
+            ) VALUES (?, 'github', 'pull_request_review_comment', 'acme/widgets',
+                'repo-1', 17, ?, NULL, ?, ?, ?, NULL, ?, ?)
+            """,
+            (
+                (
+                    "github:delivery-created",
+                    "delivery-created",
+                    "2026-05-30T15:30:07Z",
+                    "2026-05-30T15:30:07Z",
+                    json.dumps({"action": "created", "comment_id": "3328937952"}),
+                    "2026-05-30T15:30:07Z",
+                    "3328937952",
+                ),
+                (
+                    "github:body:abc123",
+                    None,
+                    "2026-05-30T15:32:00Z",
+                    "2026-05-30T15:32:00Z",
+                    json.dumps({"action": "created", "comment_id": "3328937952"}),
+                    "2026-05-30T15:32:00Z",
+                    "3328937952",
+                ),
+                (
+                    "github:delivery-edited",
+                    "delivery-edited",
+                    "2026-05-30T15:35:29Z",
+                    "2026-05-30T15:35:29Z",
+                    json.dumps({"action": "edited", "comment_id": "3328937952"}),
+                    "2026-05-30T15:35:29Z",
+                    "3328937952",
+                ),
+            ),
+        )
+
+        version_after = apply_orchestration_migrations(conn)
+        sources = conn.execute("""
+            SELECT event_id, source, dedupe_key, comment_id
+              FROM orch_scm_events
+             ORDER BY event_id
+            """).fetchall()
+        index_sql = conn.execute("""
+            SELECT sql
+              FROM sqlite_master
+             WHERE type = 'index'
+               AND name = 'idx_orch_scm_events_polling_dedupe_key'
+            """).fetchone()["sql"]
+
+    assert version_after == ORCHESTRATION_SCHEMA_VERSION
+    assert [
+        (row["event_id"], row["source"], row["dedupe_key"], row["comment_id"])
+        for row in sources
+    ] == [
+        ("github:body:abc123", "webhook", None, "3328937952"),
+        ("github:delivery-created", "webhook", None, "3328937952"),
+        ("github:delivery-edited", "webhook", None, "3328937952"),
+    ]
+    assert "source = 'polling'" in index_sql
 
 
 def test_apply_orchestration_migrations_adds_chat_surface_event_journal_from_v29(

@@ -48,6 +48,7 @@ def test_scm_observability_records_compact_audit_flow_and_propagates_correlation
         event_id="github:delivery-observe-1",
         provider="github",
         event_type="pull_request_review",
+        source="webhook",
         repo_slug="acme/widgets",
         repo_id="repo-1",
         pr_number=42,
@@ -124,6 +125,7 @@ def test_scm_event_store_round_trips_correlation_id(tmp_path: Path) -> None:
         event_id="github:delivery-xyz",
         provider="github",
         event_type="pull_request",
+        source="webhook",
         correlation_id="corr-xyz",
         payload={"action": "opened"},
     )
@@ -142,6 +144,7 @@ def test_publish_created_audit_marks_deduped_operations(tmp_path: Path) -> None:
         event_id="github:event-dedupe-1",
         provider="github",
         event_type="pull_request_review",
+        source="webhook",
         repo_slug="acme/widgets",
         repo_id="repo-1",
         pr_number=42,

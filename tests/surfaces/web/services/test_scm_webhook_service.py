@@ -19,6 +19,7 @@ def _event(delivery_id: str = "delivery-1") -> ScmEvent:
         event_id=f"github:{delivery_id}",
         provider="github",
         event_type="pull_request",
+        source="webhook",
         occurred_at="2026-03-25T10:00:00Z",
         received_at="2026-03-25T10:00:01Z",
         created_at="2026-03-25T10:00:01Z",

@@ -508,6 +508,7 @@ def normalize_github_webhook(
         ),
         provider="github",
         event_type=event_name,
+        source="webhook",
         occurred_at=normalized.occurred_at or resolved_received_at,
         received_at=resolved_received_at,
         created_at=resolved_received_at,

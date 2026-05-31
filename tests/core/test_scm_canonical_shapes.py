@@ -41,6 +41,7 @@ class TestScmEventShape:
             event_id="github:shape-1",
             provider="github",
             event_type="pull_request",
+            source="webhook",
             repo_slug="acme/widgets",
             repo_id="99",
             pr_number=42,
@@ -67,6 +68,7 @@ class TestScmEventShape:
             event_id="github:shape-raw",
             provider="github",
             event_type="pull_request",
+            source="webhook",
             payload={"action": "opened"},
             raw_payload=raw,
         )
@@ -80,6 +82,7 @@ class TestScmEventShape:
             event_id="github:roundtrip-1",
             provider="github",
             event_type="pull_request_review",
+            source="webhook",
             occurred_at="2026-04-01T10:00:00Z",
             received_at="2026-04-01T10:00:01Z",
             repo_slug="acme/widgets",
@@ -99,12 +102,14 @@ class TestScmEventShape:
             event_id="github:dedup-1",
             provider="github",
             event_type="pull_request",
+            source="webhook",
         )
         with pytest.raises(sqlite3.IntegrityError):
             store.record_event(
                 event_id="github:dedup-1",
                 provider="github",
                 event_type="pull_request",
+                source="webhook",
             )
 
     def test_event_list_filters_by_provider_and_repo(self, tmp_path: Path) -> None:
@@ -113,12 +118,14 @@ class TestScmEventShape:
             event_id="github:filter-1",
             provider="github",
             event_type="pull_request",
+            source="webhook",
             repo_slug="acme/alpha",
         )
         store.record_event(
             event_id="github:filter-2",
             provider="github",
             event_type="push",
+            source="webhook",
             repo_slug="acme/beta",
         )
         alpha = store.list_events(provider="github", repo_slug="acme/alpha")
@@ -133,6 +140,7 @@ class TestScmEventShape:
             event_id="github:minimal-1",
             provider="github",
             event_type="push",
+            source="webhook",
         )
         assert event.repo_slug is None
         assert event.repo_id is None

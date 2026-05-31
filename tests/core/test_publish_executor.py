@@ -1228,6 +1228,7 @@ def test_enqueue_managed_turn_executor_rebinds_instead_of_merging_stale_archived
     event = ScmEventStore(hub_root).record_event(
         provider="github",
         event_type="check_run",
+        source="webhook",
         event_id="github:event-archived-ci",
         occurred_at="2026-03-25T00:00:00Z",
         received_at="2026-03-25T00:00:01Z",
@@ -1336,6 +1337,7 @@ def test_enqueue_managed_turn_executor_rebinds_archived_scm_thread_with_bootstra
     event = ScmEventStore(hub_root).record_event(
         provider="github",
         event_type="pull_request_review_comment",
+        source="webhook",
         event_id="github:event-rebind",
         occurred_at="2026-03-25T00:00:00Z",
         received_at="2026-03-25T00:00:01Z",
@@ -1457,6 +1459,7 @@ def test_enqueue_managed_turn_executor_dedupes_retry_after_scm_rebind_to_new_thr
     event = ScmEventStore(hub_root).record_event(
         provider="github",
         event_type="pull_request_review_comment",
+        source="webhook",
         event_id="github:event-rebind-dedupe",
         occurred_at="2026-03-25T00:00:00Z",
         received_at="2026-03-25T00:00:01Z",

@@ -215,6 +215,7 @@ async def ingest_scm_webhook_event(
             event_id=request.event.event_id,
             provider=request.event.provider,
             event_type=request.event.event_type,
+            source=request.event.source,
             occurred_at=request.event.occurred_at,
             received_at=request.event.received_at,
             repo_slug=request.event.repo_slug,

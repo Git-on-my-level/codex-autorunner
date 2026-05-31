@@ -33,9 +33,11 @@ _SHARED_RISK_PREFIXES = (
 
 _LANE_PREFIXES: dict[ScopedValidationLane, tuple[str, ...]] = {
     "core": (
+        "src/codex_autorunner/adapters/github",
         "src/codex_autorunner/core",
         "src/codex_autorunner/flows",
         "src/codex_autorunner/surfaces/cli",
+        "tests/adapters/github",
         "tests/core",
         "tests/flows",
         "tests/surfaces/cli",

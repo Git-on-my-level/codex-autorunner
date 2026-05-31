@@ -101,6 +101,8 @@ def _record_poll_event(
         event_id=event_id,
         provider="github",
         event_type=event_type,
+        source="polling",
+        dedupe_key=event_id,
         occurred_at=occurred_at,
         received_at=received_at,
         repo_slug=watch.repo_slug,
@@ -113,11 +115,9 @@ def _record_poll_event(
         return PollEventRecord(event=event, created=True)
     existing = event_store.get_event(event_id)
     if existing is None:
-        existing = event_store.get_event_by_comment_identity(
-            event_type=event_type,
-            repo_slug=watch.repo_slug,
-            pr_number=watch.pr_number,
-            comment_id=_mapping(payload).get("comment_id"),
+        existing = event_store.get_event_by_dedupe_key(
+            source="polling",
+            dedupe_key=event_id,
         )
     if existing is None:
         raise RuntimeError("SCM event row missing after duplicate poll event")
