@@ -216,7 +216,7 @@
   let scopeLocked = $state(false);
   function readChatListFiltersFromRoute(): ChatListFilters {
     try {
-      return parseChatListFiltersFromSearchParams(page.url.searchParams);
+      return parseChatListFiltersFromSearchParams(currentBrowserUrl().searchParams);
     } catch {
       return DEFAULT_CHAT_LIST_FILTERS;
     }
