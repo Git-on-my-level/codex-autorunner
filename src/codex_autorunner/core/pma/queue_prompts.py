@@ -86,6 +86,7 @@ def build_queue_execution_prompt(
         hub_root=inputs.hub_root,
         prompt_state_key=inputs.prompt_state_key,
         force_full_base_prompt=force_full_base_prompt,
+        user_input_texts=[inputs.message],
     )
     if inputs.github_context_injector is None:
         return built

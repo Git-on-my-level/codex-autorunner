@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional, cast
 
 from .config_contract import ConfigError
+from .context_awareness import maybe_inject_worktree_pr_hint
 from .hub import HubSupervisor
 from .managed_thread_snapshot import (
     snapshot_managed_threads as _snapshot_managed_threads,
@@ -94,7 +96,12 @@ def format_pma_prompt(
     prompt_state_key: Optional[str] = None,
     force_full_context: bool = False,
     force_full_base_prompt: bool = False,
+    user_input_texts: Sequence[str | None] | None = None,
 ) -> str:
+    message, _ = maybe_inject_worktree_pr_hint(
+        message,
+        user_input_texts=user_input_texts,
+    )
     limits = PmaPromptRenderLimits.from_snapshot(snapshot)
     snapshot_text = _render_hub_snapshot(
         snapshot,
@@ -175,6 +182,7 @@ def format_pma_prompt_variants(
     *,
     prompt_state_key: Optional[str] = None,
     force_full_context: bool = False,
+    user_input_texts: Sequence[str | None] | None = None,
 ) -> PmaPromptVariants:
     """Build prompt variants for fresh-session bootstrap and existing sessions.
 
@@ -191,6 +199,7 @@ def format_pma_prompt_variants(
         hub_root=hub_root,
         prompt_state_key=prompt_state_key,
         force_full_context=force_full_context,
+        user_input_texts=user_input_texts,
     )
     existing_session_prompt = new_session_prompt
     if hub_root is not None and prompt_state_key and not force_full_context:
@@ -200,6 +209,7 @@ def format_pma_prompt_variants(
             message,
             hub_root=hub_root,
             prompt_state_key=prompt_state_key,
+            user_input_texts=user_input_texts,
         )
     return PmaPromptVariants(
         new_session_prompt=new_session_prompt,

@@ -6,7 +6,8 @@ Default to managed threads for work that fits in one clear prompt and one manage
 
 Common operations:
 
-- Spawn: `car pma thread spawn --agent codex --repo <repo_id> --path <hub_root>`
+- Spawn exploratory or non-PR work: `car pma thread spawn --agent <agent_id> --repo <repo_id> --path <hub_root>`
+- Spawn implementation work that should produce a PR: `car pma thread spawn --agent <agent_id> --repo <repo_id> --pr --path <hub_root>`
 - Send: `car pma thread send --id <thread_id> --message "..." --path <hub_root>`
 - Watch intentionally: `car pma thread send --id <thread_id> --message "..." --watch --path <hub_root>`
 - Status: `car pma thread status --id <thread_id> --path <hub_root>`
@@ -14,6 +15,9 @@ Common operations:
 - Retire: `car pma thread retire --id <thread_id> --path <hub_root>`
 
 Reuse a relevant active managed thread before spawning a new one.
+
+PR mode creates a fresh hub-owned worktree from `origin/<default-branch>` by
+default and keeps lifecycle, progress, and subscriptions visible to PMA.
 
 ## Bound Chat Generations
 

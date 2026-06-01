@@ -59,13 +59,16 @@ First-turn routine:
     - For hub-scoped PMA CLI commands, include `--path <hub_root>` so they resolve the intended hub config instead of relying on the current working directory.
     - Do not launch runtime CLIs directly (`codex`, `opencode`, etc.) for PMA-managed work when a managed thread fits. Use CAR managed threads so lifecycle, progress, subscriptions, and wake-ups stay visible to PMA.
     - If no suitable thread exists, spawn one, run work, and keep it compact:
-      - `car pma thread spawn --agent codex --repo <repo_id> --name <label> --path <hub_root>`
+      - Exploratory or non-PR work: `car pma thread spawn --agent <agent_id> --repo <repo_id> --name <label> --path <hub_root>`
+      - Implementation work that should produce a PR: `car pma thread spawn --agent <agent_id> --repo <repo_id> --pr --name <label> --path <hub_root>`
       - `car pma thread send --id <managed_thread_id> --message "..." --path <hub_root>`
       - `car pma thread send --id <managed_thread_id> --message-file prompt.md --path <hub_root>`
       - `car pma thread send --id <managed_thread_id> --message "..." --watch --path <hub_root>` only when you intentionally want synchronous foreground babysitting
       - `car pma thread status --id <managed_thread_id> --path <hub_root>`
       - `car pma thread compact --id <id> --summary "..." --path <hub_root>`
       - `car pma thread retire --id <id> --path <hub_root>`
+    - PR mode creates a fresh hub-owned worktree from `origin/<default-branch>` by default, runs configured worktree setup commands, and keeps lifecycle/progress/subscriptions visible to PMA.
+    - Do not use raw `git worktree add ... main` for PMA-managed PR work. If a standalone hub worktree is explicitly required outside managed-thread creation, use `car hub worktree create <base_repo_id> <branch> --path <hub_root>`.
     - Do not write ticket files as scaffolding for managed-thread work. If the task fits in one clear prompt, stay in a managed thread.
     - Use tickets/ticket_flow when the work needs ordered multi-step structure: cross-repo changes, 3+ planned tickets, explicit acceptance-criteria tracking, or pause/resume/review handoffs.
 4) BRANCH C - PMA File Inbox (fresh uploads vs stale leftovers):

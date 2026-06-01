@@ -111,6 +111,7 @@ def _format_seeded_pma_prompt(
         _STUB_SNAPSHOT if snapshot is None else snapshot,
         message,
         hub_root=hub_root if include_workspace_docs else None,
+        user_input_texts=[message],
         **prompt_kwargs,
     )
 
@@ -501,6 +502,42 @@ def test_format_pma_prompt_load_failure_still_includes_fastpath(
     assert "<pma_workspace_docs>" not in result
     assert "</pma_workspace_docs>" not in result
     assert "<pma_fastpath>" in result
+
+
+def test_format_pma_prompt_fastpath_prefers_pr_mode_managed_threads(
+    tmp_path: Path,
+) -> None:
+    result = _format_seeded_pma_prompt(tmp_path)
+
+    assert (
+        "car pma thread spawn --agent <agent_id> --repo <repo_id> --pr "
+        "--name <label> --path <hub_root>"
+    ) in result
+    assert "origin/<default-branch>" in result
+    assert "Do not use raw `git worktree add ... main`" in result
+    assert "car pma thread spawn --agent codex" not in result
+
+
+def test_format_pma_prompt_injects_worktree_pr_hint_from_user_message(
+    tmp_path: Path,
+) -> None:
+    result = _format_seeded_pma_prompt(
+        tmp_path,
+        message="Please create a worktree and open a PR for this fix.",
+    )
+
+    assert "car pma thread spawn --agent <agent_id>" in result
+    assert "car hub worktree create <base_repo_id> <branch> --path <hub_root>" in result
+    assert "Do not use raw `git worktree add ... main`" in result
+    assert result.count("car hub worktree create <base_repo_id> <branch>") == 2
+
+
+def test_format_pma_prompt_does_not_inject_worktree_pr_hint_without_user_signal(
+    tmp_path: Path,
+) -> None:
+    result = _format_seeded_pma_prompt(tmp_path, message="Please summarize status.")
+
+    assert result.count("car hub worktree create <base_repo_id> <branch>") == 1
 
 
 def test_truncation_applied_to_long_agents(tmp_path: Path) -> None:

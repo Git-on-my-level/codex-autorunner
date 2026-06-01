@@ -3319,6 +3319,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         *,
         record: "TelegramTopicRecord",
         message: TelegramMessage,
+        user_input_texts: list[str | None] | None = None,
     ) -> Optional[tuple[str, str]]:
         hub_root = getattr(self, "_hub_root", None)
         if hub_root is None:
@@ -3361,6 +3362,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 message_text,
                 hub_root=hub_root,
                 prompt_state_key=prompt_state_key,
+                user_input_texts=user_input_texts,
             )
             return (
                 prompt_variants.new_session_prompt,
@@ -3614,10 +3616,14 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 user_message_prompt = (
                     f"{pma_context_prefix.strip()}\n\n{user_message_prompt}"
                 )
+            raw_user_input = (
+                text_override if text_override is not None else (message.text or "")
+            )
             pma_prompt_variants = await self._prepare_pma_prompt(
                 user_message_prompt,
                 record=record,
                 message=message,
+                user_input_texts=[raw_user_input],
             )
             if pma_prompt_variants is None:
                 return await self._maybe_send_failure(

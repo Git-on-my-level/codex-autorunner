@@ -306,7 +306,7 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 - Managed threads are the default for straightforward work in one repo: exploratory work, reviews, bug fixes, focused refactors, and single-feature PRs that fit in one clear prompt.
 - Reuse an existing relevant managed thread before spawning a new one.
 - For work that should open a PR, use PR mode instead of a reused thread:
-  `car pma thread spawn --agent codex --repo <base_or_worktree_repo_id> --pr --name <label> --path <hub_root>`.
+  `car pma thread spawn --agent <agent_id> --repo <base_or_worktree_repo_id> --pr --name <label> --path <hub_root>`.
   PR mode resolves hub worktrees back to their upstream/base repo, creates a
   fresh hub-owned worktree from `origin/<default-branch>` (or `--pr-base-ref`),
   runs configured worktree setup commands, and fails instead of falling back to
@@ -318,8 +318,8 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 - For hub-scoped PMA CLI commands, include `--path <hub_root>` so they resolve the
   intended hub config instead of relying on the current working directory.
 - CLI primitives:
-  - `car pma thread spawn --agent codex --repo <repo_id> --name <label> --path <hub_root>`
-  - `car pma thread spawn --agent codex --repo <repo_id> --pr --name <label> --path <hub_root>`
+  - `car pma thread spawn --agent <agent_id> --repo <repo_id> --name <label> --path <hub_root>`
+  - `car pma thread spawn --agent <agent_id> --repo <repo_id> --pr --name <label> --path <hub_root>`
   - `car pma thread send --id <managed_thread_id> --message "..." --path <hub_root>`
   - `car pma thread send --id <managed_thread_id> --message-file prompt.md --path <hub_root>`
   - `car pma thread send --id <managed_thread_id> --message "..." --watch --path <hub_root>` only when you intentionally want synchronous foreground babysitting
@@ -471,7 +471,7 @@ Canonical worktree creation:
   `car hub worktree create <base_repo_id> <branch> [--start-point <ref>]`
   (defaults to `origin/<default-branch>` when `--start-point` is omitted)
 - PMA PR work:
-  `car pma thread spawn --agent codex --repo <base_or_worktree_repo_id> --pr --path <hub_root>`
+  `car pma thread spawn --agent <agent_id> --repo <base_or_worktree_repo_id> --pr --path <hub_root>`
   creates a fresh PR-isolated worktree from the upstream/base repo and runs the
   base repo's configured worktree setup commands.
 
