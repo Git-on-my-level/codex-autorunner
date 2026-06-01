@@ -39,6 +39,23 @@ describe('read model loaders', () => {
     expect(client.chatIndex).not.toHaveBeenCalled();
   });
 
+  it('returns cached data immediately and refreshes in the background when requested non-blocking', async () => {
+    const store = new ReadModelEntityStore();
+    store.applyChatIndexSnapshot(chatIndexSnapshot());
+    const client = mockClient({
+      chatIndex: vi.fn().mockResolvedValue(ok(chatIndexSnapshot([chatIndexRow('chat-2', 'Fresh Chat')])))
+    });
+    const { ensureChatIndexLoaded } = await importLoaders(true);
+
+    const result = await ensureChatIndexLoaded({}, { store, client, blocking: false, refresh: true });
+
+    expect(result).toEqual({ status: 'cache-hit', tags: ['entity:chat:index'] });
+    expect(client.chatIndex).toHaveBeenCalledWith({});
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(store.snapshot().chats['chat-2']?.title).toBe('Fresh Chat');
+  });
+
   it('fetches a cache miss through the snapshot client and hydrates the store', async () => {
     const store = new ReadModelEntityStore();
     const snapshot = chatDetailSnapshot('chat-1');
@@ -268,7 +285,7 @@ function cursor(sequence: number, source = 'test'): ProjectionCursor {
   return { value: `${source}:${sequence}`, sequence, source, issuedAt: now };
 }
 
-function chatIndexSnapshot(): ChatIndexSnapshot {
+function chatIndexSnapshot(rows: ChatIndexSnapshot['rows'] = [chatIndexRow('chat-1', 'Chat One')]): ChatIndexSnapshot {
   return {
     contractVersion: READ_MODEL_CONTRACT_VERSION,
     kind: 'chat.index.snapshot',
@@ -277,26 +294,30 @@ function chatIndexSnapshot(): ChatIndexSnapshot {
     filter: 'all',
     query: null,
     facetRequest: emptyFacetRequest,
-    rows: [{
-      chatId: 'chat-1',
-      surface: 'pma',
-      title: 'Chat One',
-      status: 'idle',
-      unreadCount: 0,
-      lastActivityAt: now,
-      repoId: 'repo-1',
-      worktreeId: null,
-      ticketId: null,
-      runId: null,
-      agent: 'codex',
-      chatKind: 'pma',
-      model: 'gpt-5.5',
-      groupId: null
-    }],
+    rows,
     groups: [],
     counters: { total: 1, waiting: 0, running: 0, unread: 0, archived: 0 },
     facetCounts: emptyFacetCounts,
     repair: repair('/hub/read-models/chats')
+  };
+}
+
+function chatIndexRow(chatId: string, title: string): ChatIndexSnapshot['rows'][number] {
+  return {
+    chatId,
+    surface: 'pma',
+    title,
+    status: 'idle',
+    unreadCount: 0,
+    lastActivityAt: now,
+    repoId: 'repo-1',
+    worktreeId: null,
+    ticketId: null,
+    runId: null,
+    agent: 'codex',
+    chatKind: 'pma',
+    model: 'gpt-5.5',
+    groupId: null
   };
 }
 

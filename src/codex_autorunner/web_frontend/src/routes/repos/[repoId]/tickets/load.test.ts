@@ -60,7 +60,7 @@ describe('/repos/[repoId]/tickets route load', () => {
     });
 
     expect(result.result).toEqual({ status: 'cache-hit', tags: ['entity:repo:repo-1'] });
-    expect(client.repoDetail).not.toHaveBeenCalled();
+    expect(client.repoDetail).toHaveBeenCalledWith('repo-1');
   });
 
   it('returns errors from blocking repo detail fetches', async () => {

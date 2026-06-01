@@ -12,7 +12,7 @@ import { importRouteLoader } from '$lib/test/importRouteLoader';
 const now = '2026-05-11T12:00:00Z';
 
 describe('/worktrees/[worktreeId] route load', () => {
-  it('returns a cache hit when the worktree detail is already in the store', async () => {
+  it('returns cached worktree detail immediately and refreshes in the background', async () => {
     const store = new ReadModelEntityStore();
     store.applyWorktreeDetailSnapshot(worktreeDetailSnapshot('wt-1'));
     const client = mockClient();
@@ -21,7 +21,7 @@ describe('/worktrees/[worktreeId] route load', () => {
     const result = await loadWorktreeDetailRoute({ worktreeId: 'wt-1', loaderOptions: { store, client } });
 
     expect(result.result).toEqual({ status: 'cache-hit', tags: ['entity:worktree:wt-1'] });
-    expect(client.worktreeDetail).not.toHaveBeenCalled();
+    expect(client.worktreeDetail).toHaveBeenCalledWith('wt-1');
   });
 
   it('returns cold on a missing worktree detail so navigation can commit immediately', async () => {

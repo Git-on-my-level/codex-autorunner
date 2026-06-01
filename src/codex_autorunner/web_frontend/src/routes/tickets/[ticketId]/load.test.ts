@@ -50,7 +50,7 @@ describe('/tickets/[ticketId] route load', () => {
     expect(client.ticketDetail).toHaveBeenCalledWith('t-1', { kind: 'repo', id: 'repo-right' });
   });
 
-  it('returns cache hit when ticket index is already loaded', async () => {
+  it('returns cached ticket index immediately and refreshes in the background', async () => {
     const store = new ReadModelEntityStore();
     store.replaceScopedTicketSummaries('all', [ticketSummary('t-1', 'Cached')]);
     const client = mockClient();
@@ -59,6 +59,7 @@ describe('/tickets/[ticketId] route load', () => {
     const result = await loadTicketDetailRoute({ ticketId: 't-1', loaderOptions: { store, client } });
 
     expect(result.indexResult).toEqual({ status: 'cache-hit', tags: ['entity:ticket:index'] });
+    expect(client.ticketIndex).toHaveBeenCalled();
   });
 
   it('returns cold and defers detail lookup when the ticket index is missing', async () => {

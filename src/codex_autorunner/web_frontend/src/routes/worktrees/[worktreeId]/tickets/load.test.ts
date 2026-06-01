@@ -60,7 +60,7 @@ describe('/worktrees/[worktreeId]/tickets route load', () => {
     });
 
     expect(result.result).toEqual({ status: 'cache-hit', tags: ['entity:worktree:wt-1'] });
-    expect(client.worktreeDetail).not.toHaveBeenCalled();
+    expect(client.worktreeDetail).toHaveBeenCalledWith('wt-1');
   });
 
   it('returns errors from blocking worktree detail fetches', async () => {

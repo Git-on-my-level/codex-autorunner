@@ -103,9 +103,24 @@ describe('/chats page', () => {
     )?.[0];
 
     expect(syncCommittedBody).toContain('await replaceDetailUrl(detailId);');
-    expect(source).toContain("history.replaceState(history.state, '', href(target));");
+    expect(source).toContain('replaceChatDetailProjection(detailId');
+    expect(source).toContain('pushChatDetailProjection(detailId');
     expect(syncCommittedBody).not.toContain('goto(');
     expect(syncCommittedBody).not.toContain('pendingCommittedDetailUrlChatId');
+  });
+
+  it('projects chat filter URLs without SvelteKit navigation', () => {
+    const source = chatDetailPageSource();
+    const filterSyncBody = source.match(
+      /\$effect\(\(\) => \{\n    try \{\n      const browserUrl = currentBrowserUrl[\s\S]*?\n  \}\);/
+    )?.[0];
+
+    expect(filterSyncBody).toBeTruthy();
+    expect(filterSyncBody).toContain('const fromUrl = readChatListFiltersFromUrl(browserUrl);');
+    expect(filterSyncBody).toContain('replaceChatListFiltersProjection(chatListFilters');
+    expect(filterSyncBody).toContain('url: browserUrl');
+    expect(filterSyncBody).not.toContain('readChatListFiltersFromRoute()');
+    expect(filterSyncBody).not.toContain('goto(');
   });
 
   it('pushes the selected chat URL and lets the updated route activate the detail controller', () => {
