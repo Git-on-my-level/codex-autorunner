@@ -103,7 +103,10 @@ def _record_poll_event(
         repo_slug=watch.repo_slug,
         pr_number=watch.pr_number,
         comment_id=payload_map.get("comment_id"),
+        comment_updated_at=_comment_timestamp(payload_map),
         source="polling",
+        thread_target_id=binding.thread_target_id,
+        binding_id=binding.binding_id,
     )
     event = event_store.record_event_if_new(
         event_id=event_id,

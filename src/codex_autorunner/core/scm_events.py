@@ -46,6 +46,21 @@ def _normalize_json_object(value: Any, *, field_name: str) -> dict[str, Any]:
     raise ValueError(f"{field_name} must be a JSON object")
 
 
+def _scm_polling_legacy_content_key(
+    *,
+    event_type: str,
+    repo_slug: Optional[str],
+    pr_number: Optional[int],
+    comment_id: str,
+    comment_updated_at: Optional[str] = None,
+) -> str:
+    base = f"{event_type}:{repo_slug}:{pr_number}:{comment_id}"
+    normalized_updated_at = _normalize_text(comment_updated_at)
+    if normalized_updated_at is not None:
+        return f"{base}:{normalized_updated_at}"
+    return base
+
+
 def scm_polling_dedupe_key(
     *,
     event_type: str,
@@ -53,39 +68,95 @@ def scm_polling_dedupe_key(
     pr_number: Optional[int],
     comment_id: Optional[str],
     source: Optional[str],
+    comment_updated_at: Optional[str] = None,
+    thread_target_id: Optional[str] = None,
+    binding_id: Optional[str] = None,
 ) -> Optional[str]:
     normalized_source = _normalize_text(source)
     normalized_comment_id = _normalize_text(comment_id)
     if normalized_source != "polling" or normalized_comment_id is None:
         return None
-    return f"{event_type}:{repo_slug}:{pr_number}:{normalized_comment_id}"
+    base = _scm_polling_legacy_content_key(
+        event_type=event_type,
+        repo_slug=repo_slug,
+        pr_number=pr_number,
+        comment_id=normalized_comment_id,
+        comment_updated_at=comment_updated_at,
+    )
+    normalized_thread_target_id = _normalize_text(thread_target_id)
+    if normalized_thread_target_id is not None:
+        return f"{base}:thread:{normalized_thread_target_id}"
+    normalized_binding_id = _normalize_text(binding_id)
+    if normalized_binding_id is not None:
+        return f"{base}:unbound:{normalized_binding_id}"
+    return f"{base}:unbound"
 
 
-def _find_polling_event_row_by_comment_identity(
+def _find_polling_event_row_for_dedupe(
     conn: Any,
     *,
-    provider: str,
-    event_type: str,
-    repo_slug: Optional[str],
-    pr_number: Optional[int],
-    comment_id: Optional[str],
+    provider: Optional[str],
+    dedupe_key: str,
+    legacy_comment_key: str,
 ) -> Any:
-    if repo_slug is None or pr_number is None or comment_id is None:
-        return None
-    return conn.execute(
-        """
+    provider_clause = ""
+    provider_params: list[Any] = []
+    normalized_provider = _normalize_text(provider)
+    if normalized_provider is not None:
+        provider_clause = "AND provider = ?"
+        provider_params.append(normalized_provider)
+
+    row = conn.execute(
+        f"""
         SELECT *
           FROM orch_scm_events
-         WHERE provider = ?
-           AND source = 'polling'
-           AND event_type = ?
-           AND repo_slug = ?
-           AND pr_number = ?
-           AND comment_id = ?
+         WHERE source = 'polling'
+           {provider_clause}
+           AND dedupe_key = ?
          ORDER BY occurred_at ASC, created_at ASC, event_id ASC
          LIMIT 1
         """,
-        (provider, event_type, repo_slug, pr_number, comment_id),
+        (*provider_params, dedupe_key),
+    ).fetchone()
+    if row is not None:
+        return row
+
+    if ":thread:" in dedupe_key:
+        return None
+
+    row = conn.execute(
+        f"""
+        SELECT *
+          FROM orch_scm_events
+         WHERE source = 'polling'
+           {provider_clause}
+           AND dedupe_key = ?
+         ORDER BY occurred_at ASC, created_at ASC, event_id ASC
+         LIMIT 1
+        """,
+        (*provider_params, legacy_comment_key),
+    ).fetchone()
+    if row is not None:
+        return row
+
+    return conn.execute(
+        f"""
+        SELECT *
+          FROM orch_scm_events
+         WHERE source = 'polling'
+           {provider_clause}
+           AND dedupe_key = event_id
+           AND comment_id IS NOT NULL
+           AND repo_slug IS NOT NULL
+           AND pr_number IS NOT NULL
+           AND (
+               event_type || ':' || repo_slug || ':' ||
+               CAST(pr_number AS TEXT) || ':' || comment_id
+           ) = ?
+         ORDER BY occurred_at ASC, created_at ASC, event_id ASC
+         LIMIT 1
+        """,
+        (*provider_params, legacy_comment_key),
     ).fetchone()
 
 
@@ -303,23 +374,31 @@ class ScmEventStore:
         normalized_comment_id = _normalize_text(
             payload_object.get("comment_id")
         ) or _normalize_text(comment_id)
-        normalized_dedupe_key = scm_polling_dedupe_key(
-            event_type=normalized_event_type,
-            repo_slug=normalized_repo_slug,
-            pr_number=normalized_pr_number,
-            comment_id=normalized_comment_id,
-            source=normalized_source,
-        ) or _normalize_text(dedupe_key)
+        caller_dedupe_key = _normalize_text(dedupe_key)
+        if caller_dedupe_key is not None and caller_dedupe_key != normalized_event_id:
+            normalized_dedupe_key = caller_dedupe_key
+        else:
+            normalized_dedupe_key = scm_polling_dedupe_key(
+                event_type=normalized_event_type,
+                repo_slug=normalized_repo_slug,
+                pr_number=normalized_pr_number,
+                comment_id=normalized_comment_id,
+                source=normalized_source,
+            )
 
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
-            if normalized_dedupe_key is not None:
-                duplicate_row = _find_polling_event_row_by_comment_identity(
-                    conn,
-                    provider=normalized_provider,
+            if normalized_dedupe_key is not None and normalized_comment_id is not None:
+                legacy_comment_key = _scm_polling_legacy_content_key(
                     event_type=normalized_event_type,
                     repo_slug=normalized_repo_slug,
                     pr_number=normalized_pr_number,
                     comment_id=normalized_comment_id,
+                )
+                duplicate_row = _find_polling_event_row_for_dedupe(
+                    conn,
+                    provider=normalized_provider,
+                    dedupe_key=normalized_dedupe_key,
+                    legacy_comment_key=legacy_comment_key,
                 )
                 if duplicate_row is not None:
                     _reconcile_legacy_polling_dedupe_key(
@@ -403,23 +482,11 @@ class ScmEventStore:
                     SELECT *
                       FROM orch_scm_events
                      WHERE source = ?
-                       AND (
-                           dedupe_key = ?
-                        OR (
-                           dedupe_key = event_id
-                           AND comment_id IS NOT NULL
-                           AND repo_slug IS NOT NULL
-                           AND pr_number IS NOT NULL
-                           AND (
-                               event_type || ':' || repo_slug || ':' ||
-                               CAST(pr_number AS TEXT) || ':' || comment_id
-                           ) = ?
-                        )
-                       )
+                       AND dedupe_key = ?
                      ORDER BY occurred_at ASC, created_at ASC, event_id ASC
                      LIMIT 1
                     """,
-                    (normalized_source, normalized_dedupe_key, normalized_dedupe_key),
+                    (normalized_source, normalized_dedupe_key),
                 ).fetchone()
             else:
                 row = conn.execute(

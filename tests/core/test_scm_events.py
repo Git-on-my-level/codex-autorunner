@@ -115,7 +115,9 @@ def test_dedupe_key_is_content_derived_not_event_id(tmp_path: Path) -> None:
 
     assert created is not None
     assert created.dedupe_key != event_id
-    assert created.dedupe_key == f"{event_type}:{repo_slug}:{pr_number}:{comment_id}"
+    assert created.dedupe_key == (
+        f"{event_type}:{repo_slug}:{pr_number}:{comment_id}:unbound"
+    )
     assert "7f81b70789930f207325f5096a1eae3e" not in str(created.dedupe_key)
 
 
@@ -125,7 +127,7 @@ def test_rotating_event_ids_produce_same_dedupe_key(tmp_path: Path) -> None:
     repo_slug = "acme/widgets"
     pr_number = 17
     comment_id = "3330969470"
-    dedupe_key = f"{event_type}:{repo_slug}:{pr_number}:{comment_id}"
+    dedupe_key = f"{event_type}:{repo_slug}:{pr_number}:{comment_id}:unbound"
 
     created = store.record_event_if_new(
         event_id="github:poll:pull_request_review_comment:7f81b70789930f207325f5096a1eae3e",
@@ -194,6 +196,43 @@ def test_webhook_events_have_null_dedupe_key(
     assert [event.dedupe_key for event in rows] == [None, None]
 
 
+def test_bound_polling_event_inserts_after_unbound_row_for_same_comment(
+    tmp_path: Path,
+) -> None:
+    store = ScmEventStore(tmp_path)
+    event_type = "pull_request_review_comment"
+    repo_slug = "acme/widgets"
+    pr_number = 17
+    comment_id = "2844"
+    base = f"{event_type}:{repo_slug}:{pr_number}:{comment_id}"
+
+    unbound = store.record_event_if_new(
+        event_id="github:poll:pull_request_review_comment:unbound-hash",
+        provider="github",
+        event_type=event_type,
+        source="polling",
+        dedupe_key=f"{base}:unbound:binding-1",
+        repo_slug=repo_slug,
+        pr_number=pr_number,
+        payload={"action": "created", "comment_id": comment_id},
+    )
+    bound = store.record_event_if_new(
+        event_id="github:poll:pull_request_review_comment:bound-hash",
+        provider="github",
+        event_type=event_type,
+        source="polling",
+        dedupe_key=f"{base}:thread:thread-123",
+        repo_slug=repo_slug,
+        pr_number=pr_number,
+        payload={"action": "created", "comment_id": comment_id},
+    )
+
+    assert unbound is not None
+    assert bound is not None
+    assert unbound.event_id != bound.event_id
+    assert len(store.list_events(limit=10)) == 2
+
+
 def test_different_comment_ids_produce_different_dedupe_keys(tmp_path: Path) -> None:
     store = ScmEventStore(tmp_path)
     event_type = "pull_request_review_comment"
@@ -223,8 +262,10 @@ def test_different_comment_ids_produce_different_dedupe_keys(tmp_path: Path) -> 
 
     assert first is not None
     assert second is not None
-    assert first.dedupe_key == f"{event_type}:{repo_slug}:{pr_number}:comment-1"
-    assert second.dedupe_key == f"{event_type}:{repo_slug}:{pr_number}:comment-2"
+    assert first.dedupe_key == f"{event_type}:{repo_slug}:{pr_number}:comment-1:unbound"
+    assert (
+        second.dedupe_key == f"{event_type}:{repo_slug}:{pr_number}:comment-2:unbound"
+    )
     assert first.dedupe_key != second.dedupe_key
 
 
