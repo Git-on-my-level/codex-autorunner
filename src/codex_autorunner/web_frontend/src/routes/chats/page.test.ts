@@ -112,11 +112,14 @@ describe('/chats page', () => {
   it('projects chat filter URLs without SvelteKit navigation', () => {
     const source = chatDetailPageSource();
     const filterSyncBody = source.match(
-      /\$effect\(\(\) => \{\n    try \{\n      const fromUrl = readChatListFiltersFromRoute[\s\S]*?\n  \}\);/
+      /\$effect\(\(\) => \{\n    try \{\n      const browserUrl = currentBrowserUrl[\s\S]*?\n  \}\);/
     )?.[0];
 
     expect(filterSyncBody).toBeTruthy();
+    expect(filterSyncBody).toContain('const fromUrl = readChatListFiltersFromUrl(browserUrl);');
     expect(filterSyncBody).toContain('replaceChatListFiltersProjection(chatListFilters');
+    expect(filterSyncBody).toContain('url: browserUrl');
+    expect(filterSyncBody).not.toContain('readChatListFiltersFromRoute()');
     expect(filterSyncBody).not.toContain('goto(');
   });
 

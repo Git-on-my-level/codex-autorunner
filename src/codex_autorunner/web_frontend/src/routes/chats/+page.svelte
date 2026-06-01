@@ -215,8 +215,12 @@
    *  declared which scope this chat belongs to. */
   let scopeLocked = $state(false);
   function readChatListFiltersFromRoute(): ChatListFilters {
+    return readChatListFiltersFromUrl(page.url);
+  }
+
+  function readChatListFiltersFromUrl(url: URL): ChatListFilters {
     try {
-      return parseChatListFiltersFromSearchParams(currentBrowserUrl().searchParams);
+      return parseChatListFiltersFromSearchParams(url.searchParams);
     } catch {
       return DEFAULT_CHAT_LIST_FILTERS;
     }
@@ -1101,9 +1105,10 @@
 
   $effect(() => {
     try {
-      const fromUrl = readChatListFiltersFromRoute();
+      const browserUrl = currentBrowserUrl();
+      const fromUrl = readChatListFiltersFromUrl(browserUrl);
       if (chatListFiltersEqual(chatListFilters, fromUrl)) return;
-      replaceChatListFiltersProjection(chatListFilters, { chatId: activeChatId, url: currentBrowserUrl() });
+      replaceChatListFiltersProjection(chatListFilters, { chatId: activeChatId, url: browserUrl });
     } catch {
       // No SvelteKit page context during SSR-only renders.
     }
