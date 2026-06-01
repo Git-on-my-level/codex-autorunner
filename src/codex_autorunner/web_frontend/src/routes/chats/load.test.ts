@@ -59,6 +59,23 @@ describe('/chats route load', () => {
     expect(depends).not.toHaveBeenCalledWith(expect.stringContaining('entity:chat:chat-'));
   });
 
+  it('returns route-owned active chat id for detail paths without loading detail', async () => {
+    const depends = vi.fn();
+    const client = mockClient();
+    const { loadChatRoute } = await importPageLoad(true);
+
+    const result = await loadChatRoute({
+      depends,
+      params: { chatId: 'pma:route-chat' },
+      loaderOptions: { client }
+    });
+
+    expect(result.chatId).toBe('pma:route-chat');
+    expect(result.activeDetail).toBeNull();
+    expect(depends).toHaveBeenCalledWith('entity:chat:index');
+    expect(client.chatDetail).not.toHaveBeenCalled();
+  });
+
   it('fetches a fresh deterministic chat index on repeated route loads', async () => {
     const store = new ReadModelEntityStore();
     const rows = [

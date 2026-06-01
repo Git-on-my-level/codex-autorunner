@@ -1,5 +1,6 @@
 import type { Readable } from 'svelte/store';
 import type { ApiError, ApiResult, JsonRecord } from '$lib/api/client';
+import type { ChatDetailLiveProjectionRefreshOptions } from './chatDetailLiveProjection';
 import {
   type ChatIndexWindowRequest,
   CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST,
@@ -50,8 +51,8 @@ export type ChatDetailPageIndexSession = {
 };
 
 export type ChatDetailPageLiveProjection = {
-  activate: (chatId: string | null, options?: { quiet?: boolean }) => Promise<void>;
-  refresh: (chatId: string, options?: { quiet?: boolean }) => Promise<void>;
+  activate: (chatId: string | null, options?: ChatDetailLiveProjectionRefreshOptions) => Promise<void>;
+  refresh: (chatId: string, options?: ChatDetailLiveProjectionRefreshOptions) => Promise<void>;
   retry: (chatId: string) => void;
   close: () => void;
 };
@@ -198,7 +199,7 @@ export class ChatDetailPageController {
     return command;
   }
 
-  async refreshActive(chatId: string, options: { quiet?: boolean } = {}): Promise<void> {
+  async refreshActive(chatId: string, options: ChatDetailLiveProjectionRefreshOptions = {}): Promise<void> {
     await this.deps.liveProjection.refresh(chatId, options);
   }
 

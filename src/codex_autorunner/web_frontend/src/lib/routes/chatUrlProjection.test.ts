@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  pushChatDetailProjection,
-  replaceChatDetailProjection,
+  chatDetailProjectionTarget,
   replaceChatListFiltersProjection
 } from './chatUrlProjection';
 import type { ChatListFilters } from './chatListFiltersUrl';
@@ -30,18 +29,15 @@ describe('chatUrlProjection', () => {
     expect(history.pushState).not.toHaveBeenCalled();
   });
 
-  it('strips transient detail hooks when replacing or pushing committed chat detail URLs', () => {
+  it('strips transient detail hooks from committed chat detail URL targets', () => {
     const history = mockHistory();
     const url = new URL('http://localhost/chats?chat=old&detail=chat%3Aold&draft=x&new=agent&kind=agent&tab=activity');
 
-    expect(replaceChatDetailProjection('chat-2', { url, history, withHref: (path) => path })).toBe(
-      '/chats/chat-2?tab=activity'
-    );
-    expect(pushChatDetailProjection('chat-3', { url, history, withHref: (path) => path })).toBe(
+    expect(chatDetailProjectionTarget('chat-3', { url, history, withHref: (path) => path })).toBe(
       '/chats/chat-3?tab=activity'
     );
-    expect(history.replaceState).toHaveBeenCalledWith({ preserved: true }, '', '/chats/chat-2?tab=activity');
-    expect(history.pushState).toHaveBeenCalledWith({ preserved: true }, '', '/chats/chat-3?tab=activity');
+    expect(history.replaceState).not.toHaveBeenCalled();
+    expect(history.pushState).not.toHaveBeenCalled();
   });
 });
 

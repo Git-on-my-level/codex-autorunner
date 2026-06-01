@@ -17,6 +17,7 @@ const CHAT_INDEX_WINDOW_LIMIT = 50;
 export async function loadChatRoute(
   options: LoadReadModelRouteOptions
 ): Promise<ChatRouteLoadData> {
+  const chatId = options.params?.chatId?.trim() || null;
   const chatIndexPromise = ensureChatIndexLoaded(
     { limit: CHAT_INDEX_WINDOW_LIMIT },
     {
@@ -34,7 +35,7 @@ export async function loadChatRoute(
   const [chatIndex] = await Promise.all([chatIndexPromise, ticketRunGroupsPromise]);
 
   return {
-    chatId: null,
+    chatId,
     chatIndex,
     activeDetail: null
   };

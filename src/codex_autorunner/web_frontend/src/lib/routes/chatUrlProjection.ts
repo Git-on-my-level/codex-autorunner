@@ -26,26 +26,10 @@ export function replaceChatListFiltersProjection(
   return target;
 }
 
-export function replaceChatDetailProjection(
+export function chatDetailProjectionTarget(
   detailId: string,
   options: ChatUrlProjectionRuntime = {}
 ): string {
-  const target = buildChatDetailProjectionTarget(detailId, options);
-  replaceProjectionUrl(target, options);
-  return target;
-}
-
-export function pushChatDetailProjection(
-  detailId: string,
-  options: ChatUrlProjectionRuntime = {}
-): string {
-  const target = buildChatDetailProjectionTarget(detailId, options);
-  const history = options.history ?? browserHistory();
-  history?.pushState(history.state, '', target);
-  return target;
-}
-
-function buildChatDetailProjectionTarget(detailId: string, options: ChatUrlProjectionRuntime): string {
   const params = new URLSearchParams(currentProjectionUrl(options).searchParams);
   for (const key of CHAT_DETAIL_QUERY_KEYS) params.delete(key);
   const raw = chatRoute(detailId, { searchParams: params });

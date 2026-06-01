@@ -2,6 +2,7 @@ import type { ReadModelDepends, ReadModelLoaderOptions, ReadModelLoaderResult } 
 
 export type LoadReadModelRouteOptions = {
   depends?: ReadModelDepends;
+  params?: Record<string, string | undefined>;
   loaderOptions?: ReadModelLoaderOptions;
 };
 

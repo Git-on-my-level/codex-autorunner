@@ -11,7 +11,7 @@ def test_collect_probe_paths_matches_repo_routes() -> None:
     root = Path(__file__).resolve().parents[3]
     paths = collect_probe_paths(routes_dir(root))
     assert "/chats" in paths
-    assert "/chats/00000000-0000-4000-8000-000000000001" not in paths
+    assert "/chats/00000000-0000-4000-8000-000000000001" in paths
     assert "/repos/probe-repo/contextspace" in paths
     assert "/hub" in paths
     assert "/worktrees" in paths

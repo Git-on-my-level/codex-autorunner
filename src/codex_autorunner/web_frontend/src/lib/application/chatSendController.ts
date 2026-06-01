@@ -1,4 +1,5 @@
 import type { ApiError, ChatQueuedTurn, WebApiClient } from '$lib/api/client';
+import type { ChatDetailLiveProjectionRefreshOptions } from './chatDetailLiveProjection';
 import type { ReadModelEntityState, ReadModelEntityStore } from '$lib/data/readModelStore';
 import { selectChatQueue } from '$lib/data/readModelViewModels';
 import type { ChatRunProgress, ChatSummary } from '$lib/viewModels/domain';
@@ -74,7 +75,7 @@ export type ChatSendControllerDeps = {
   writeSessionState: (state: ChatDetailSessionState) => void;
   getLocalDraftChat: () => ChatSummary | null;
   invalidateChatMutation: (chatId: string) => Promise<void>;
-  refreshActive: (chatId: string, options: { quiet?: boolean }) => Promise<void>;
+  refreshActive: (chatId: string, options: ChatDetailLiveProjectionRefreshOptions) => Promise<void>;
   setSending: (value: boolean) => void;
   setComposeError: (error: ApiError | null) => void;
   confirm: (options: ChatSendConfirmationOptions) => Promise<boolean>;
@@ -309,7 +310,7 @@ export function createChatSendController(deps: ChatSendControllerDeps): ChatSend
         });
       }
       await deps.invalidateChatMutation(committedChatId);
-      await deps.refreshActive(committedChatId, { quiet: true });
+      await deps.refreshActive(committedChatId, { quiet: true, forceStream: targetIsNewChat });
       if (willQueueOptimistically) {
         removeOptimisticQueuedTurn(committedChatId, optimisticId);
       } else if (turnLandedInQueue(committedChatId, optimisticId)) {
