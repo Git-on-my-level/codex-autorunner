@@ -81,6 +81,11 @@
     type ChatListFilters
   } from '$lib/routes/chatListFiltersUrl';
   import {
+    pushChatDetailProjection,
+    replaceChatDetailProjection,
+    replaceChatListFiltersProjection
+  } from '$lib/routes/chatUrlProjection';
+  import {
     buildChatFilterSummaryChips,
     formatChatListResultSummary,
     selectChatFacetCountsForWindow,
@@ -93,8 +98,7 @@
     repoTicketRoute,
     worktreeContextspaceRoute,
     worktreeRoute,
-    worktreeTicketRoute,
-    chatRoute
+    worktreeTicketRoute
   } from '$lib/viewModels/routes';
   import type {
     ChatSummary,
@@ -1099,11 +1103,7 @@
     try {
       const fromUrl = readChatListFiltersFromRoute();
       if (chatListFiltersEqual(chatListFilters, fromUrl)) return;
-      void goto(chatsHubHref(activeChatId), {
-        replaceState: true,
-        keepFocus: true,
-        noScroll: true
-      });
+      replaceChatListFiltersProjection(chatListFilters, { chatId: activeChatId, url: currentBrowserUrl() });
     } catch {
       // No SvelteKit page context during SSR-only renders.
     }
@@ -1472,10 +1472,7 @@
   }
 
   async function replaceDetailUrl(detailId: string): Promise<void> {
-    const params = new URLSearchParams(page.url.searchParams);
-    for (const key of ['chat', 'detail', 'draft', 'new', 'kind']) params.delete(key);
-    const target = chatRoute(detailId, { searchParams: params });
-    history.replaceState(history.state, '', href(target));
+    replaceChatDetailProjection(detailId, { url: page.url });
   }
 
   async function syncCommittedDetailUrl(detailId: string, options: { mode?: 'push' | 'replace' } = {}): Promise<void> {
@@ -1484,10 +1481,7 @@
       await replaceDetailUrl(detailId);
       return;
     }
-    const params = new URLSearchParams(currentBrowserUrl().searchParams);
-    for (const key of ['chat', 'detail', 'draft', 'new', 'kind']) params.delete(key);
-    const target = chatRoute(detailId, { searchParams: params });
-    history.pushState(history.state, '', href(target));
+    pushChatDetailProjection(detailId, { url: currentBrowserUrl() });
   }
 
   async function refreshActive(chatId: string, options: { quiet?: boolean } = {}): Promise<void> {

@@ -55,7 +55,7 @@ describe('/tickets route load', () => {
     const result = await loadTicketIndexRoute({ loaderOptions: { store, client } });
 
     expect(result.result).toEqual({ status: 'cache-hit', tags: ['entity:ticket:index'] });
-    expect(client.ticketIndex).not.toHaveBeenCalled();
+    expect(client.ticketIndex).toHaveBeenCalled();
   });
 
   it('returns cold when not in the browser', async () => {

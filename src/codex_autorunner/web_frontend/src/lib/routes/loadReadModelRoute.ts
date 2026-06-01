@@ -9,6 +9,7 @@ export function readModelLoaderOptions(options: LoadReadModelRouteOptions): Read
   return {
     ...options.loaderOptions,
     depends: options.depends,
+    refresh: options.loaderOptions?.refresh ?? true,
     blocking: options.loaderOptions?.blocking ?? false
   };
 }

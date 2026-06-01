@@ -14,7 +14,7 @@ import { importRouteLoader } from '$lib/test/importRouteLoader';
 const now = '2026-05-11T12:00:00Z';
 
 describe('/repos/[repoId] route load', () => {
-  it('returns a cache hit when the repo detail is already in the store', async () => {
+  it('returns cached repo detail immediately and refreshes in the background', async () => {
     const store = new ReadModelEntityStore();
     store.applyRepoDetailSnapshot(repoDetailSnapshot('repo-1'));
     const client = mockClient();
@@ -23,7 +23,7 @@ describe('/repos/[repoId] route load', () => {
     const result = await loadRepoDetailRoute({ repoId: 'repo-1', loaderOptions: { store, client } });
 
     expect(result.result).toEqual({ status: 'cache-hit', tags: ['entity:repo:repo-1'] });
-    expect(client.repoDetail).not.toHaveBeenCalled();
+    expect(client.repoDetail).toHaveBeenCalledWith('repo-1');
   });
 
   it('returns cold on a missing repo detail so navigation can commit immediately', async () => {

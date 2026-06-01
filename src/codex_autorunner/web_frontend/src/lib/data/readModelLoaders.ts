@@ -240,9 +240,16 @@ async function ensureSnapshotLoaded({
   const state = store.snapshot();
   const cached = isCached(state);
   if (!shouldRefresh(state, cached, options)) return { status: 'cache-hit', tags };
-  if (options.blocking === false) return cached ? { status: 'cache-hit', tags } : { status: 'cold', tags };
 
   const client = options.client ?? readModelSnapshotClient;
+  if (options.blocking === false) {
+    if (cached) {
+      void fetchAndApply(client, store).catch(() => undefined);
+      return { status: 'cache-hit', tags };
+    }
+    return { status: 'cold', tags };
+  }
+
   const result = await fetchAndApply(client, store);
   if (!result.ok) return { status: 'error', tags, error: result.error };
   return { status: 'fetched', tags };

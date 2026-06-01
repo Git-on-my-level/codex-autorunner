@@ -51,7 +51,7 @@ describe('/worktrees/[worktreeId]/tickets/[ticketId] route load', () => {
       status: 'cache-hit',
       tags: ['entity:ticket:t-1', 'entity:worktree:wt-1']
     });
-    expect(client.ticketDetail).not.toHaveBeenCalled();
+    expect(client.ticketDetail).toHaveBeenCalledWith('t-1', { kind: 'worktree', id: 'wt-1' });
   });
 
   it('returns cold without blocking when ticket detail is missing', async () => {
