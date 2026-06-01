@@ -375,6 +375,7 @@ class ScmEventStore:
             payload_object.get("comment_id")
         ) or _normalize_text(comment_id)
         caller_dedupe_key = _normalize_text(dedupe_key)
+        normalized_dedupe_key: Optional[str]
         if caller_dedupe_key is not None and caller_dedupe_key != normalized_event_id:
             normalized_dedupe_key = caller_dedupe_key
         else:
