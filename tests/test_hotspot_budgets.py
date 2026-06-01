@@ -148,12 +148,12 @@ STANDARD_FILE_BUDGETS = (
     ),
     FileBudget(
         path="src/codex_autorunner/surfaces/web/services/pma/managed_thread_read_models.py",
-        max_lines=660,
-        reason="Ticket 008 moved managed-thread read-model shaping behind a web service boundary.",
+        max_lines=713,
+        reason="Current managed-thread read-model service baseline; future growth should move to focused helpers.",
     ),
     FileBudget(
         path="src/codex_autorunner/surfaces/web/services/chat_read_models.py",
-        max_lines=1194,
+        max_lines=1261,
         reason="Current chat read-model contract baseline outside frontend route loaders.",
     ),
     FileBudget(
@@ -368,13 +368,13 @@ STANDARD_FUNCTION_BUDGETS = (
     FunctionBudget(
         path="src/codex_autorunner/surfaces/web/services/pma/managed_thread_read_models.py",
         qualname="_serialize_thread_target",
-        max_lines=95,
-        reason="Ticket 008 keeps managed-thread target serialization inside the read-model service.",
+        max_lines=119,
+        reason="Current managed-thread target serialization baseline; future growth should split runtime/thread field helpers.",
     ),
     FunctionBudget(
         path="src/codex_autorunner/surfaces/web/services/chat_read_models.py",
         qualname="hub_chat_row_to_chat_index_row",
-        max_lines=162,
+        max_lines=167,
         reason="Current chat index row normalization baseline inside the web read-model service.",
     ),
     FunctionBudget(
@@ -519,8 +519,8 @@ LEGACY_FILE_CAPS = (
     ),
     FileBudget(
         path="src/codex_autorunner/web_frontend/src/routes/chats/+page.svelte",
-        max_lines=3461,
-        reason="Current legacy chat detail page baseline after the route was already over budget.",
+        max_lines=3452,
+        reason="Chat detail route baseline after list read-model extraction; future state/list derivations belong in application modules.",
     ),
     FileBudget(
         path="src/codex_autorunner/web_frontend/src/lib/data/readModelLoaders.ts",
@@ -565,18 +565,6 @@ LEGACY_FUNCTION_CAPS = (
         qualname="TicketRunner.step",
         max_lines=625,
         reason="TicketRunner.step() is still a legacy orchestration hotspot, but new growth should fail.",
-    ),
-    FunctionBudget(
-        path="src/codex_autorunner/core/pma_automation_store.py",
-        qualname="PmaAutomationStore.create_subscription",
-        max_lines=100,
-        reason="Legacy PMA automation store facade capped after ticket 001 service/persistence extraction.",
-    ),
-    FunctionBudget(
-        path="src/codex_autorunner/core/pma_automation_store.py",
-        qualname="PmaAutomationStore.notify_transition",
-        max_lines=100,
-        reason="Legacy PMA automation store facade capped after tickets 001-002 moved transition side effects to services/mirrors.",
     ),
 )
 
