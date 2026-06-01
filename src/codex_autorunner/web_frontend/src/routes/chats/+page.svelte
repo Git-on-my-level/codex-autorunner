@@ -42,6 +42,16 @@
     ChatFacetTransport
   } from '$lib/api/readModelContracts';
   import { buildChatDetailDisplayReadModel, type ChatTranscriptListItem } from '$lib/application/chatDetailReadModel';
+  import {
+    buildChatCategoryFilterOptions,
+    buildChatIndexRequest,
+    buildChatScopeKindFilterOptions,
+    buildChatStatusFilterCounts,
+    buildChatTicketRunGroupRequest,
+    buildChatTransportFilterOptions,
+    buildDraftChatSummary,
+    filterDraftChatsForChatList
+  } from '$lib/application/chatDetailListReadModel';
   import { isOptimisticQueuedTurn } from '$lib/application/chatDetailOptimistic';
   import { progressWithLiveElapsed } from '$lib/application/chatDetailProgress';
   import { createChatSendController } from '$lib/application/chatSendController';
@@ -107,7 +117,6 @@
     SurfaceArtifact
   } from '$lib/viewModels/domain';
   import {
-    adjustedUnreadFilterCount,
     buildSemanticChatListEntries,
     chatRunGroupSummaryParts,
     buildChatScopeOptions,
@@ -115,7 +124,6 @@
     buildManagedThreadMessagePayload,
     countSemanticTicketRunGroups,
     filterChatEntries,
-    filterChats,
     formatBytes,
     formatRelativeTime,
     isChatArchived,
@@ -123,13 +131,11 @@
     mergeChatFacetSourceChats,
     mergeLocalChatPlaceholders,
     CHAT_FILTER_ORDER,
-    CHAT_EXTERNAL_TRANSPORT_FILTERS,
     CHAT_TICKET_RUNS_FILTER,
     chatKind,
     chatKindLabel,
     chatHeaderScopeLine,
     chatBadgeViews,
-    chatFacets,
     chatCategoryLabel,
     chatTransportLabel,
     chatScopeTagView,
@@ -137,7 +143,6 @@
     visibleLocalChatPlaceholders as selectVisibleLocalChatPlaceholders,
     removePendingAttachment,
     statusLabel,
-    summarizeVisibleLocalPlaceholderStatusCounts,
     type PendingAttachment,
     type ChatTranscriptCard,
     type ChatStatusFilter,
@@ -284,13 +289,7 @@
   }
 
   function filterDraftChatsForCurrentFilters(source: ChatSummary[]): ChatSummary[] {
-    return filterChats(source, 'drafts', search, lastSeenMap).filter((chat) => {
-      const facets = chatFacets(chat);
-      if (categoryFilter && facets?.category !== categoryFilter) return false;
-      if (transportFilter && !facets?.transports.includes(transportFilter)) return false;
-      if (scopeKindFilter && facets?.scopeKind !== scopeKindFilter) return false;
-      return true;
-    });
+    return filterDraftChatsForChatList(source, chatListFilters, lastSeenMap);
   }
 
   function draftRecordChatSummary(record: ChatDraftRecord): ChatSummary {
@@ -299,39 +298,7 @@
       (localDraftChat?.id === record.chatId ? localDraftChat : null) ??
       record.chatSnapshot ??
       null;
-    const raw = known?.raw ?? {};
-    return {
-      id: record.chatId,
-      title: known?.title ?? record.chatId,
-      lifecycleStatus: known?.lifecycleStatus ?? 'active',
-      status: known?.status ?? 'idle',
-      agentId: known?.agentId ?? null,
-      chatKind: known?.chatKind ?? null,
-      agentProfile: known?.agentProfile ?? null,
-      model: known?.model ?? null,
-      runtime: known?.runtime ?? null,
-      runtimeSource: known?.runtimeSource ?? null,
-      modelSource: known?.modelSource ?? null,
-      reasoning: known?.reasoning ?? null,
-      reasoningSource: known?.reasoningSource ?? null,
-      repoId: known?.repoId ?? null,
-      worktreeId: known?.worktreeId ?? null,
-      ticketId: known?.ticketId ?? null,
-      ticketPath: known?.ticketPath ?? null,
-      runId: known?.runId ?? null,
-      unreadCount: known?.unreadCount ?? 0,
-      flowType: known?.flowType ?? null,
-      isTicketFlow: known?.isTicketFlow ?? false,
-      ticketDone: known?.ticketDone ?? null,
-      ticketStatus: known?.ticketStatus ?? null,
-      progressPercent: known?.progressPercent ?? null,
-      updatedAt: record.updatedAt,
-      raw: {
-        ...raw,
-        has_local_draft: true,
-        local_draft_updated_at: record.updatedAt
-      }
-    };
+    return buildDraftChatSummary(record, known);
   }
   const transcriptCards = $derived<ChatTranscriptCard[]>(selectChatTranscript(readModelState, activeChatId));
   const progress = $derived<ChatRunProgress | null>(selectChatProgress(readModelState, activeChatId));
@@ -847,50 +814,26 @@
   }
 
   function chatIndexRequestForCurrentFilters(): ChatIndexWindowRequest {
-    const facets = {
-      categories: categoryFilter ? [categoryFilter] : [],
-      transports: transportFilter ? [transportFilter] : [],
-      scopeKinds: scopeKindFilter ? [scopeKindFilter] : []
-    };
-    return {
-      filter: backendChatIndexFilter(statusFilter),
-      query: search.trim() || null,
-      facets,
-      groupBy: categoryFilter === 'ticket_run' ? 'ticket_run' : null,
-      limit: 50
-    };
+    return buildChatIndexRequest(chatListFilters);
   }
 
   function chatTicketRunGroupRequestForFilters(): ChatIndexWindowRequest {
-    return {
-      filter: backendChatIndexFilter(statusFilter),
-      query: search.trim() || null,
-      facets: {
-        categories: ['ticket_run'],
-        transports: transportFilter ? [transportFilter] : [],
-        scopeKinds: scopeKindFilter ? [scopeKindFilter] : []
-      },
-      groupBy: 'ticket_run',
-      limit: 50
-    };
+    return buildChatTicketRunGroupRequest(chatListFilters);
   }
 
   function chatStatusFilterCounts(): Record<ChatStatusFilter, number> {
     const counters = selectedChatWindowView.window ? selectedChatWindowView.counters : readModelState.chatCounters;
-    const knownChats = facetChats;
-    const localStatusCounts = summarizeVisibleLocalPlaceholderStatusCounts(persistedFacetChats, committedChatPlaceholders);
-    return {
-      all: counters.total + localChatPlaceholderCount,
-      active: counters.running + localStatusCounts.active,
-      waiting: counters.waiting + localStatusCounts.waiting,
-      unread: adjustedUnreadFilterCount(counters.unread, knownChats, lastSeenMap),
-      drafts: statusFilter === 'drafts' ? filteredDraftChats.length : sortedChatDraftRecords(chatDraftRecords).length,
-      archived: counters.archived
-    };
-  }
-
-  function backendChatIndexFilter(filter: ChatStatusFilter): ChatIndexWindowRequest['filter'] {
-    return filter === 'drafts' ? 'all' : filter;
+    return buildChatStatusFilterCounts({
+      counters,
+      statusFilter,
+      knownChats: facetChats,
+      lastSeenMap,
+      persistedFacetChats,
+      committedChatPlaceholders,
+      localChatPlaceholderCount,
+      filteredDraftChatsLength: filteredDraftChats.length,
+      draftChatsLength: sortedChatDraftRecords(chatDraftRecords).length
+    });
   }
 
   const categoryFilterOptions = $derived(chatCategoryFilterOptions());
@@ -906,14 +849,11 @@
   }
 
   function chatCategoryFilterOptions(): { key: ChatFacetCategory; label: string; count: number }[] {
-    const counts = contextualFacetCounts.category;
-    const order: { key: ChatFacetCategory; label: string; count: number }[] = [
-      { key: 'regular', label: chatCategoryLabel('regular'), count: counts.regular ?? 0 },
-      { key: 'ticket_run', label: chatCategoryLabel('ticket_run'), count: ticketRunGroupCount },
-      { key: 'automation', label: chatCategoryLabel('automation'), count: counts.automation ?? 0 },
-      { key: 'system', label: chatCategoryLabel('system'), count: counts.system ?? 0 }
-    ];
-    return order.filter((item) => item.count > 0 || categoryFilter === item.key);
+    return buildChatCategoryFilterOptions({
+      counts: contextualFacetCounts.category,
+      ticketRunGroupCount,
+      selectedCategory: categoryFilter
+    });
   }
 
   const hasNonStatusFilter = $derived(
@@ -980,18 +920,18 @@
   });
 
   function chatTransportFilterOptions(): { key: ChatFacetTransport; label: string; count: number }[] {
-    const counts = contextualFacetCounts.transport;
-    return [...CHAT_EXTERNAL_TRANSPORT_FILTERS]
-      .map((transport) => ({ key: transport, label: chatTransportLabel(transport), count: counts[transport] ?? 0 }))
-      .filter((item) => item.count > 0 || transportFilter === item.key);
+    return buildChatTransportFilterOptions({
+      counts: contextualFacetCounts.transport,
+      selectedTransport: transportFilter
+    });
   }
 
   function chatScopeKindFilterOptions(): { key: ChatFacetScopeKind; label: string; count: number }[] {
-    const counts = contextualFacetCounts.scopeKind;
-    const order: ChatFacetScopeKind[] = ['hub', 'repo', 'worktree', 'filesystem'];
-    return order
-      .map((scopeKind) => ({ key: scopeKind, label: facetChipLabel(scopeKind), count: counts[scopeKind] ?? 0 }))
-      .filter((item) => item.count > 0 || scopeKindFilter === item.key);
+    return buildChatScopeKindFilterOptions({
+      counts: contextualFacetCounts.scopeKind,
+      selectedScopeKind: scopeKindFilter,
+      label: facetChipLabel
+    });
   }
 
   function composerRecipientLabel(chat: ChatSummary | null): string {

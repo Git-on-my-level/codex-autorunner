@@ -22,6 +22,13 @@ describe('/chats page', () => {
     );
   }
 
+  function chatDetailListReadModelSource(): string {
+    return readFileSync(
+      fileURLToPath(new URL('../../lib/application/chatDetailListReadModel.ts', import.meta.url)),
+      'utf8'
+    );
+  }
+
   it('uses remembered new-chat preferences unless a route-selected draft is being created', () => {
     const source = chatDetailPageSource();
     const createChatBody = source.match(
@@ -191,8 +198,9 @@ describe('/chats page', () => {
 
   it('does not re-apply chat search locally after requesting a backend search window', () => {
     const pageSource = chatDetailPageSource();
+    const listReadModelSource = chatDetailListReadModelSource();
 
-    expect(pageSource).toContain('query: search.trim() || null');
+    expect(listReadModelSource).toContain('query: filters.search.trim() || null');
     expect(pageSource).toContain("filterChatEntries(chatListEntries, statusFilter === 'drafts' ? 'all' : statusFilter, '', lastSeenMap)");
   });
 
@@ -260,13 +268,15 @@ describe('/chats page', () => {
 
   it('keeps composer drafts keyed by chat and treats draft filtering as a local overlay', () => {
     const pageSource = chatDetailPageSource();
+    const listReadModelSource = chatDetailListReadModelSource();
 
     expect(pageSource).toContain('loadChatDraftRecords');
     expect(pageSource).toContain('setChatDraftText(chatDraftRecords, chatId, value, chatSummaryForId(chatId))');
     expect(pageSource).toContain("statusFilter === 'drafts' ? filteredDraftChats");
-    expect(pageSource).toContain("filterChats(source, 'drafts', search, lastSeenMap)");
-    expect(pageSource).toContain("facets?.category !== categoryFilter");
-    expect(pageSource).toContain("filter === 'drafts' ? 'all' : filter");
+    expect(pageSource).toContain("filterDraftChatsForChatList(source, chatListFilters, lastSeenMap)");
+    expect(listReadModelSource).toContain("filterChats(source, 'drafts', filters.search, lastSeenMap)");
+    expect(listReadModelSource).toContain('facets?.category !== filters.category');
+    expect(listReadModelSource).toContain("filter === 'drafts' ? 'all' : filter");
     expect(pageSource).toContain("filterChatEntries(chatListEntries, statusFilter === 'drafts' ? 'all' : statusFilter");
   });
 
@@ -335,13 +345,15 @@ describe('/chats page', () => {
 
     const { body } = render(Page);
     const pageSource = chatDetailPageSource();
+    const listReadModelSource = chatDetailListReadModelSource();
 
     expect(body).toContain('More filters');
     expect(body).toContain('Discord');
     expect(body).not.toContain('PMA 2');
     expect(body).toContain('Automation Discord');
-    expect(pageSource).toContain("chatCategoryLabel('regular')");
-    expect(pageSource).toContain('CHAT_EXTERNAL_TRANSPORT_FILTERS');
+    expect(pageSource).toContain('buildChatCategoryFilterOptions');
+    expect(listReadModelSource).toContain("chatCategoryLabel('regular')");
+    expect(listReadModelSource).toContain('CHAT_EXTERNAL_TRANSPORT_FILTERS');
     expect(pageSource).toContain('contextualFacetCounts.transport');
   });
 
