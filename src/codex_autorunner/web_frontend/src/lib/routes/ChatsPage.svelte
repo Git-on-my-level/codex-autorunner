@@ -1419,7 +1419,7 @@
   }
 
   async function replaceDetailUrl(detailId: string): Promise<void> {
-    const target = chatDetailProjectionTarget(detailId, { url: page.url });
+    const target = chatDetailProjectionTarget(detailId, { url: currentBrowserUrl() });
     await goto(target, { replaceState: true, noScroll: true, keepFocus: true });
   }
 

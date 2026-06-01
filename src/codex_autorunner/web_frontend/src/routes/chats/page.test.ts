@@ -111,6 +111,7 @@ describe('/chats page', () => {
 
     expect(syncCommittedBody).toContain('await replaceDetailUrl(detailId);');
     expect(source).toContain('chatDetailProjectionTarget(detailId');
+    expect(source).toContain('chatDetailProjectionTarget(detailId, { url: currentBrowserUrl() });');
     expect(syncCommittedBody).toContain('await goto(target');
     expect(syncCommittedBody).not.toContain('pushChatDetailProjection');
     expect(syncCommittedBody).not.toContain('pendingCommittedDetailUrlChatId');
@@ -140,6 +141,18 @@ describe('/chats page', () => {
     expect(selectChatBody).toContain("await syncCommittedDetailUrl(chatId, { mode: 'push' });");
     expect(selectChatBody).not.toContain('pageController.selectChat');
     expect(selectChatBody).not.toContain('pageController.setRoute(currentRouteSnapshot())');
+  });
+
+  it('keeps route snapshots consolidated and preserves forced-stream refresh options', () => {
+    const source = chatDetailPageSource();
+    const refreshActiveBody = source.match(
+      /async function refreshActive[\s\S]*?\n  async function refreshArtifactDeliveries/
+    )?.[0];
+
+    expect(source).not.toContain('function initialRouteSnapshot');
+    expect(source).toContain('route: currentRouteSnapshot()');
+    expect(refreshActiveBody).toContain('ChatDetailLiveProjectionRefreshOptions');
+    expect(refreshActiveBody).toContain('pageController.refreshActive(chatId, options)');
   });
 
   it('keeps migrated PMA transcript, stream, queue, send, and normalization calls out of the page', () => {
