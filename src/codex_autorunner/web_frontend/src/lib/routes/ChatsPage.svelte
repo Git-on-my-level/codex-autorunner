@@ -64,7 +64,11 @@
     type ChatDraftRecordMap
   } from '$lib/application/chatDraftStore';
   import { connectionStore } from '$lib/runtime/connectionStore.svelte';
-  import { createChatDetailLiveProjection, type ChatDetailLiveProjectionState } from '$lib/application/chatDetailLiveProjection';
+  import {
+    createChatDetailLiveProjection,
+    type ChatDetailLiveProjectionRefreshOptions,
+    type ChatDetailLiveProjectionState
+  } from '$lib/application/chatDetailLiveProjection';
   import {
     chatListVirtualKey as chatListVirtualKeyForPins,
     chatSummaryForSessionId,
@@ -996,7 +1000,7 @@
     };
     readModelEntityStore.setReadMarkers(loadLastSeenMap());
     pageController.mount({
-      route: initialRouteSnapshot(),
+      route: currentRouteSnapshot(),
       currentRequest: currentChatIndexRequest,
       ticketRunGroupRequest
     });
@@ -1429,7 +1433,10 @@
     await goto(target, { noScroll: true, keepFocus: true });
   }
 
-  async function refreshActive(chatId: string, options: { quiet?: boolean } = {}): Promise<void> {
+  async function refreshActive(
+    chatId: string,
+    options: ChatDetailLiveProjectionRefreshOptions = {}
+  ): Promise<void> {
     await pageController.refreshActive(chatId, options);
   }
 
@@ -1616,16 +1623,6 @@
     ].filter(Boolean);
     if (parts.length === 0) return null;
     return parts.join(' · ');
-  }
-
-  function initialRouteSnapshot() {
-    const url = currentBrowserUrl();
-    const data = safePageData();
-    return {
-      chatId: data?.chatId ?? chatIdFromPath(url.pathname),
-      searchParams: url.searchParams,
-      data
-    };
   }
 
   function currentRouteSnapshot() {
