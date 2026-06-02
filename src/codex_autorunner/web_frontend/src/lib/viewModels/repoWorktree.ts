@@ -257,6 +257,54 @@ export function visibleRepoWorktreeChildren(
   return row.childWorktrees.filter((child) => childMatchesNeedle(child, needle) && childMatchesFilter(child, filter));
 }
 
+/** Worktrees untouched for longer than this read as "stale" in the index. */
+export const STALE_WORKTREE_THRESHOLD_MS = 14 * 24 * 60 * 60 * 1000;
+
+/** Worktree children shown per repo before the "Show N more" disclosure. */
+export const DEFAULT_VISIBLE_CHILD_CAP = 5;
+
+/** A worktree is "active" when it has running work or any attention state/signal. */
+export function isActiveWorktreeChild(child: RepoWorktreeChildRow): boolean {
+  return (
+    child.activeRuns > 0 ||
+    child.status === 'running' ||
+    child.status === 'waiting' ||
+    child.status === 'blocked' ||
+    child.status === 'failed' ||
+    child.signalActive > 0 ||
+    child.signalWaiting > 0 ||
+    child.signalFailed > 0
+  );
+}
+
+/**
+ * A worktree is "stale" when it is not active and its last recorded activity is
+ * older than {@link STALE_WORKTREE_THRESHOLD_MS}. Worktrees with no recorded
+ * activity are left alone (could be freshly created) to avoid hiding new work.
+ */
+export function isStaleWorktreeChild(child: RepoWorktreeChildRow, now: number = Date.now()): boolean {
+  if (isActiveWorktreeChild(child)) return false;
+  const last = Date.parse(child.lastActivityAt ?? '');
+  if (!Number.isFinite(last)) return false;
+  return now - last > STALE_WORKTREE_THRESHOLD_MS;
+}
+
+/** A repo defaults to expanded when pinned or when it needs attention. */
+export function repoDefaultExpanded(row: RepoWorktreeIndexRow): boolean {
+  return (
+    row.isPinned ||
+    row.activeRuns > 0 ||
+    row.status === 'running' ||
+    row.status === 'waiting' ||
+    row.status === 'blocked' ||
+    row.status === 'failed' ||
+    row.signalActive > 0 ||
+    row.signalWaiting > 0 ||
+    row.signalFailed > 0 ||
+    row.childWorktrees.some(isActiveWorktreeChild)
+  );
+}
+
 export function countRepoWorktreeIndexEntities(
   rows: RepoWorktreeIndexRow[],
   filter: RepoWorktreeIndexFilter = 'all'

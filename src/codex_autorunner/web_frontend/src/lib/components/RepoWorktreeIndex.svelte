@@ -1,7 +1,16 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import type { RepoWorktreeIndexFilter, RepoWorktreeIndexViewModel } from '$lib/viewModels/repoWorktree';
-  import { countRepoWorktreeIndexEntities, filterRepoWorktreeIndexRows, rowRelativeTime, visibleRepoWorktreeChildren } from '$lib/viewModels/repoWorktree';
+  import {
+    countRepoWorktreeIndexEntities,
+    filterRepoWorktreeIndexRows,
+    rowRelativeTime,
+    visibleRepoWorktreeChildren,
+    isStaleWorktreeChild,
+    repoDefaultExpanded,
+    DEFAULT_VISIBLE_CHILD_CAP
+  } from '$lib/viewModels/repoWorktree';
+  import { loadRepoIndexPrefs, saveRepoIndexPrefs } from '$lib/viewModels/repoIndexPrefs';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { statusLabel } from '$lib/viewModels/chat';
   import type { PartialPageIssue } from '$lib/api/client';
@@ -42,38 +51,80 @@
   let search = $state('');
   let filter = $state<RepoWorktreeIndexFilter>('all');
 
-  let globalCollapsed = $state(false);
-  let toggledRepoIds = $state<Record<string, true>>({});
+  type IndexRow = RepoWorktreeIndexViewModel['rows'][number];
 
-  function isRepoCollapsed(repoId: string): boolean {
-    const flipped = toggledRepoIds[repoId] === true;
-    return flipped ? !globalCollapsed : globalCollapsed;
+  const initialPrefs = loadRepoIndexPrefs();
+  // Explicit per-repo collapse overrides (true = collapsed). Absent = use repoDefaultExpanded.
+  let collapsedOverrides = $state<Record<string, boolean>>(initialPrefs.collapsed);
+  let hideStale = $state(initialPrefs.hideStale);
+  // Per-repo "show all worktrees" disclosure; transient, not persisted.
+  let expandedChildRepoIds = $state<Record<string, true>>({});
+
+  $effect(() => {
+    saveRepoIndexPrefs({ collapsed: collapsedOverrides, hideStale });
+  });
+
+  const searching = $derived(search.trim().length > 0);
+
+  function isRepoCollapsed(row: IndexRow): boolean {
+    const override = collapsedOverrides[row.id];
+    if (typeof override === 'boolean') return override;
+    return !repoDefaultExpanded(row);
   }
 
-  function toggleRepoCollapsed(repoId: string): void {
-    if (toggledRepoIds[repoId]) {
-      const next = { ...toggledRepoIds };
-      delete next[repoId];
-      toggledRepoIds = next;
-    } else {
-      toggledRepoIds = { ...toggledRepoIds, [repoId]: true };
-    }
-  }
-
-  function setAllCollapsed(value: boolean): void {
-    globalCollapsed = value;
-    toggledRepoIds = {};
+  function toggleRepoCollapsed(row: IndexRow): void {
+    collapsedOverrides = { ...collapsedOverrides, [row.id]: !isRepoCollapsed(row) };
   }
 
   const indexRows = $derived(index.rows);
   const ticketMetricsReady = $derived(index.ticketIndexMetricsAvailable);
   const filteredRows = $derived(filterRepoWorktreeIndexRows(indexRows, search, filter));
-  const collapsibleRepoCount = $derived(
-    indexRows.filter((row) => row.kind === 'repo' && row.totalWorktrees > 0).length
+  const collapsibleRepos = $derived(
+    filteredRows.filter((row) => row.kind === 'repo' && row.totalWorktrees > 0)
+  );
+  const collapsibleRepoCount = $derived(collapsibleRepos.length);
+  const allCollapsed = $derived(
+    collapsibleRepos.length > 0 && collapsibleRepos.every((row) => isRepoCollapsed(row))
+  );
+  const hasCollapsedDefaultExpanded = $derived(
+    collapsibleRepos.some((row) => repoDefaultExpanded(row) && isRepoCollapsed(row))
+  );
+  const staleCount = $derived(
+    indexRows.reduce(
+      (total, row) => total + visibleRepoWorktreeChildren(row, '', 'all').filter((c) => isStaleWorktreeChild(c)).length,
+      0
+    )
   );
 
-  function visibleChildren(row: RepoWorktreeIndexViewModel['rows'][number]) {
-    return visibleRepoWorktreeChildren(row, search, filter);
+  function setAllCollapsed(value: boolean): void {
+    const next = { ...collapsedOverrides };
+    for (const row of collapsibleRepos) next[row.id] = value;
+    collapsedOverrides = next;
+  }
+
+  function expandActive(): void {
+    const next = { ...collapsedOverrides };
+    for (const row of collapsibleRepos) {
+      if (repoDefaultExpanded(row)) next[row.id] = false;
+    }
+    collapsedOverrides = next;
+  }
+
+  function visibleChildren(row: IndexRow) {
+    const rows = visibleRepoWorktreeChildren(row, search, filter);
+    // Keep matches visible while searching; hide-stale only applies to the resting list.
+    if (searching || !hideStale) return rows;
+    return rows.filter((child) => !isStaleWorktreeChild(child));
+  }
+
+  function toggleShowAllChildren(repoId: string): void {
+    if (expandedChildRepoIds[repoId]) {
+      const next = { ...expandedChildRepoIds };
+      delete next[repoId];
+      expandedChildRepoIds = next;
+    } else {
+      expandedChildRepoIds = { ...expandedChildRepoIds, [repoId]: true };
+    }
   }
 
   function repoFilterCount(key: RepoWorktreeIndexFilter): number {
@@ -176,15 +227,37 @@
           })}
         >
           {#snippet trailing()}
+            {#if staleCount > 0 || hideStale}
+              <button
+                class="ghost-button hide-stale-button"
+                class:is-on={hideStale}
+                type="button"
+                title={hideStale ? 'Show stale worktrees' : 'Hide stale worktrees (untouched 14+ days)'}
+                aria-pressed={hideStale}
+                onclick={() => (hideStale = !hideStale)}
+              >
+                {hideStale ? `Show stale${staleCount > 0 ? ` (${staleCount})` : ''}` : `Hide stale (${staleCount})`}
+              </button>
+            {/if}
+            {#if hasCollapsedDefaultExpanded}
+              <button
+                class="ghost-button"
+                type="button"
+                title="Expand repos with active or pinned work"
+                onclick={() => expandActive()}
+              >
+                Expand active
+              </button>
+            {/if}
             {#if collapsibleRepoCount > 0}
               <button
                 class="ghost-button collapse-all-button"
                 type="button"
-                title={globalCollapsed ? 'Expand all repos' : 'Collapse all repos'}
-                aria-label={globalCollapsed ? 'Expand all repos' : 'Collapse all repos'}
-                onclick={() => setAllCollapsed(!globalCollapsed)}
+                title={allCollapsed ? 'Expand all repos' : 'Collapse all repos'}
+                aria-label={allCollapsed ? 'Expand all repos' : 'Collapse all repos'}
+                onclick={() => setAllCollapsed(!allCollapsed)}
               >
-                {#if globalCollapsed}
+                {#if allCollapsed}
                   {@render expandAllIcon()}
                   <span>Expand all</span>
                 {:else}
@@ -229,7 +302,7 @@
         {#snippet children(row)}
           {@const accent = repoAccent(row.label)}
           {@const collapsible = row.kind === 'repo' && row.totalWorktrees > 0}
-          {@const collapsed = collapsible && isRepoCollapsed(row.id)}
+          {@const collapsed = collapsible && isRepoCollapsed(row)}
           <div class={`repo-item status-${row.status}`} class:has-children={row.childWorktrees.length > 0} class:is-collapsed={collapsed} class:is-archived={row.archiveState === 'archived'} role="listitem" style={`--repo-accent: ${accent};`}>
             <div
               class="repo-head row-click-target"
@@ -251,7 +324,7 @@
                 onclick={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
-                  toggleRepoCollapsed(row.id);
+                  toggleRepoCollapsed(row);
                 }}
               >
                 {@render chevronIcon()}
@@ -447,7 +520,10 @@
             {/if}
 
             {#if !collapsed}
-              {@const childRows = visibleChildren(row)}
+              {@const allChildRows = visibleChildren(row)}
+              {@const showAllChildren = searching || expandedChildRepoIds[row.id] === true}
+              {@const childRows = showAllChildren ? allChildRows : allChildRows.slice(0, DEFAULT_VISIBLE_CHILD_CAP)}
+              {@const hiddenChildCount = allChildRows.length - childRows.length}
               {#if childRows.length > 0}
                 <VirtualList
                   items={childRows}
@@ -460,7 +536,7 @@
                   scrollable={false}
                 >
                   {#snippet children(worktree)}
-                    <div class={`worktree-item status-${worktree.status}`} class:is-archived={worktree.archiveState === 'archived'} role="listitem">
+                    <div class={`worktree-item status-${worktree.status}`} class:is-archived={worktree.archiveState === 'archived'} class:is-stale={!searching && isStaleWorktreeChild(worktree)} role="listitem">
                     <div
                       class="worktree-card row-click-target"
                       role="link"
@@ -602,6 +678,18 @@
                     </div>
                   {/snippet}
                 </VirtualList>
+              {/if}
+              {#if !searching && allChildRows.length > DEFAULT_VISIBLE_CHILD_CAP}
+                <button
+                  class="worktree-show-more"
+                  type="button"
+                  onclick={() => toggleShowAllChildren(row.id)}
+                  aria-expanded={showAllChildren}
+                >
+                  {showAllChildren
+                    ? 'Show fewer worktrees'
+                    : `Show ${hiddenChildCount} more worktree${hiddenChildCount === 1 ? '' : 's'}`}
+                </button>
               {/if}
             {/if}
           </div>
