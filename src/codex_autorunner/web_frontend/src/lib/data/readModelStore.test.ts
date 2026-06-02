@@ -354,6 +354,34 @@ describe('read model entity store', () => {
     });
   });
 
+  it('reconciles optimistic user transcript rows when matching backend rows append later', () => {
+    const store = new ReadModelEntityStore();
+    const optimistic = pmaMessageCard('chat-1', 'optimistic:user:client-1', 'queued prompt');
+    const unrelatedOptimistic = pmaMessageCard('chat-1', 'optimistic:user:client-2', 'still pending');
+    const backendUser = pmaMessageCard('chat-1', 'turn:1:user', 'queued prompt');
+    optimistic.message.raw = {
+      optimistic: true,
+      client_turn_id: 'client-1',
+      correlation_id: 'client-1'
+    };
+    unrelatedOptimistic.message.raw = {
+      optimistic: true,
+      client_turn_id: 'client-2',
+      correlation_id: 'client-2'
+    };
+    backendUser.message.raw = {
+      identity: { correlation_id: 'client-1' }
+    };
+
+    store.upsertChatTranscriptCards('chat-1', [optimistic, unrelatedOptimistic]);
+    store.upsertChatTranscriptCards('chat-1', [backendUser]);
+
+    expect(store.snapshot().chatTranscripts['chat-1'].order).toEqual([
+      'optimistic:user:client-2',
+      'turn:1:user'
+    ]);
+  });
+
   it('does not clone untouched cached transcripts when progress updates', () => {
     const store = new ReadModelEntityStore();
     const active = pmaMessageCard('chat-1', 'turn:1:user', 'hello');
@@ -1065,7 +1093,7 @@ describe('read model entity store', () => {
   });
 });
 
-function pmaMessageCard(chatId: string, id: string, text: string): ChatTranscriptCard {
+function pmaMessageCard(chatId: string, id: string, text: string): Extract<ChatTranscriptCard, { kind: 'message' }> {
   return {
     kind: 'message',
     id,

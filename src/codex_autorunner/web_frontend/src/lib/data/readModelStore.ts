@@ -540,6 +540,10 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
         if (currentIndex >= 0) transcript.order.splice(currentIndex, 1);
       }
       insertOrderedChatTranscriptId(transcript, id);
+      for (const optimisticId of confirmedOptimisticTranscriptIds(transcript, card)) {
+        delete transcript.cardsById[optimisticId];
+        transcript.order = transcript.order.filter((itemId) => itemId !== optimisticId);
+      }
       changed = true;
     }
     if (!changed) return;
@@ -1472,6 +1476,39 @@ function transcriptCardTurnId(card: ChatTranscriptCard): string | null {
 function transcriptCardTimestamp(card: ChatTranscriptCard): string | null {
   if ('timestamp' in card && card.timestamp) return card.timestamp;
   if (card.kind === 'message') return card.message.createdAt;
+  return null;
+}
+
+function confirmedOptimisticTranscriptIds(
+  transcript: { cardsById: Record<string, ChatTranscriptCard>; order: string[] },
+  backendCard: ChatTranscriptCard
+): string[] {
+  if (backendCard.kind !== 'message' || backendCard.message.role !== 'user' || backendCard.id.startsWith('optimistic:')) {
+    return [];
+  }
+  const correlationId = transcriptCardCorrelationId(backendCard);
+  if (!correlationId) return [];
+  return transcript.order.filter((id) => {
+    if (!id.startsWith('optimistic:')) return false;
+    const optimistic = transcript.cardsById[id];
+    return (
+      optimistic?.kind === 'message' &&
+      optimistic.message.role === 'user' &&
+      transcriptCardCorrelationId(optimistic) === correlationId
+    );
+  });
+}
+
+function transcriptCardCorrelationId(card: ChatTranscriptCard): string | null {
+  if (card.kind !== 'message') return null;
+  const raw = card.message.raw;
+  const direct = raw.correlation_id ?? raw.client_turn_id;
+  if (typeof direct === 'string' && direct.trim()) return direct.trim();
+  const identity = raw.identity;
+  if (identity && typeof identity === 'object' && !Array.isArray(identity)) {
+    const value = (identity as Record<string, unknown>).correlation_id;
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
   return null;
 }
 
