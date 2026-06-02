@@ -1279,6 +1279,39 @@ def test_cleanup_all_skips_worktree_when_binding_lookup_raises_runtime_error(
     assert worktree.path.exists()
 
 
+def test_cleanup_all_skips_archived_worktree(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = _default_hub_config()
+    cfg["pma"]["cleanup_require_archive"] = False
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id=base.id,
+        branch="feature/archived-cleanup-skip",
+        start_point="HEAD",
+    )
+    supervisor.set_worktree_archived(worktree_repo_id=worktree.id, archived=True)
+
+    preview = supervisor.cleanup_all(dry_run=True)
+    result = supervisor.cleanup_all(dry_run=False)
+
+    assert preview["worktrees"]["retired_count"] == 0
+    assert result["worktrees"]["retired_count"] == 0
+    assert result["message"] == "Nothing to clean up"
+    assert worktree.path.exists()
+    manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
+    entry = manifest.get(worktree.id)
+    assert entry is not None
+    assert entry.archived is True
+
+
 def test_cleanup_all_repairs_legacy_worktree_entries_before_cleanup(
     tmp_path: Path,
 ) -> None:
