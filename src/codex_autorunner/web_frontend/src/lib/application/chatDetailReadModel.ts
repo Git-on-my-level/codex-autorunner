@@ -12,7 +12,8 @@ import type { ChatDetailStreamState } from './chatDetailLiveProjection';
 export type ChatTranscriptListItem =
   | { kind: 'card'; id: string; card: ChatTranscriptCard }
   | { kind: 'typing'; id: string; title: string }
-  | { kind: 'shared-files'; id: string };
+  | { kind: 'shared-files'; id: string }
+  | { kind: 'tail-spacer'; id: string };
 
 export type ChatDetailDisplayReadModelInput = {
   transcriptCards: ChatTranscriptCard[];
@@ -91,7 +92,8 @@ export function buildChatDetailDisplayReadModel(
     transcriptListItems: [
       ...displayTranscriptCards.map((card) => ({ kind: 'card' as const, id: card.id, card })),
       ...(showTypingIndicator ? [{ kind: 'typing' as const, id: 'typing-indicator', title: 'Assistant is typing' }] : []),
-      ...(input.assistantSharedFileCount > 0 ? [{ kind: 'shared-files' as const, id: 'assistant-shared-files' }] : [])
+      ...(input.assistantSharedFileCount > 0 ? [{ kind: 'shared-files' as const, id: 'assistant-shared-files' }] : []),
+      ...(showStatusBar ? [{ kind: 'tail-spacer' as const, id: 'status-bar-tail-spacer' }] : [])
     ],
     statusAnnouncement: screenReaderStatusAnnouncement(input, statusBar, lastAssistantMessageCard),
     alertAnnouncement: screenReaderAlertAnnouncement(statusBar),

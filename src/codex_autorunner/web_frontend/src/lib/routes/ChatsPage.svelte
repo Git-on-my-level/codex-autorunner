@@ -2828,7 +2828,7 @@
       {/if}
     </div>
 
-    <div bind:this={messageStack} class="message-stack">
+    <div bind:this={messageStack} class="message-stack" class:has-status-overlay={showStatusBar && statusBar}>
       {#if refreshingActive && (activeChat || activeChatId)}
         <div class="state-panel loading-state">
           <span class="state-icon" aria-hidden="true"></span>
@@ -2903,6 +2903,8 @@
                 assistantLabel={chatAgentDisplayLabel}
                 sharedFiles={assistantSharedFiles}
               />
+            {:else if item.kind === 'tail-spacer'}
+              <div class="chat-transcript-tail-spacer" aria-hidden="true"></div>
             {:else}
               {@render typingDots(item.title)}
             {/if}
@@ -2913,25 +2915,23 @@
     <div class="sr-only" aria-live="polite" aria-atomic="true">{srStatusAnnouncement}</div>
     <div class="sr-only" role="alert" aria-atomic="true">{srAlertAnnouncement}</div>
 
-    {#if activeChat && transcriptListItems.length > 0 && !transcriptAtBottom}
+    {#if (activeChat && transcriptListItems.length > 0 && !transcriptAtBottom) || (showStatusBar && statusBar)}
       <div class="composer-overlay-anchor">
         <div class="composer-overlay">
-          <button
-            type="button"
-            class="jump-to-latest"
-            onclick={() => transcriptApi?.scrollToBottom('smooth')}
-            aria-label="Jump to latest message"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 5v14M19 12l-7 7-7-7" />
-            </svg>
-            Jump to latest
-          </button>
-        </div>
-      </div>
-    {/if}
-
-    {#if showStatusBar && statusBar}
+          {#if activeChat && transcriptListItems.length > 0 && !transcriptAtBottom}
+            <button
+              type="button"
+              class="jump-to-latest"
+              onclick={() => transcriptApi?.scrollToBottom('smooth')}
+              aria-label="Jump to latest message"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 5v14M19 12l-7 7-7-7" />
+              </svg>
+              Jump to latest
+            </button>
+          {/if}
+          {#if showStatusBar && statusBar}
       <div class={`pma-status-bar composer-status-bar ${statusBar.state}`} aria-label="Turn status">
         <span class="status-dot" aria-hidden="true"></span>
         <strong>{statusLabel(statusBar.state)}</strong>
@@ -2976,6 +2976,9 @@
             </span>
           </span>
         {/if}
+      </div>
+          {/if}
+        </div>
       </div>
     {/if}
 

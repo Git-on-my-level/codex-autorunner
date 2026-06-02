@@ -46,7 +46,7 @@ describe('chat detail state composition', () => {
       'turn:run-1:assistant'
     ]);
     expect(model.streamingMessageId).toBe('turn:run-1:assistant');
-    expect(model.transcriptListItems.map((item) => item.kind)).toEqual(['card', 'card', 'shared-files']);
+    expect(model.transcriptListItems.map((item) => item.kind)).toEqual(['card', 'card', 'shared-files', 'tail-spacer']);
     expect(model.statusAnnouncement).toBe('Assistant is responding. 1 queued message');
     expect(model.alertAnnouncement).toBe('');
     expect(model.showStreamHealthAside).toBe(true);
@@ -89,7 +89,7 @@ describe('chat detail state composition', () => {
       text: 'I am checking the renderer.',
       turnId: 'run-1'
     });
-    expect(model.transcriptListItems.map((item) => item.kind)).toEqual(['card', 'card', 'typing']);
+    expect(model.transcriptListItems.map((item) => item.kind)).toEqual(['card', 'card', 'typing', 'tail-spacer']);
   });
 
   it('keeps terminal live commentary before the final assistant reply', () => {
@@ -128,7 +128,7 @@ describe('chat detail state composition', () => {
       'intermediate:intermediate-event-1',
       'message:turn:run-1:assistant'
     ]);
-    expect(model.transcriptListItems.map((item) => item.kind)).toEqual(['card', 'card', 'card']);
+    expect(model.transcriptListItems.map((item) => item.kind)).toEqual(['card', 'card', 'card', 'tail-spacer']);
   });
 
   it('does not duplicate live progress already projected by the backend transcript', () => {
@@ -270,6 +270,7 @@ describe('chat detail state composition', () => {
 
     expect(model.showStatusBar).toBe(true);
     expect(model.statusBar?.state).toBe('idle');
+    expect(model.transcriptListItems.at(-1)?.kind).toBe('tail-spacer');
     expect(model.chatHasActivity).toBe(true);
     expect(model.showStartPicker).toBe(false);
   });

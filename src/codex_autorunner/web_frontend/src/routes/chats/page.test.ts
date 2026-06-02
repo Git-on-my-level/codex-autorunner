@@ -107,6 +107,8 @@ describe('/chats page', () => {
     const pageSource = chatDetailPageSource();
 
     expect(pageSource).toContain('preserveBottomOnResize');
+    expect(pageSource).toContain("item.kind === 'tail-spacer'");
+    expect(pageSource).toContain('chat-transcript-tail-spacer');
     expect(pageSource).toContain('onScrollState={({ atBottom }) => updateTranscriptScrollState(atBottom)}');
     expect(pageSource).not.toContain('new ResizeObserver');
     expect(pageSource).not.toContain("addEventListener('scroll', handleMessageScroll");
