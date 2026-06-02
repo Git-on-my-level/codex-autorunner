@@ -20,6 +20,7 @@ export type PaletteStore = {
   refresh: () => void;
   updateSources: (sources: PaletteSource[]) => void;
   handleKeydown: (event: KeyboardEvent | KeyEventLike) => boolean;
+  subscribe: (listener: () => void) => () => void;
   destroy: () => void;
 };
 
@@ -42,6 +43,7 @@ export function createPaletteStore(
   let isOpen = false;
   let query = '';
   let activeIdx = 0;
+  let listeners: Array<() => void> = [];
 
   const standardShortcuts = buildStandardShortcuts({
     togglePalette: () => store.toggle(),
@@ -53,10 +55,20 @@ export function createPaletteStore(
   });
   for (const binding of standardShortcuts) registry.register(binding);
 
-  function recompute(): void {
+  function recompute(options?: { preserveActiveId?: boolean }): void {
+    const activeId = options?.preserveActiveId ? filteredItems[activeIdx]?.id : undefined;
     allItems = loadAllItems(currentSources);
     filteredItems = filterItems(allItems, query);
-    if (activeIdx >= filteredItems.length) activeIdx = Math.max(0, filteredItems.length - 1);
+    if (activeId) {
+      const nextIdx = filteredItems.findIndex((item) => item.id === activeId);
+      activeIdx = nextIdx >= 0 ? nextIdx : Math.min(activeIdx, Math.max(0, filteredItems.length - 1));
+    } else if (activeIdx >= filteredItems.length) {
+      activeIdx = Math.max(0, filteredItems.length - 1);
+    }
+  }
+
+  function notify(): void {
+    for (const listener of listeners) listener();
   }
 
   const store: PaletteStore = {
@@ -75,19 +87,23 @@ export function createPaletteStore(
       query = '';
       activeIdx = 0;
       recompute();
+      notify();
     },
     closePalette() {
       isOpen = false;
       query = '';
+      notify();
     },
     setQuery(newQuery: string) {
       query = newQuery;
       activeIdx = 0;
       recompute();
+      notify();
     },
     moveActive(delta: number) {
       if (filteredItems.length === 0) return;
       activeIdx = (activeIdx + delta + filteredItems.length) % filteredItems.length;
+      notify();
     },
     selectActive() {
       if (filteredItems[activeIdx]) store.selectItem(filteredItems[activeIdx]);
@@ -102,11 +118,13 @@ export function createPaletteStore(
       store.closePalette();
     },
     refresh() {
-      recompute();
+      recompute({ preserveActiveId: true });
+      notify();
     },
     updateSources(newSources: PaletteSource[]) {
       currentSources = newSources;
-      recompute();
+      recompute({ preserveActiveId: true });
+      notify();
     },
     handleKeydown(event: KeyboardEvent | KeyEventLike) {
       const key = 'key' in event ? event.key : '';
@@ -143,8 +161,15 @@ export function createPaletteStore(
       }
       return registry.handleKeydown(event);
     },
+    subscribe(listener: () => void) {
+      listeners.push(listener);
+      return () => {
+        listeners = listeners.filter((candidate) => candidate !== listener);
+      };
+    },
     destroy() {
       registry.destroy();
+      listeners = [];
     }
   };
 

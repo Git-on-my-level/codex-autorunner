@@ -5,7 +5,15 @@
   import { primaryNav, isActiveRoute } from '$lib/navigation';
   import { stripRuntimeBasePath, withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { webApi } from '$lib/api/client';
-  import { Palette, createPaletteStore, scopeSource } from '$lib/palette';
+  import { Palette, createPaletteStore, recentActionsSource, repoSource, scopeSource, threadSource, worktreeSource } from '$lib/palette';
+  import {
+    ensureChatIndexLoaded,
+    ensureRepoWorktreeIndexLoaded,
+    readModelEntityStore,
+    selectChats,
+    selectRepoSummaries,
+    selectWorktreeSummaries
+  } from '$lib/data';
   import { connectionStore, type ConnectionStatus } from '$lib/runtime/connectionStore.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import {
@@ -29,7 +37,7 @@
   const breadcrumbs = $derived(breadcrumbsForPath(currentPath));
 
   const paletteStore = createPaletteStore(
-    [scopeSource([], [])],
+    [recentActionsSource(), scopeSource()],
     {
       toggleSidebar: () => (collapsed = !collapsed),
       toggleMemory: () => void goto(href('/settings?memory=1')),
@@ -48,6 +56,9 @@
       /* private mode / quota */
     }
     void loadHubState();
+    const unsubscribeReadModels = readModelEntityStore.subscribe(refreshPaletteSources);
+    void loadPaletteSources();
+    return () => unsubscribeReadModels();
   });
 
   onDestroy(() => {
@@ -66,6 +77,25 @@
     if (!result.ok) return;
     hubTitle = result.data.title;
     titleDraft = result.data.title;
+  }
+
+  async function loadPaletteSources(): Promise<void> {
+    await Promise.all([
+      ensureRepoWorktreeIndexLoaded({ limit: 2000, blocking: true }),
+      ensureChatIndexLoaded({ limit: 1000 }, { blocking: true })
+    ]);
+    refreshPaletteSources();
+  }
+
+  function refreshPaletteSources(): void {
+    const state = readModelEntityStore.snapshot();
+    paletteStore.updateSources([
+      recentActionsSource(),
+      threadSource(selectChats(state)),
+      repoSource(selectRepoSummaries(state)),
+      worktreeSource(selectWorktreeSummaries(state)),
+      scopeSource()
+    ]);
   }
 
   async function saveHubTitle(): Promise<void> {

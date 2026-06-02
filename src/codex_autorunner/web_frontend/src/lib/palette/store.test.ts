@@ -192,6 +192,54 @@ describe('createPaletteStore', () => {
     expect(store.items).toHaveLength(1);
   });
 
+  it('updateSources preserves the active item when it is still present', () => {
+    const store = makeStore();
+    store.updateSources([{
+      group: 'Test',
+      priority: 0,
+      load: () => [
+        { id: 'a', label: 'A', group: 'G', keywords: '', action: { kind: 'navigate', href: '/a' } },
+        { id: 'b', label: 'B', group: 'G', keywords: '', action: { kind: 'navigate', href: '/b' } }
+      ]
+    }]);
+    store.openPalette();
+    store.moveActive(1);
+    expect(store.items[store.activeIndex]?.id).toBe('b');
+    store.updateSources([{
+      group: 'Test',
+      priority: 0,
+      load: () => [
+        { id: 'new', label: 'New', group: 'G', keywords: '', action: { kind: 'navigate', href: '/new' } },
+        { id: 'a', label: 'A', group: 'G', keywords: '', action: { kind: 'navigate', href: '/a' } },
+        { id: 'b', label: 'B', group: 'G', keywords: '', action: { kind: 'navigate', href: '/b' } }
+      ]
+    }]);
+    expect(store.items[store.activeIndex]?.id).toBe('b');
+  });
+
+  it('refresh preserves the active item when source ordering changes', () => {
+    let flipped = false;
+    const store = makeStore();
+    store.updateSources([{
+      group: 'Test',
+      priority: 0,
+      load: () => flipped
+        ? [
+            { id: 'b', label: 'B', group: 'G', keywords: '', action: { kind: 'navigate', href: '/b' } },
+            { id: 'a', label: 'A', group: 'G', keywords: '', action: { kind: 'navigate', href: '/a' } }
+          ]
+        : [
+            { id: 'a', label: 'A', group: 'G', keywords: '', action: { kind: 'navigate', href: '/a' } },
+            { id: 'b', label: 'B', group: 'G', keywords: '', action: { kind: 'navigate', href: '/b' } }
+          ]
+    }]);
+    store.openPalette();
+    store.moveActive(1);
+    flipped = true;
+    store.refresh();
+    expect(store.items[store.activeIndex]?.id).toBe('b');
+  });
+
   it('destroy cleans up', () => {
     const store = makeStore();
     store.destroy();
