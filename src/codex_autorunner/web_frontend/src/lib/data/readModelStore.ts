@@ -562,6 +562,18 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     this.commit(next);
   }
 
+  removeOptimisticChatTranscriptCard(chatId: string, cardId: string): void {
+    const transcript = this.state.chatTranscripts[chatId];
+    if (!transcript || !cardId.startsWith('optimistic:') || !transcript.cardsById[cardId]) return;
+    const next = cloneState(this.state);
+    const target = cloneChatTranscript(next.chatTranscripts[chatId]);
+    delete target.cardsById[cardId];
+    target.order = target.order.filter((id) => id !== cardId);
+    next.chatTranscripts[chatId] = target;
+    bump(next, 'timeline', chatId);
+    this.commit(next);
+  }
+
   setChatProgress(chatId: string, progress: ChatRunProgress | null): void {
     const next = cloneState(this.state);
     if (progress) next.chatProgress[chatId] = withBoundedChatProgressEvents(progress);

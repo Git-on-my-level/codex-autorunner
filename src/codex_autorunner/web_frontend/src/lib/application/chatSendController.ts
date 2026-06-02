@@ -51,6 +51,7 @@ export type ChatSendControllerDeps = {
     | 'optimisticSend'
     | 'upsertChatTranscriptCards'
     | 'removeOptimisticChatTranscriptCards'
+    | 'removeOptimisticChatTranscriptCard'
     | 'failOptimisticMutation'
     | 'setChatQueue'
   >;
@@ -383,6 +384,9 @@ export function createChatSendController(deps: ChatSendControllerDeps): ChatSend
     if (result.ok) {
       await deps.invalidateChatMutation(chatId);
       await deps.refreshActive(chatId, { quiet: true });
+      if (transcriptHasBackendUserRow(chatId, clientTurnId)) {
+        deps.readModelStore.removeOptimisticChatTranscriptCard(chatId, clientTurnId);
+      }
     } else {
       deps.readModelStore.removeOptimisticChatTranscriptCards(chatId);
       deps.setComposeError(result.error);
