@@ -103,6 +103,15 @@ describe('/chats page', () => {
     expect(pageSource).not.toContain('read-active:');
   });
 
+  it('keeps transcript bottom-follow owned by the virtualized transcript scroller', () => {
+    const pageSource = chatDetailPageSource();
+
+    expect(pageSource).toContain('preserveBottomOnResize');
+    expect(pageSource).toContain('onScrollState={({ atBottom }) => updateTranscriptScrollState(atBottom)}');
+    expect(pageSource).not.toContain('new ResizeObserver');
+    expect(pageSource).not.toContain("addEventListener('scroll', handleMessageScroll");
+  });
+
   it('navigates committed chat URLs through SvelteKit route state', () => {
     const source = chatDetailPageSource();
     const syncCommittedBody = source.match(

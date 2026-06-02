@@ -542,7 +542,6 @@
   // bottom of the transcript. Once they scroll up, we stop force-scrolling
   // on every content change; scrolling back near the bottom re-arms it.
   let followBottom = true;
-  let messageStackResizeObserver: ResizeObserver | null = null;
 
   const activeChat = $derived(activeChatId ? chatSummaryForId(activeChatId) : null);
   const activeSurfaceDeliveries = $derived<ArtifactDelivery[]>(artifactDeliveriesForActiveSurface(activeChat, artifactDeliveries));
@@ -1845,13 +1844,6 @@
     return messageStack?.querySelector<HTMLElement>('.chat-transcript-virtual-list') ?? messageStack;
   }
 
-  function isMessageStackNearBottom(): boolean {
-    const scroller = messageScroller();
-    if (!scroller) return true;
-    const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-    return distanceFromBottom <= TRANSCRIPT_BOTTOM_THRESHOLD_PX;
-  }
-
   async function scrollMessagesToBottom(): Promise<void> {
     await tick();
     const scroller = messageScroller();
@@ -1859,33 +1851,10 @@
     scroller.scrollTop = scroller.scrollHeight;
   }
 
-  function handleMessageScroll(): void {
-    // The user's scroll position is the source of truth for follow-bottom.
-    // Programmatic scrolls fire this too, but they land at the bottom so
-    // followBottom stays true; user-initiated scrolls up flip it false.
-    followBottom = isMessageStackNearBottom();
+  function updateTranscriptScrollState(atBottom: boolean): void {
+    transcriptAtBottom = atBottom;
+    followBottom = atBottom;
   }
-
-  $effect(() => {
-    // Attach scroll listener + ResizeObserver to whichever element is the
-    // scroller right now. The ResizeObserver catches growing message content
-    // (streaming tokens, live commentary) which doesn't change card count,
-    // so the cardCount-keyed effect below would otherwise miss it.
-    if (!messageStack) return;
-    const scroller = messageScroller();
-    if (!scroller) return;
-    scroller.addEventListener('scroll', handleMessageScroll, { passive: true });
-    messageStackResizeObserver = new ResizeObserver(() => {
-      if (followBottom) scroller.scrollTop = scroller.scrollHeight;
-    });
-    messageStackResizeObserver.observe(scroller);
-    if (scroller.firstElementChild) messageStackResizeObserver.observe(scroller.firstElementChild);
-    return () => {
-      scroller.removeEventListener('scroll', handleMessageScroll);
-      messageStackResizeObserver?.disconnect();
-      messageStackResizeObserver = null;
-    };
-  });
 
   async function createChat(options: { preserveSelectedScope?: boolean; preserveSelectedKind?: boolean } = {}): Promise<void> {
     creating = true;
@@ -2917,7 +2886,8 @@
           class="chat-transcript-virtual-list"
           itemClass="chat-transcript-virtual-item"
           bottomThresholdPx={TRANSCRIPT_BOTTOM_THRESHOLD_PX}
-          onScrollState={({ atBottom }) => { transcriptAtBottom = atBottom; }}
+          preserveBottomOnResize
+          onScrollState={({ atBottom }) => updateTranscriptScrollState(atBottom)}
           onReady={(api) => { transcriptApi = api; }}
         >
           {#snippet children(item)}
@@ -2943,23 +2913,25 @@
     <div class="sr-only" aria-live="polite" aria-atomic="true">{srStatusAnnouncement}</div>
     <div class="sr-only" role="alert" aria-atomic="true">{srAlertAnnouncement}</div>
 
-    {#if (activeChat && transcriptListItems.length > 0 && !transcriptAtBottom) || (showStatusBar && statusBar)}
+    {#if activeChat && transcriptListItems.length > 0 && !transcriptAtBottom}
       <div class="composer-overlay-anchor">
         <div class="composer-overlay">
-          {#if activeChat && transcriptListItems.length > 0 && !transcriptAtBottom}
-            <button
-              type="button"
-              class="jump-to-latest"
-              onclick={() => transcriptApi?.scrollToBottom('smooth')}
-              aria-label="Jump to latest message"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 5v14M19 12l-7 7-7-7" />
-              </svg>
-              Jump to latest
-            </button>
-          {/if}
-          {#if showStatusBar && statusBar}
+          <button
+            type="button"
+            class="jump-to-latest"
+            onclick={() => transcriptApi?.scrollToBottom('smooth')}
+            aria-label="Jump to latest message"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 5v14M19 12l-7 7-7-7" />
+            </svg>
+            Jump to latest
+          </button>
+        </div>
+      </div>
+    {/if}
+
+    {#if showStatusBar && statusBar}
       <div class={`pma-status-bar composer-status-bar ${statusBar.state}`} aria-label="Turn status">
         <span class="status-dot" aria-hidden="true"></span>
         <strong>{statusLabel(statusBar.state)}</strong>
@@ -3004,9 +2976,6 @@
             </span>
           </span>
         {/if}
-      </div>
-          {/if}
-        </div>
       </div>
     {/if}
 

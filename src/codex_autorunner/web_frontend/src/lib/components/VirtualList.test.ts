@@ -1,8 +1,17 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
 import VirtualListHarness from './VirtualListHarness.test.svelte';
 
 describe('VirtualList', () => {
+  function virtualListSource(): string {
+    return readFileSync(
+      fileURLToPath(new URL('./VirtualList.svelte', import.meta.url)),
+      'utf8'
+    );
+  }
+
   it('server-renders a bounded initial window for large lists', () => {
     const { body } = render(VirtualListHarness, { props: { count: 5000, initialCount: 40 } });
 
@@ -21,5 +30,14 @@ describe('VirtualList', () => {
     expect(body).toContain('class="virtual-list non-scrollable');
     expect(body.match(/class="seeded-row"/g)).toHaveLength(80);
     expect(body).toContain('80: Row 80');
+  });
+
+  it('preserves bottom on row resize only when the caller opts in and the list was already at bottom', () => {
+    const source = virtualListSource();
+
+    expect(source).toContain('preserveBottomOnResize = false');
+    expect(source).toContain('const wasAtBottom = isNearBottom();');
+    expect(source).toContain('void preserveBottomIfNeeded(wasAtBottom);');
+    expect(source).toContain('if (!preserveBottomOnResize || !wasAtBottom || !viewport || !scrollable) return;');
   });
 });

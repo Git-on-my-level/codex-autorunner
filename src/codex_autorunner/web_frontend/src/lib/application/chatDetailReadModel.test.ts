@@ -254,6 +254,44 @@ describe('chat detail state composition', () => {
     expect(model.composerWillQueue).toBe(false);
   });
 
+  it('keeps the status bar visible for idle chats with transcript history', () => {
+    const model = buildChatDetailDisplayReadModel({
+      transcriptCards: [assistantCard('turn:old:assistant', 'done')],
+      queuedTurns: [],
+      displayedProgress: null,
+      activeChat: { ...chatSummary('chat-1'), status: 'idle' },
+      assistantSharedFileCount: 0,
+      streamState: 'idle',
+      loadingActive: false,
+      activeError: null,
+      draft: '',
+      pendingAttachmentCount: 0
+    });
+
+    expect(model.showStatusBar).toBe(true);
+    expect(model.statusBar?.state).toBe('idle');
+    expect(model.chatHasActivity).toBe(true);
+    expect(model.showStartPicker).toBe(false);
+  });
+
+  it('keeps the status bar visible for completed chats with transcript history', () => {
+    const model = buildChatDetailDisplayReadModel({
+      transcriptCards: [assistantCard('turn:done:assistant', 'done')],
+      queuedTurns: [],
+      displayedProgress: null,
+      activeChat: { ...chatSummary('chat-1'), status: 'done' },
+      assistantSharedFileCount: 0,
+      streamState: 'idle',
+      loadingActive: false,
+      activeError: null,
+      draft: '',
+      pendingAttachmentCount: 0
+    });
+
+    expect(model.showStatusBar).toBe(true);
+    expect(model.statusBar?.state).toBe('done');
+  });
+
 });
 
 function userCard(id: string, text: string, raw: Record<string, unknown>): MessageTranscriptCard {

@@ -3036,8 +3036,9 @@ textarea:hover {
 }
 
 .composer-status-bar {
-  width: 100%;
+  width: calc(100% - var(--space-2) - var(--space-3));
   max-width: none;
+  margin: 0 var(--space-2) var(--space-2) var(--space-3);
   border-radius: 8px;
   background: var(--color-surface-sunken);
   container-type: inline-size;

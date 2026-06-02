@@ -15,7 +15,8 @@
     onEndReached,
     onScrollState,
     onReady,
-    bottomThresholdPx = 32
+    bottomThresholdPx = 32,
+    preserveBottomOnResize = false
   }: {
     items: T[];
     children: Snippet<[T, number]>;
@@ -31,6 +32,7 @@
     onScrollState?: (state: { atBottom: boolean; distanceFromBottom: number }) => void;
     onReady?: (api: { scrollToBottom: (behavior?: ScrollBehavior) => void }) => void;
     bottomThresholdPx?: number;
+    preserveBottomOnResize?: boolean;
   } = $props();
 
   let viewport: HTMLDivElement | null = $state(null);
@@ -105,6 +107,15 @@
     onScrollState({ atBottom: distanceFromBottom <= bottomThresholdPx, distanceFromBottom });
   }
 
+  function isNearBottom(): boolean {
+    if (!viewport || !scrollable) return true;
+    const distanceFromBottom = Math.max(
+      0,
+      viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight
+    );
+    return distanceFromBottom <= bottomThresholdPx;
+  }
+
   function updateMeasurements(): void {
     if (!viewport) return;
     scrollTop = viewport.scrollTop;
@@ -120,6 +131,14 @@
   function scrollToBottom(behavior: ScrollBehavior = 'smooth'): void {
     if (!viewport) return;
     viewport.scrollTo({ top: viewport.scrollHeight, behavior });
+  }
+
+  async function preserveBottomIfNeeded(wasAtBottom: boolean): Promise<void> {
+    if (!preserveBottomOnResize || !wasAtBottom || !viewport || !scrollable) return;
+    await tick();
+    if (!viewport) return;
+    viewport.scrollTop = viewport.scrollHeight;
+    updateMeasurements();
   }
 
   function handleScroll(): void {
@@ -140,7 +159,9 @@
     const record = () => {
       const height = node.offsetHeight;
       if (!Number.isFinite(height) || height <= 0 || measuredHeights[currentKey] === height) return;
+      const wasAtBottom = isNearBottom();
       measuredHeights = { ...measuredHeights, [currentKey]: height };
+      void preserveBottomIfNeeded(wasAtBottom);
     };
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(record);
     observer?.observe(node);
