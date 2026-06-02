@@ -6,9 +6,14 @@ from pathlib import Path
 import pytest
 
 import codex_autorunner.adapters.github.context_injection as context_module
+from codex_autorunner.core.context_capsule_planner import record_context_capsule_renders
 from codex_autorunner.core.injected_context import (
     render_legacy_injected_context_transport,
 )
+from codex_autorunner.core.orchestration.context_capsule_ledger import (
+    SQLiteContextCapsuleLedger,
+)
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.utils import RepoNotFoundError
 
 
@@ -31,6 +36,18 @@ class _GitHubServiceStub:
         return {
             "path": ".codex-autorunner/github_context/issue-123.md",
             "hint": render_legacy_injected_context_transport("Context: injected"),
+        }
+
+
+class _MultiLinkGitHubServiceStub(_GitHubServiceStub):
+    def build_context_file_from_url(
+        self, url: str, *, allow_cross_repo: bool = False
+    ) -> dict[str, str]:
+        self.calls.append((url, allow_cross_repo))
+        issue = url.rsplit("/", 1)[-1]
+        return {
+            "path": f".codex-autorunner/github_context/issue-{issue}.md",
+            "hint": render_legacy_injected_context_transport(f"Context: issue {issue}"),
         }
 
 
@@ -151,3 +168,56 @@ async def test_pma_injection_skips_when_repo_not_found_without_fallback(
 
     assert injected is False
     assert injected_prompt == prompt_text
+
+
+@pytest.mark.anyio
+async def test_scoped_injection_continues_after_duplicate_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(context_module, "find_repo_root", lambda _path: tmp_path)
+    monkeypatch.setattr(context_module, "load_repo_config", lambda _path: None)
+    monkeypatch.setattr(context_module, "GitHubService", _MultiLinkGitHubServiceStub)
+
+    first_link = "https://github.com/example/repo/issues/123"
+    second_link = "https://github.com/example/repo/issues/456"
+    first_planned: list[context_module.PlannedPromptInjection] = []
+    first_prompt, first_injected = await context_module.maybe_inject_github_context(
+        prompt_text="PMA prompt",
+        link_source_text=f"please inspect {first_link}",
+        workspace_root=tmp_path,
+        logger=logging.getLogger("test.github_context.duplicate_first"),
+        event_prefix="test.github_context",
+        allow_cross_repo=True,
+        hub_root=tmp_path,
+        surface_kind="telegram",
+        surface_key="topic-1",
+        managed_thread_id="topic-1",
+        planned_injections=first_planned,
+    )
+    with open_orchestration_sqlite(tmp_path) as conn:
+        record_context_capsule_renders(
+            SQLiteContextCapsuleLedger(conn),
+            first_planned[0].render_plans,
+        )
+
+    second_planned: list[context_module.PlannedPromptInjection] = []
+    second_prompt, second_injected = await context_module.maybe_inject_github_context(
+        prompt_text="PMA prompt",
+        link_source_text=f"{first_link} {second_link}",
+        workspace_root=tmp_path,
+        logger=logging.getLogger("test.github_context.duplicate_then_new"),
+        event_prefix="test.github_context",
+        allow_cross_repo=True,
+        hub_root=tmp_path,
+        surface_kind="telegram",
+        surface_key="topic-1",
+        managed_thread_id="topic-1",
+        planned_injections=second_planned,
+    )
+
+    assert first_injected is True
+    assert "Context: issue 123" in first_prompt
+    assert second_injected is True
+    assert "Context: issue 123" not in second_prompt
+    assert "Context: issue 456" in second_prompt
+    assert len(second_planned) == 1

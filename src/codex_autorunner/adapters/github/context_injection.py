@@ -209,7 +209,7 @@ async def maybe_inject_github_context(
                         )
                     injection = planned.rendered_text.strip()
                     if not injection:
-                        return prompt_text, False
+                        continue
                     separator = "\n" if prompt_text.endswith("\n") else "\n\n"
                     planned_prompt = f"{prompt_text}{separator}{injection}"
                     if planned_injections is not None:
