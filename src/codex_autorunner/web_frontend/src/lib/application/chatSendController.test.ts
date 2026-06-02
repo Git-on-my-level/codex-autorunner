@@ -139,6 +139,31 @@ describe('chat send controller', () => {
     );
   });
 
+  it('removes queued-turn interrupt optimistic rows after backend transcript confirmation', async () => {
+    const turn = queuedTurn('turn-queued');
+    const harness = createHarness({ queuedTurns: [turn] });
+    harness.store.upsertChatTranscriptCards('chat-1', [
+      userTranscriptCard('optimistic:user:unrelated', 'still pending', {
+        optimistic: true,
+        client_turn_id: 'optimistic:user:unrelated',
+        correlation_id: 'optimistic:user:unrelated'
+      })
+    ]);
+    harness.api.pma.cancelQueuedTurn.mockResolvedValue(ok({}));
+    harness.api.pma.sendMessage.mockResolvedValue(ok({ chatId: 'chat-1', id: 'turn-new', text: turn.prompt }));
+    harness.refreshActive.mockImplementation(async (chatId) => {
+      harness.store.upsertChatTranscriptCards(chatId, [
+        userTranscriptCard('turn-new:user', turn.prompt, {
+          identity: { correlation_id: 'optimistic:user:1778932800000:turn' }
+        })
+      ]);
+    });
+
+    await harness.controller.interruptWithQueuedTurn(turn);
+
+    expect(harness.transcriptIds('chat-1')).toEqual(['optimistic:user:unrelated', 'turn-new:user']);
+  });
+
   it('clears the real queue but ignores optimistic-only queue rows', async () => {
     const realTurn = queuedTurn('turn-real');
     const optimisticTurn = queuedTurn('optimistic-queue:client-1', { optimistic: true });
@@ -299,6 +324,26 @@ function queuedTurn(managedTurnId: string, raw: Record<string, unknown> = {}): C
     reasoning: null,
     enqueuedAt: now.toISOString(),
     raw
+  };
+}
+
+function userTranscriptCard(id: string, text: string, raw: Record<string, unknown>) {
+  return {
+    kind: 'message' as const,
+    id,
+    turnId: id.split(':')[1] ?? null,
+    orderKey: `00000001|${now.toISOString()}|${id}`,
+    timestamp: now.toISOString(),
+    message: {
+      id,
+      chatId: 'chat-1',
+      role: 'user' as const,
+      text,
+      createdAt: now.toISOString(),
+      status: null,
+      artifacts: [],
+      raw
+    }
   };
 }
 
