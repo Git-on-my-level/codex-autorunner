@@ -163,39 +163,6 @@ def plan_car_awareness_injection(
     return PlannedPromptInjection(planned_prompt, True, planned.plans)
 
 
-def maybe_inject_planned_car_awareness(
-    prompt_text: str,
-    *,
-    hub_root: str | Path,
-    surface_kind: str,
-    surface_key: str,
-    managed_thread_id: str,
-    backend_thread_id: str | None = None,
-    repo_id: str | None = None,
-    worktree_id: str | None = None,
-    declared_profile: CarContextProfile = DEFAULT_REPO_THREAD_CONTEXT_PROFILE,
-    target_path: str | None = None,
-    initiated_by_ticket_flow: bool = False,
-    record_rendered: bool = True,
-) -> tuple[str, bool]:
-    """Inject CAR repo awareness through the durable capsule planner."""
-    planned = plan_car_awareness_injection(
-        prompt_text,
-        hub_root=hub_root,
-        surface_kind=surface_kind,
-        surface_key=surface_key,
-        managed_thread_id=managed_thread_id,
-        backend_thread_id=backend_thread_id,
-        repo_id=repo_id,
-        worktree_id=worktree_id,
-        declared_profile=declared_profile,
-        target_path=target_path,
-        initiated_by_ticket_flow=initiated_by_ticket_flow,
-        record_rendered=record_rendered,
-    )
-    return planned.prompt_text, planned.injected
-
-
 def maybe_inject_prompt_writing_hint(
     prompt_text: str,
     *,
@@ -263,35 +230,6 @@ def plan_prompt_writing_hint_injection(
     if record_rendered:
         record_planned_prompt_injection(hub_root, planned.rendered_text, planned.plans)
     return PlannedPromptInjection(planned_prompt, True, planned.plans)
-
-
-def maybe_inject_planned_prompt_writing_hint(
-    prompt_text: str,
-    *,
-    hub_root: str | Path,
-    surface_kind: str,
-    surface_key: str,
-    managed_thread_id: str,
-    backend_thread_id: str | None = None,
-    repo_id: str | None = None,
-    worktree_id: str | None = None,
-    trigger_text: str | None = None,
-    record_rendered: bool = True,
-) -> tuple[str, bool]:
-    """Inject prompt-writing guidance through the durable capsule planner."""
-    planned = plan_prompt_writing_hint_injection(
-        prompt_text,
-        hub_root=hub_root,
-        surface_kind=surface_kind,
-        surface_key=surface_key,
-        managed_thread_id=managed_thread_id,
-        backend_thread_id=backend_thread_id,
-        repo_id=repo_id,
-        worktree_id=worktree_id,
-        trigger_text=trigger_text,
-        record_rendered=record_rendered,
-    )
-    return planned.prompt_text, planned.injected
 
 
 def record_planned_prompt_injection(
