@@ -5,6 +5,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from ..context_awareness import (
+    PlannedPromptInjection,
+    plan_worktree_pr_hint_injection,
+    record_planned_prompt_injection,
+)
 from ..managed_thread_identity import pma_automation_key, pma_base_key
 from ..pma_context import format_pma_prompt
 from ..pma_origin import PmaOriginContext, extract_pma_origin_metadata
@@ -88,16 +93,42 @@ def build_queue_execution_prompt(
         force_full_base_prompt=force_full_base_prompt,
         user_input_texts=[inputs.message],
     )
+    planned_pma_injections: tuple[PlannedPromptInjection, ...] = ()
+    # Queue prompts do not use the two-variant PMA builder, so collect equivalent
+    # stable hint plans after prompt rendering and record them from this lifecycle.
+    planned_worktree = plan_worktree_pr_hint_injection(
+        inputs.message,
+        hub_root=inputs.hub_root,
+        surface_kind="pma",
+        surface_key=inputs.prompt_state_key,
+        managed_thread_id=inputs.prompt_state_key,
+        user_input_texts=[inputs.message],
+    )
+    if planned_worktree.injected:
+        planned_pma_injections = (planned_worktree,)
     if inputs.github_context_injector is None:
+        for planned in planned_pma_injections:
+            record_planned_prompt_injection(
+                inputs.hub_root,
+                planned.prompt_text,
+                planned.render_plans,
+            )
         return built
-    return _inject_github_context(inputs, built)
+    return _inject_github_context(
+        inputs,
+        built,
+        planned_pma_injections=planned_pma_injections,
+    )
 
 
 async def _inject_github_context(
     inputs: PmaQueuePromptInputs,
     built: str,
+    *,
+    planned_pma_injections: tuple[PlannedPromptInjection, ...] = (),
 ) -> str:
     assert inputs.github_context_injector is not None
+    planned_injections: list[PlannedPromptInjection] = []
     injected, _ = await inputs.github_context_injector(
         prompt_text=built,
         link_source_text=inputs.message,
@@ -105,7 +136,24 @@ async def _inject_github_context(
         logger=inputs.logger,
         event_prefix="web.pma.github_context",
         allow_cross_repo=True,
+        hub_root=inputs.hub_root,
+        surface_kind="pma",
+        surface_key=inputs.prompt_state_key,
+        managed_thread_id=inputs.prompt_state_key,
+        planned_injections=planned_injections,
     )
+    for planned in planned_injections:
+        record_planned_prompt_injection(
+            inputs.hub_root,
+            planned.prompt_text,
+            planned.render_plans,
+        )
+    for planned in planned_pma_injections:
+        record_planned_prompt_injection(
+            inputs.hub_root,
+            planned.prompt_text,
+            planned.render_plans,
+        )
     return injected
 
 

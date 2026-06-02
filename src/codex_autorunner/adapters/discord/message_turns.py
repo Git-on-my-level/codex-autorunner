@@ -56,9 +56,10 @@ from ...core.artifact_instructions import (
 )
 from ...core.config import ConfigError, load_hub_config
 from ...core.context_awareness import (
-    maybe_inject_car_awareness,
     maybe_inject_filebox_hint,
-    maybe_inject_prompt_writing_hint,
+    plan_car_awareness_injection,
+    plan_prompt_writing_hint_injection,
+    record_planned_prompt_injection,
 )
 from ...core.filebox import inbox_dir
 from ...core.logging_utils import log_event
@@ -1083,10 +1084,19 @@ async def _execute_discord_thread_message(
         )
 
     if not dispatch.effective_pma_enabled:
-        prompt_text, injected = maybe_inject_car_awareness(
+        planned_injections = []
+        planned_car = plan_car_awareness_injection(
             prompt_text,
+            hub_root=dispatch.service._config.root,
+            surface_kind="discord",
+            surface_key=dispatch.channel_id,
+            managed_thread_id=dispatch.session_key,
+            worktree_id=str(request_workspace_root),
             declared_profile="car_ambient",
         )
+        prompt_text, injected = planned_car.prompt_text, planned_car.injected
+        if injected:
+            planned_injections.append(planned_car)
         if injected:
             dispatch.log_event_fn(
                 dispatch.service._logger,
@@ -1095,10 +1105,18 @@ async def _execute_discord_thread_message(
                 channel_id=dispatch.channel_id,
                 message_id=dispatch.event.message.message_id,
             )
-        prompt_text, injected = maybe_inject_prompt_writing_hint(
+        planned_prompt = plan_prompt_writing_hint_injection(
             prompt_text,
+            hub_root=dispatch.service._config.root,
+            surface_kind="discord",
+            surface_key=dispatch.channel_id,
+            managed_thread_id=dispatch.session_key,
+            worktree_id=str(request_workspace_root),
             trigger_text=dispatch.text,
         )
+        prompt_text, injected = planned_prompt.prompt_text, planned_prompt.injected
+        if injected:
+            planned_injections.append(planned_prompt)
         if injected:
             dispatch.log_event_fn(
                 dispatch.service._logger,
@@ -1107,6 +1125,8 @@ async def _execute_discord_thread_message(
                 channel_id=dispatch.channel_id,
                 message_id=dispatch.event.message.message_id,
             )
+    else:
+        planned_injections = []
         prompt_text, injected = _maybe_inject_discord_filebox_hint(
             prompt_text,
             user_text=dispatch.text,
@@ -1166,6 +1186,7 @@ async def _execute_discord_thread_message(
                 prompt_state_key=dispatch.session_key,
                 user_input_texts=[dispatch.text],
             )
+            planned_injections.extend(prompt_variants.planned_injections)
             prompt_text = prompt_variants.new_session_prompt
             existing_session_prompt_text = prompt_variants.existing_session_prompt
         except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -1191,6 +1212,11 @@ async def _execute_discord_thread_message(
         request_workspace_root,
         link_source_text=dispatch.turn_text,
         allow_cross_repo=dispatch.pma_enabled,
+        surface_kind="discord",
+        surface_key=dispatch.channel_id,
+        managed_thread_id=dispatch.session_key,
+        worktree_id=str(request_workspace_root),
+        planned_injections=planned_injections,
     )
     if existing_session_prompt_text is not None:
         (
@@ -1201,6 +1227,11 @@ async def _execute_discord_thread_message(
             request_workspace_root,
             link_source_text=dispatch.turn_text,
             allow_cross_repo=dispatch.pma_enabled,
+            surface_kind="discord",
+            surface_key=dispatch.channel_id,
+            managed_thread_id=dispatch.session_key,
+            worktree_id=str(request_workspace_root),
+            planned_injections=planned_injections,
         )
     if dispatch.pending_compact_seed:
         prompt_text = f"{dispatch.pending_compact_seed}\n\n{prompt_text}"
@@ -1284,10 +1315,17 @@ async def _execute_discord_thread_message(
             elif not _callable_accepts_keyword(run_turn, "user_visible_text"):
                 run_turn_kwargs.pop("user_visible_text", None)
                 run_turn_kwargs.pop("title_seed", None)
-            return cast(
+            result = cast(
                 DiscordMessageTurnResult,
                 await run_turn(**run_turn_kwargs),
             )
+            for planned in planned_injections:
+                record_planned_prompt_injection(
+                    dispatch.service._config.root,
+                    planned.prompt_text,
+                    planned.render_plans,
+                )
+            return result
         except TypeError as exc:
             error_text = str(exc)
             if "supervision" in error_text:
@@ -1296,10 +1334,17 @@ async def _execute_discord_thread_message(
                 run_turn_kwargs.pop("existing_session_prompt_text", None)
             else:
                 raise
-            return cast(
+            result = cast(
                 DiscordMessageTurnResult,
                 await dispatch.service._run_agent_turn_for_message(**run_turn_kwargs),
             )
+            for planned in planned_injections:
+                record_planned_prompt_injection(
+                    dispatch.service._config.root,
+                    planned.prompt_text,
+                    planned.render_plans,
+                )
+            return result
     except DiscordTurnStartupFailure as exc:
         dispatch.log_event_fn(
             dispatch.service._logger,

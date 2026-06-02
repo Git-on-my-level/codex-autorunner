@@ -173,6 +173,7 @@ def resolve_managed_thread_message_options(
                 attachments=payload.attachments,
                 defaults=defaults,
                 thread=thread,
+                managed_thread_id=managed_thread_id,
                 hub_root=request.app.state.config.root,
                 runtime_cwd=(
                     Path(str(thread.get("workspace_root")))

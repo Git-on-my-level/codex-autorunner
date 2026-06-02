@@ -104,10 +104,14 @@ from .....core.artifact_instructions import (
 from .....core.config import load_hub_config
 from .....core.config_contract import ConfigError
 from .....core.context_awareness import (
+    PlannedPromptInjection,
     has_file_context_signal,
     maybe_inject_car_awareness,
     maybe_inject_filebox_hint,
     maybe_inject_prompt_writing_hint,
+    plan_car_awareness_injection,
+    plan_prompt_writing_hint_injection,
+    record_planned_prompt_injection,
 )
 from .....core.hub_control_plane import (
     RemoteSurfaceBindingStore,
@@ -132,6 +136,7 @@ from .....core.orchestration.runtime_threads import (
     begin_runtime_thread_execution,
 )
 from .....core.pma_context import (
+    PmaPromptVariants,
     build_hub_unavailable_snapshot,
     format_pma_discoverability_preamble,
     format_pma_prompt_variants,
@@ -1852,9 +1857,13 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         *,
         link_source_text: Optional[str] = None,
         allow_cross_repo: bool = False,
+        topic_key: Optional[str] = None,
+        planned_injections: Optional[list[PlannedPromptInjection]] = None,
     ) -> tuple[str, bool]:
         if not prompt_text or not record or not record.workspace_path:
             return prompt_text, False
+        surface_key = topic_key if isinstance(topic_key, str) and topic_key else None
+        hub_root = getattr(getattr(self, "_config", None), "root", None)
         return await maybe_inject_github_context(
             prompt_text=prompt_text,
             link_source_text=link_source_text or prompt_text,
@@ -1862,24 +1871,64 @@ class ExecutionCommands(TelegramCommandSupportMixin):
             logger=self._logger,
             event_prefix="telegram.github_context",
             allow_cross_repo=allow_cross_repo,
+            hub_root=hub_root,
+            surface_kind="telegram" if surface_key else None,
+            surface_key=surface_key,
+            managed_thread_id=surface_key,
+            worktree_id=record.workspace_path,
+            planned_injections=planned_injections,
         )
 
     def _maybe_inject_prompt_context(
         self,
         prompt_text: str,
         *,
+        record: Optional["TelegramTopicRecord"] = None,
+        topic_key: Optional[str] = None,
         trigger_text: Optional[str] = None,
     ) -> tuple[str, bool]:
-        return maybe_inject_prompt_writing_hint(
+        if record is None or not topic_key:
+            return maybe_inject_prompt_writing_hint(
+                prompt_text,
+                trigger_text=trigger_text,
+            )
+        hub_root = getattr(getattr(self, "_config", None), "root", None)
+        hub_root = hub_root or record.workspace_path
+        planned = plan_prompt_writing_hint_injection(
             prompt_text,
+            hub_root=hub_root,
+            surface_kind="telegram",
+            surface_key=topic_key,
+            managed_thread_id=topic_key,
+            worktree_id=record.workspace_path,
             trigger_text=trigger_text,
         )
+        return planned.prompt_text, planned.injected
 
-    def _maybe_inject_car_context(self, prompt_text: str) -> tuple[str, bool]:
-        return maybe_inject_car_awareness(
+    def _maybe_inject_car_context(
+        self,
+        prompt_text: str,
+        *,
+        record: Optional["TelegramTopicRecord"] = None,
+        topic_key: Optional[str] = None,
+    ) -> tuple[str, bool]:
+        if record is None or not topic_key:
+            return maybe_inject_car_awareness(
+                prompt_text,
+                declared_profile="car_ambient",
+            )
+        hub_root = getattr(getattr(self, "_config", None), "root", None)
+        hub_root = hub_root or record.workspace_path
+        planned = plan_car_awareness_injection(
             prompt_text,
+            hub_root=hub_root,
+            surface_kind="telegram",
+            surface_key=topic_key,
+            managed_thread_id=topic_key,
+            worktree_id=record.workspace_path,
             declared_profile="car_ambient",
         )
+        return planned.prompt_text, planned.injected
 
     def _maybe_inject_outbox_context(
         self,
@@ -3322,7 +3371,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         record: "TelegramTopicRecord",
         message: TelegramMessage,
         user_input_texts: list[str | None] | None = None,
-    ) -> Optional[tuple[str, str]]:
+    ) -> Optional[PmaPromptVariants]:
         hub_root = getattr(self, "_hub_root", None)
         if hub_root is None:
             return None
@@ -3366,10 +3415,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 prompt_state_key=prompt_state_key,
                 user_input_texts=user_input_texts,
             )
-            return (
-                prompt_variants.new_session_prompt,
-                prompt_variants.existing_session_prompt,
-            )
+            return prompt_variants
         except (OSError, ValueError, RuntimeError, ConfigError):
             return None
 
@@ -3386,12 +3432,24 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         raw_user_input = (
             user_input_text if user_input_text is not None else message.text
         )
+        planned_injections = []
 
-        prompt_text, injected = await self._maybe_inject_github_context(
-            prompt_text,
-            record,
-            link_source_text=raw_user_input,
-        )
+        try:
+            prompt_text, injected = await self._maybe_inject_github_context(
+                prompt_text,
+                record,
+                link_source_text=raw_user_input,
+                topic_key=key,
+                planned_injections=planned_injections,
+            )
+        except TypeError as exc:
+            if "topic_key" not in str(exc):
+                raise
+            prompt_text, injected = await self._maybe_inject_github_context(
+                prompt_text,
+                record,
+                link_source_text=raw_user_input,
+            )
         if injected:
             await self._send_message(
                 message.chat_id,
@@ -3400,7 +3458,20 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 reply_to=message.message_id,
             )
 
-        prompt_text, injected = self._maybe_inject_car_context(prompt_text)
+        hub_root = getattr(getattr(self, "_config", None), "root", None)
+        hub_root = hub_root or record.workspace_path
+        planned_car = plan_car_awareness_injection(
+            prompt_text,
+            hub_root=hub_root,
+            surface_kind="telegram",
+            surface_key=key,
+            managed_thread_id=key,
+            worktree_id=record.workspace_path,
+            declared_profile="car_ambient",
+        )
+        prompt_text, injected = planned_car.prompt_text, planned_car.injected
+        if injected:
+            planned_injections.append(planned_car)
         if injected:
             log_event(
                 self._logger,
@@ -3411,10 +3482,18 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 message_id=message.message_id,
             )
 
-        prompt_text, injected = self._maybe_inject_prompt_context(
+        planned_prompt = plan_prompt_writing_hint_injection(
             prompt_text,
+            hub_root=hub_root,
+            surface_kind="telegram",
+            surface_key=key,
+            managed_thread_id=key,
+            worktree_id=record.workspace_path,
             trigger_text=raw_user_input,
         )
+        prompt_text, injected = planned_prompt.prompt_text, planned_prompt.injected
+        if injected:
+            planned_injections.append(planned_prompt)
         if injected:
             log_event(
                 self._logger,
@@ -3448,6 +3527,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 message_id=message.message_id,
             )
 
+        self._pending_planned_prompt_injections = tuple(planned_injections)
         return prompt_text, key
 
     async def _prepare_turn_placeholder(
@@ -3613,6 +3693,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         )
         existing_session_prompt_text: Optional[str] = None
         if pma_enabled:
+            pma_planned_injections: list[PlannedPromptInjection] = []
             user_message_prompt = prompt_text
             if isinstance(pma_context_prefix, str) and pma_context_prefix.strip():
                 user_message_prompt = (
@@ -3636,12 +3717,16 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                     transcript_message_id=transcript_message_id,
                     transcript_text=transcript_text,
                 )
-            pma_prompt, existing_session_prompt_text = pma_prompt_variants
+            pma_prompt = pma_prompt_variants.new_session_prompt
+            existing_session_prompt_text = pma_prompt_variants.existing_session_prompt
+            pma_planned_injections.extend(pma_prompt_variants.planned_injections)
             prompt_text, injected = await self._maybe_inject_github_context(
                 pma_prompt,
                 record,
                 link_source_text=user_message_prompt,
                 allow_cross_repo=True,
+                topic_key=key,
+                planned_injections=pma_planned_injections,
             )
             if existing_session_prompt_text:
                 existing_session_prompt_text, _ = (
@@ -3650,8 +3735,11 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                         record,
                         link_source_text=user_message_prompt,
                         allow_cross_repo=True,
+                        topic_key=key,
+                        planned_injections=pma_planned_injections,
                     )
                 )
+            self._pending_planned_prompt_injections = tuple(pma_planned_injections)
             if injected:
                 await self._send_message(
                     message.chat_id,
@@ -3670,9 +3758,24 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 ),
             )
 
+        pending_planned_injections = tuple(
+            getattr(self, "_pending_planned_prompt_injections", ())
+        )
+        self._pending_planned_prompt_injections = ()
+
+        def _record_pending_planned_injections(result: object) -> None:
+            if not isinstance(result, _TurnRunResult):
+                return
+            for planned in pending_planned_injections:
+                record_planned_prompt_injection(
+                    self._config.root,
+                    planned.prompt_text,
+                    planned.render_plans,
+                )
+
         if pma_enabled and uses_managed_thread_runtime:
             approval_policy, sandbox_policy = self._effective_policies(record)
-            return await _run_telegram_managed_thread_turn(
+            result = await _run_telegram_managed_thread_turn(
                 self,
                 message=message,
                 runtime=runtime,
@@ -3694,10 +3797,12 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 user_visible_text=user_visible_seed,
                 title_seed=user_visible_seed,
             )
+            _record_pending_planned_injections(result)
+            return result
 
         if uses_managed_thread_runtime:
             approval_policy, sandbox_policy = self._effective_policies(record)
-            return await _run_telegram_managed_thread_turn(
+            result = await _run_telegram_managed_thread_turn(
                 self,
                 message=message,
                 runtime=runtime,
@@ -3724,6 +3829,8 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 user_visible_text=user_visible_seed,
                 title_seed=user_visible_seed,
             )
+            _record_pending_planned_injections(result)
+            return result
 
         turn_semaphore = self._ensure_turn_semaphore()
         queued = turn_semaphore.locked()
@@ -3735,7 +3842,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
             queued=queued,
         )
 
-        return await self._execute_codex_turn(
+        result = await self._execute_codex_turn(
             message,
             runtime,
             record,
@@ -3754,3 +3861,5 @@ class ExecutionCommands(TelegramCommandSupportMixin):
             managed_thread_registry=managed_thread_registry,
             managed_thread_key=managed_thread_key,
         )
+        _record_pending_planned_injections(result)
+        return result
