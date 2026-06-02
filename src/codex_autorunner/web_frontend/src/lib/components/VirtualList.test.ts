@@ -32,11 +32,14 @@ describe('VirtualList', () => {
     expect(body).toContain('80: Row 80');
   });
 
-  it('preserves bottom on row resize only when the caller opts in and the list was already at bottom', () => {
+  it('preserves bottom on row and viewport resize only when the caller opts in and the list was already at bottom', () => {
     const source = virtualListSource();
 
     expect(source).toContain('preserveBottomOnResize = false');
-    expect(source).toContain('const wasAtBottom = isNearBottom();');
+    expect(source).toContain('let lastAtBottom = true;');
+    expect(source).toContain('const wasAtBottom = lastAtBottom || isNearBottom();');
+    expect(source).toContain('function handleViewportResize()');
+    expect(source).toContain('const observer = new ResizeObserver(handleViewportResize);');
     expect(source).toContain('void preserveBottomIfNeeded(wasAtBottom);');
     expect(source).toContain('if (!preserveBottomOnResize || !wasAtBottom || !viewport || !scrollable) return;');
   });

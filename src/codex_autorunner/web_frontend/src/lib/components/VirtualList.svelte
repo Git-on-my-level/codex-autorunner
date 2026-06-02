@@ -42,6 +42,7 @@
   let viewportHeight = $state(0);
   let measuredHeights = $state<Record<string, number>>({});
   let rowGap = $state(0);
+  let lastAtBottom = true;
 
   const safeItemSize = $derived(Math.max(1, estimatedItemSize));
   const itemKeys = $derived(items.map((item, index) => key ? key(item, index) : String(index)));
@@ -94,26 +95,28 @@
     if (distanceFromBottom <= safeItemSize * 4) onEndReached();
   }
 
-  function reportScrollState(): void {
-    if (!onScrollState || !viewport) return;
-    if (!scrollable) {
-      onScrollState({ atBottom: true, distanceFromBottom: 0 });
-      return;
-    }
-    const distanceFromBottom = Math.max(
+  function distanceFromBottom(): number {
+    if (!viewport || !scrollable) return 0;
+    return Math.max(
       0,
       viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight
     );
-    onScrollState({ atBottom: distanceFromBottom <= bottomThresholdPx, distanceFromBottom });
+  }
+
+  function reportScrollState(): void {
+    if (!viewport) return;
+    if (!scrollable) {
+      lastAtBottom = true;
+      onScrollState?.({ atBottom: true, distanceFromBottom: 0 });
+      return;
+    }
+    const distance = distanceFromBottom();
+    lastAtBottom = distance <= bottomThresholdPx;
+    onScrollState?.({ atBottom: lastAtBottom, distanceFromBottom: distance });
   }
 
   function isNearBottom(): boolean {
-    if (!viewport || !scrollable) return true;
-    const distanceFromBottom = Math.max(
-      0,
-      viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight
-    );
-    return distanceFromBottom <= bottomThresholdPx;
+    return distanceFromBottom() <= bottomThresholdPx;
   }
 
   function updateMeasurements(): void {
@@ -145,6 +148,15 @@
     updateMeasurements();
   }
 
+  function handleViewportResize(): void {
+    const wasAtBottom = lastAtBottom;
+    if (preserveBottomOnResize && wasAtBottom) {
+      void preserveBottomIfNeeded(wasAtBottom);
+      return;
+    }
+    updateMeasurements();
+  }
+
   $effect(() => {
     void items;
     void itemUpdateToken;
@@ -159,7 +171,7 @@
     const record = () => {
       const height = node.offsetHeight;
       if (!Number.isFinite(height) || height <= 0 || measuredHeights[currentKey] === height) return;
-      const wasAtBottom = isNearBottom();
+      const wasAtBottom = lastAtBottom || isNearBottom();
       measuredHeights = { ...measuredHeights, [currentKey]: height };
       void preserveBottomIfNeeded(wasAtBottom);
     };
@@ -180,7 +192,7 @@
   onMount(() => {
     mounted = true;
     void tick().then(updateMeasurements);
-    const observer = new ResizeObserver(updateMeasurements);
+    const observer = new ResizeObserver(handleViewportResize);
     if (viewport) observer.observe(viewport);
     onReady?.({ scrollToBottom });
     return () => observer.disconnect();
