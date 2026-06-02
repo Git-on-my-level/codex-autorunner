@@ -195,7 +195,12 @@ export function recentActionsSource(): PaletteSource {
   return {
     group: 'Recent',
     priority: 0,
-    load: () => getRecentActions()
+    load: () =>
+      getRecentActions().map((item) => ({
+        ...item,
+        group: 'Recent',
+        keywords: `${item.group} ${item.keywords}`
+      }))
   };
 }
 

@@ -16,7 +16,8 @@
   onMount(() => store.subscribe(() => revision += 1));
 
   function handleInputKeydown(event: KeyboardEvent): void {
-    if (store.handleKeydown(event)) return;
+    if (!store.handleKeydown(event)) return;
+    event.stopPropagation();
   }
 </script>
 

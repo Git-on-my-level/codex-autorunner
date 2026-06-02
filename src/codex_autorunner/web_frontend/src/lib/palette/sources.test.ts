@@ -163,6 +163,8 @@ describe('recentActionsSource', () => {
     const items = source.load();
     expect(items).toHaveLength(1);
     expect(items[0].label).toBe('Test action');
+    expect(items[0].group).toBe('Recent');
+    expect(items[0].keywords).toContain('Test');
   });
 });
 
@@ -241,6 +243,16 @@ describe('filterItems', () => {
     const result = filterItems(items, 'fxlgn');
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe('1');
+  });
+
+  it('preserves group order while sorting matches within each group', () => {
+    const result = filterItems([
+      { id: 'repo-low', label: 'Search repo', group: 'Repos', keywords: 'aaa', action: { kind: 'navigate' as const, href: '/repo-low' } },
+      { id: 'repo-high', label: 'repo', group: 'Repos', keywords: 'repo', action: { kind: 'navigate' as const, href: '/repo-high' } },
+      { id: 'chat-high', label: 'repo', group: 'Chats', keywords: 'repo', action: { kind: 'navigate' as const, href: '/chat-high' } },
+      { id: 'chat-low', label: 'Search repo', group: 'Chats', keywords: 'aaa', action: { kind: 'navigate' as const, href: '/chat-low' } }
+    ], 'repo');
+    expect(result.map((item) => item.id)).toEqual(['repo-high', 'repo-low', 'chat-high', 'chat-low']);
   });
 
   it('returns empty for no matches', () => {
