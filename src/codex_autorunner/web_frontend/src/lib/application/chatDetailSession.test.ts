@@ -37,6 +37,38 @@ describe('chat detail session', () => {
     expect(command.markRead).toBe(false);
   });
 
+  it('activates a local draft without a loud backend fetch', () => {
+    const command = activateChatDetail(initialChatDetailSessionState(), {
+      detailId: 'pma:draft-1',
+      chats: [],
+      hasCachedDetail: () => false,
+      isLocalDraft: (chatId) => chatId === 'pma:draft-1'
+    });
+
+    expect(command.state).toMatchObject({
+      activeChatId: 'pma:draft-1',
+      detailMode: 'detail',
+      loadingActive: false,
+      activeError: null
+    });
+    // Quiet runtime: the live projection seeds an empty transcript and skips the
+    // network because the chat is a local draft.
+    expect(command.runtime).toEqual({ chatId: 'pma:draft-1', quiet: true });
+  });
+
+  it('reopens a reloaded draft that is absent from the loaded backend rows', () => {
+    const command = activateRequestedChatFromRows(initialChatDetailSessionState(), {
+      loadedChats: [chat({ id: 'visible-chat' })],
+      requestedChatId: 'pma:draft-1',
+      hasCachedDetail: () => false,
+      isLocalDraft: (chatId) => chatId === 'pma:draft-1'
+    });
+
+    expect(command.state.activeChatId).toBe('pma:draft-1');
+    expect(command.state.detailMode).toBe('detail');
+    expect(command.runtime).toEqual({ chatId: 'pma:draft-1', quiet: true });
+  });
+
   it('does not replace a deep-linked chat with the first loaded row while the requested row is absent', () => {
     const state = {
       ...initialChatDetailSessionState(),

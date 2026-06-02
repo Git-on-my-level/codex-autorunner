@@ -48,6 +48,12 @@ export type ChatDetailLiveProjectionDeps = {
   api: ChatDetailLiveProjectionApi;
   readModelStore: ReadModelEntityStore;
   getChatSummary: (chatId: string) => ChatSummary | null;
+  /**
+   * True when `chatId` is an unsent, client-only draft that has no managed
+   * thread on the backend yet. The projection must never hit the network for
+   * these — doing so 404s with "Managed thread not found".
+   */
+  isLocalDraft?: (chatId: string) => boolean;
   onStateChange?: (state: ChatDetailLiveProjectionState) => void;
   openStream?: (chatId: string, options: TranscriptStreamOptions) => StreamSubscription;
   shouldUseStream?: typeof shouldUseChatTranscriptStream;
@@ -66,6 +72,7 @@ export class ChatDetailLiveProjection {
   private readonly api: ChatDetailLiveProjectionApi;
   private readonly readModelStore: ReadModelEntityStore;
   private readonly getChatSummary: (chatId: string) => ChatSummary | null;
+  private readonly isLocalDraft: (chatId: string) => boolean;
   private readonly onStateChange: ((state: ChatDetailLiveProjectionState) => void) | undefined;
   private readonly openStream: (chatId: string, options: TranscriptStreamOptions) => StreamSubscription;
   private readonly shouldUseStream: typeof shouldUseChatTranscriptStream;
@@ -96,6 +103,7 @@ export class ChatDetailLiveProjection {
     this.api = deps.api;
     this.readModelStore = deps.readModelStore;
     this.getChatSummary = deps.getChatSummary;
+    this.isLocalDraft = deps.isLocalDraft ?? (() => false);
     this.onStateChange = deps.onStateChange;
     this.openStream = deps.openStream ?? openChatTranscriptEventSource;
     this.shouldUseStream = deps.shouldUseStream ?? shouldUseChatTranscriptStream;
@@ -130,7 +138,25 @@ export class ChatDetailLiveProjection {
       this.activeChatId = chatId;
       this.refreshedTerminalTurnId = null;
     }
+    if (this.activateLocalDraft(chatId)) return;
     await this.refreshActive(chatId, options);
+  }
+
+  /**
+   * Local drafts live entirely client-side until the first send mints the
+   * managed thread. Seed an empty transcript/queue and bail before any network
+   * call so the composer renders without a spurious 404.
+   */
+  private activateLocalDraft(chatId: string): boolean {
+    if (!this.isLocalDraft(chatId)) return false;
+    this.clearScheduledRefreshes();
+    this.closeStream();
+    if (!this.readModelStore.snapshot().chatTranscripts[chatId]?.order.length) {
+      this.readModelStore.replaceChatTranscript(chatId, []);
+    }
+    this.readModelStore.setChatQueue(chatId, []);
+    this.setState({ loadingActive: false, activeError: null, streamState: 'idle', streamError: null });
+    return true;
   }
 
   async refresh(chatId: string, options: ChatDetailLiveProjectionRefreshOptions = {}): Promise<void> {
@@ -138,10 +164,12 @@ export class ChatDetailLiveProjection {
       await this.activate(chatId, options);
       return;
     }
+    if (this.activateLocalDraft(chatId)) return;
     await this.refreshActive(chatId, options);
   }
 
   private async refreshActive(chatId: string, options: ChatDetailLiveProjectionRefreshOptions = {}): Promise<void> {
+    if (this.activateLocalDraft(chatId)) return;
     const refreshSeq = ++this.activeRefreshSeq;
     if (!options.quiet) this.setState({ loadingActive: true, activeError: null });
 
@@ -180,6 +208,10 @@ export class ChatDetailLiveProjection {
   }
 
   async refreshQueue(chatId: string): Promise<void> {
+    if (this.isLocalDraft(chatId)) {
+      this.readModelStore.setChatQueue(chatId, []);
+      return;
+    }
     const refreshSeq = ++this.activeQueueRefreshSeq;
     const result = await this.api.getQueue(chatId);
     if (this.activeChatId !== chatId || refreshSeq !== this.activeQueueRefreshSeq) return;
@@ -191,6 +223,12 @@ export class ChatDetailLiveProjection {
   }
 
   connect(chatId: string, options: { force?: boolean } = {}): void {
+    if (this.isLocalDraft(chatId)) {
+      this.activeChatId = chatId;
+      this.closeStream();
+      this.setState({ streamState: 'idle', streamError: null });
+      return;
+    }
     if (this.activeChatId !== chatId) {
       this.activeRefreshSeq += 1;
       this.activeQueueRefreshSeq += 1;

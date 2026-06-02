@@ -56,10 +56,16 @@
   import { progressWithLiveElapsed } from '$lib/application/chatDetailProgress';
   import { createChatSendController } from '$lib/application/chatSendController';
   import {
+    clearChatDraft,
+    draftRecordHasContent,
+    draftRecordIsLocalDraft,
     loadChatDraftRecords,
+    pruneEmptyDraft,
     saveChatDraftRecords,
+    setChatDraftAttachments,
     setChatDraftText,
     sortedChatDraftRecords,
+    upsertDraftShell,
     type ChatDraftRecord,
     type ChatDraftRecordMap
   } from '$lib/application/chatDraftStore';
@@ -79,7 +85,6 @@
     pinAwareChatRowKey as pinAwareChatRowKeyForPins,
     savePinnedChats,
     sortEntriesForPinnedChats,
-    startLocalDraftChat,
     togglePinnedChatId,
     type ChatDetailSessionState
   } from '$lib/application/chatDetailSession';
@@ -192,10 +197,10 @@
   const COMPACT_SUMMARY_PROMPT =
     'Summarize the conversation so far into a concise context block I can paste into a new thread. Include goals, constraints, decisions, and current state.';
   let readModelState = $state(readModelEntityStore.snapshot());
-  // Unsent new chats are page-local only: `localDraftChat` drives the composer until
-  // the first send creates the managed thread. They are intentionally omitted from
-  // the sidebar index (`chats`) so leaving the flow does not surface a draft row.
-  let localDraftChat = $state<ChatSummary | null>(null);
+  // Unsent new chats live in the persisted draft store (`chatDraftRecords`) until
+  // the first send mints the managed thread. `localDraftChat` (derived below) is
+  // just the active draft resolved from that store; content-bearing drafts are
+  // surfaced in the sidebar so you can navigate away and come back to them.
   let agents = $state<JsonRecord[]>([]);
   let models = $state<JsonRecord[]>([]);
   let scopeOptions = $state<ChatScopeOption[]>(buildChatScopeOptions([], []));
@@ -241,7 +246,6 @@
   let detailMode = $state<'list' | 'detail'>('list');
   let search = $state(DEFAULT_CHAT_LIST_FILTERS.search);
   let chatDraftRecords = $state<ChatDraftRecordMap>({});
-  let pendingAttachmentsByChat = $state<Record<string, PendingAttachment[]>>({});
   let draftHydratedChatId: string | null | undefined = undefined;
   let pendingInitialDraftText: string | null = null;
   const chatListFilters = $derived<ChatListFilters>({
@@ -262,7 +266,27 @@
       ? selectTicketRunGroups(readModelState, currentChatIndexRequest)
       : backendTicketRunGroups
   );
-  const committedChatPlaceholders = $derived<ChatSummary[]>([]);
+  const activeChatId = $derived<string | null>(readModelState.activeChatId);
+  // The active unsent draft, resolved from the persisted draft store. Null once
+  // the draft is committed (its id then appears in `persistedChats`). Ordinary
+  // saved composer drafts for existing chats are not local drafts.
+  const localDraftChat = $derived<ChatSummary | null>(
+    activeChatId &&
+      draftRecordIsLocalDraft(chatDraftRecords[activeChatId]) &&
+      !persistedChats.some((chat) => chat.id === activeChatId)
+      ? draftRecordChatSummary(chatDraftRecords[activeChatId])
+      : null
+  );
+  // In-progress drafts surfaced in the sidebar: every content-bearing draft plus
+  // the active draft (even while still empty) so it pins to the top of the list.
+  const inProgressDraftChats = $derived.by<ChatSummary[]>(() => {
+    const rows = sortedChatDraftRecords(chatDraftRecords).map(draftRecordChatSummary);
+    if (localDraftChat && !rows.some((chat) => chat.id === localDraftChat.id)) {
+      return [localDraftChat, ...rows];
+    }
+    return rows;
+  });
+  const committedChatPlaceholders = $derived<ChatSummary[]>(inProgressDraftChats);
   const visibleLocalChatPlaceholders = $derived<ChatSummary[]>(
     selectVisibleLocalChatPlaceholders(persistedChats, committedChatPlaceholders)
   );
@@ -275,16 +299,19 @@
   const facetChats = $derived<ChatSummary[]>(
     mergeChatFacetSourceChats(facetPersistedChats, persistedChats, committedChatPlaceholders)
   );
-  const draftChats = $derived<ChatSummary[]>(
-    sortedChatDraftRecords(chatDraftRecords).map(draftRecordChatSummary)
-  );
+  const draftChats = $derived<ChatSummary[]>(inProgressDraftChats);
   const filteredDraftChats = $derived<ChatSummary[]>(
     filterDraftChatsForCurrentFilters(draftChats)
   );
   const chatListSourceChats = $derived<ChatSummary[]>(
     statusFilter === 'drafts' ? filteredDraftChats : categoryFilter === 'ticket_run' ? facetChats : chats
   );
-  const activeChatId = $derived<string | null>(readModelState.activeChatId);
+
+  /** True when `chatId` is an unsent draft with no managed thread on the backend. */
+  function isLocalDraft(chatId: string | null | undefined): boolean {
+    if (!chatId) return false;
+    return draftRecordIsLocalDraft(chatDraftRecords[chatId]) && !persistedChats.some((chat) => chat.id === chatId);
+  }
 
   function chatSummaryForId(chatId: string | null): ChatSummary | null {
     return chatSummaryForSessionId(chatId, chats, localDraftChat)
@@ -298,7 +325,6 @@
   function draftRecordChatSummary(record: ChatDraftRecord): ChatSummary {
     const known =
       selectChats(readModelState).find((chat) => chat.id === record.chatId) ??
-      (localDraftChat?.id === record.chatId ? localDraftChat : null) ??
       record.chatSnapshot ??
       null;
     return buildDraftChatSummary(record, known);
@@ -337,6 +363,7 @@
     api: webApi.pma,
     readModelStore: readModelEntityStore,
     getChatSummary: (chatId) => chatSummaryForId(chatId),
+    isLocalDraft: (chatId) => isLocalDraft(chatId),
     onStateChange: writeLiveProjectionState
   });
   const pageController = createChatDetailPageController({
@@ -351,6 +378,7 @@
     },
     readSessionState: readChatDetailSessionState,
     writeSessionState: writeChatDetailSessionState,
+    isLocalDraft: (chatId) => isLocalDraft(chatId),
     onReadModelState: (state) => {
       readModelState = state;
     },
@@ -468,19 +496,24 @@
       return;
     }
     if (activeChatId === chatId) pendingAttachments = value;
-    pendingAttachmentsByChat = value.length > 0
-      ? { ...pendingAttachmentsByChat, [chatId]: value }
-      : Object.fromEntries(Object.entries(pendingAttachmentsByChat).filter(([id]) => id !== chatId));
+    persistDraftRecords(setChatDraftAttachments(chatDraftRecords, chatId, value, chatSummaryForId(chatId)));
   }
 
   function syncComposerToActiveChat(): void {
     const chatId = activeChatId;
     if (draftHydratedChatId === chatId) return;
+    // Discard the draft we're leaving if it never accumulated text or
+    // attachments, so abandoned "+ New" clicks don't litter the sidebar.
+    const leaving = draftHydratedChatId;
+    if (typeof leaving === 'string' && leaving !== chatId) {
+      const pruned = pruneEmptyDraft(chatDraftRecords, leaving);
+      if (pruned !== chatDraftRecords) persistDraftRecords(pruned);
+    }
     draftHydratedChatId = chatId;
     const routeDraft = pendingInitialDraftText;
-    const nextDraft = chatId ? (routeDraft ?? chatDraftRecords[chatId]?.text ?? '') : '';
-    draft = nextDraft;
-    pendingAttachments = chatId ? (pendingAttachmentsByChat[chatId] ?? []) : [];
+    const record = chatId ? chatDraftRecords[chatId] : undefined;
+    draft = chatId ? (routeDraft ?? record?.text ?? '') : '';
+    pendingAttachments = record?.attachments ?? [];
     if (chatId && routeDraft !== null) {
       pendingInitialDraftText = null;
       persistDraftRecords(setChatDraftText(chatDraftRecords, chatId, routeDraft, chatSummaryForId(chatId)));
@@ -950,7 +983,7 @@
   }
 
   function chatHasLocalDraft(chat: ChatSummary): boolean {
-    return Boolean(chatDraftRecords[chat.id]?.text.trim());
+    return draftRecordHasContent(chatDraftRecords[chat.id]);
   }
 
   function runtimeRecordBoolean(record: Record<string, unknown> | null | undefined, ...keys: string[]): boolean {
@@ -1022,7 +1055,16 @@
   });
 
   $effect(() => {
-    pageController.clearCommittedDraftPlaceholder(persistedChats);
+    // Once a draft's first send mints the managed thread, the backend row appears
+    // in `persistedChats`. Drop the now-stale local draft record so the chat stops
+    // being treated as an unsent draft.
+    const committed = Object.values(chatDraftRecords)
+      .filter((record) => draftRecordIsLocalDraft(record) && persistedChats.some((chat) => chat.id === record.chatId))
+      .map((record) => record.chatId);
+    if (committed.length === 0) return;
+    let next = chatDraftRecords;
+    for (const draftId of committed) next = clearChatDraft(next, draftId);
+    persistDraftRecords(next);
   });
 
   $effect(() => {
@@ -1125,16 +1167,16 @@
 
   function writeChatDetailSessionState(state: ChatDetailSessionState): void {
     readModelEntityStore.setActiveChatId(state.activeChatId);
+    // `localDraftChat` is derived from the draft store, so it is not written back
+    // here — it follows `activeChatId` automatically.
     if (
       detailMode === state.detailMode &&
-      localDraftChat === state.localDraftChat &&
       refreshingActive === state.loadingActive &&
       activeError === state.activeError
     ) {
       return;
     }
     detailMode = state.detailMode;
-    localDraftChat = state.localDraftChat;
     refreshingActive = state.loadingActive;
     activeError = state.activeError;
   }
@@ -1876,7 +1918,12 @@
       }
       persistCurrentNewChatPreference();
       const draftChat = newDraftChatSummary();
-      writeChatDetailSessionState(startLocalDraftChat(readChatDetailSessionState(), draftChat));
+      // Persist the draft shell so the new chat survives navigation and reload,
+      // then make it the active chat. The shell carries no managed thread, so
+      // the live projection will not fetch it.
+      persistDraftRecords(upsertDraftShell(chatDraftRecords, draftChat));
+      readModelEntityStore.setActiveChatId(draftChat.id);
+      detailMode = 'detail';
       closeStream();
       await syncCommittedDetailUrl(draftChat.id);
     } finally {

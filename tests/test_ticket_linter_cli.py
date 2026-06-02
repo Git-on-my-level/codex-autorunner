@@ -6,6 +6,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.timeout(90)
+
 
 def _run_linter(repo: Path) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()

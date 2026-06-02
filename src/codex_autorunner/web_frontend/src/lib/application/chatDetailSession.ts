@@ -41,12 +41,16 @@ export type ChatDetailActivationInput = {
   detailId: string | null;
   chats: ChatSummary[];
   hasCachedDetail: (chatId: string) => boolean;
+  /** True when `chatId` is an unsent client-only draft with no backend thread. */
+  isLocalDraft?: (chatId: string) => boolean;
 };
 
 export type ChatDetailRequestedRowsInput = {
   loadedChats: ChatSummary[];
   requestedChatId: string | null;
   hasCachedDetail: (chatId: string) => boolean;
+  /** True when `chatId` is an unsent client-only draft with no backend thread. */
+  isLocalDraft?: (chatId: string) => boolean;
 };
 
 export type ChatDetailReadMarkerStore = {
@@ -130,8 +134,14 @@ export function activateChatDetail(
     };
   }
   if (detailId === state.activeChatId) return noDetailCommand(state);
-  if (state.localDraftChat && detailId === state.localDraftChat.id) {
-    return selectChatDetail(state, detailId, { cached: input.hasCachedDetail(detailId), syncUrl: false });
+  // A local draft (the just-created shell or a deep-linked unsent draft) has no
+  // managed thread yet. Treat it as already-cached so activation never issues a
+  // loud backend fetch; the live projection seeds an empty transcript instead.
+  const isDraft =
+    (state.localDraftChat && detailId === state.localDraftChat.id) ||
+    Boolean(input.isLocalDraft?.(detailId));
+  if (isDraft) {
+    return selectChatDetail(state, detailId, { cached: true, syncUrl: false });
   }
   if (!input.chats.some((chat) => chat.id === detailId)) {
     return {
@@ -159,6 +169,12 @@ export function activateRequestedChatFromRows(
   input: ChatDetailRequestedRowsInput
 ): ChatDetailSelectionCommand {
   if (input.requestedChatId && !input.loadedChats.some((chat) => chat.id === input.requestedChatId)) {
+    // A deep-linked/reloaded draft never appears in the backend rows. Select it
+    // locally so the unsent composer reopens instead of falling back to "no
+    // chat selected".
+    if (input.requestedChatId !== state.activeChatId && input.isLocalDraft?.(input.requestedChatId)) {
+      return selectChatDetail(state, input.requestedChatId, { cached: true, syncUrl: false });
+    }
     return noDetailCommand(state);
   }
   const selectedChatId = chooseActiveChatId(input.loadedChats, state.activeChatId, input.requestedChatId);

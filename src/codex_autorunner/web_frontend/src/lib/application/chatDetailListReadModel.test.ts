@@ -158,6 +158,7 @@ function draftRecord(chatId: string): ChatDraftRecord {
   return {
     chatId,
     text: 'draft text',
+    attachments: [],
     updatedAt: '2026-05-20T12:00:00.000Z'
   };
 }

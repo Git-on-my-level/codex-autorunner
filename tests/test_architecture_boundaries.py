@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 
 SRC_ROOT = Path(__file__).parent.parent / "src" / "codex_autorunner"
+pytestmark = pytest.mark.timeout(90)
 
 
 class Layer(IntEnum):

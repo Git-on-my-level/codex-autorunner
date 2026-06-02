@@ -32,6 +32,44 @@ describe('ChatDetailLiveProjection', () => {
     expect(projection.snapshot().loadingActive).toBe(false);
   });
 
+  it('never fetches a transcript or queue for a local draft chat', async () => {
+    const store = new ReadModelEntityStore();
+    const api = apiFixture({ transcriptResult: missingThreadResult(), queueResult: missingThreadResult() });
+    const stream = streamFixture();
+    const projection = projectionFixture(store, api, {
+      openStream: stream.open,
+      isLocalDraft: (chatId) => chatId === 'pma:draft-1'
+    });
+
+    await projection.activate('pma:draft-1');
+
+    expect(api.getTranscriptCalls).toBe(0);
+    expect(api.getQueueCalls).toBe(0);
+    expect(stream.openedChatIds).toEqual([]);
+    expect(projection.snapshot().loadingActive).toBe(false);
+    expect(projection.snapshot().activeError).toBeNull();
+    expect(store.snapshot().chatTranscripts['pma:draft-1'].order).toEqual([]);
+  });
+
+  it('refresh and connect are no-ops for a local draft chat', async () => {
+    const store = new ReadModelEntityStore();
+    const api = apiFixture({ transcriptResult: missingThreadResult(), queueResult: missingThreadResult() });
+    const stream = streamFixture();
+    const projection = projectionFixture(store, api, {
+      openStream: stream.open,
+      isLocalDraft: (chatId) => chatId === 'pma:draft-1'
+    });
+
+    await projection.refresh('pma:draft-1');
+    projection.connect('pma:draft-1', { force: true });
+
+    expect(api.getTranscriptCalls).toBe(0);
+    expect(api.getQueueCalls).toBe(0);
+    expect(stream.openedChatIds).toEqual([]);
+    expect(projection.snapshot().streamState).toBe('idle');
+    expect(projection.snapshot().activeError).toBeNull();
+  });
+
   it('can force-open the transcript stream after an accepted first send before status projection catches up', async () => {
     const store = new ReadModelEntityStore();
     const stream = streamFixture();
@@ -288,6 +326,13 @@ function projectionFixture(
     now: () => 1_768_176_123_000,
     ...overrides
   });
+}
+
+function missingThreadResult(): ApiResult<never> {
+  return {
+    ok: false,
+    error: { kind: 'http', status: 404, code: 'not_found', message: 'Managed thread not found' }
+  };
 }
 
 function apiFixture(options: {

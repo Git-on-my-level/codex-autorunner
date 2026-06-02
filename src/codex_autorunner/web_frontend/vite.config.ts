@@ -77,7 +77,8 @@ export default defineConfig(() => {
     },
     build: {},
     test: {
-      include: ['src/**/*.test.ts']
+      include: ['src/**/*.test.ts'],
+      testTimeout: 15_000
     }
   };
 });

@@ -16,7 +16,6 @@ import {
   activateChatDetail,
   activateRequestedChatFromRows,
   archivedFilterForSelectedChat,
-  clearCommittedDraftPlaceholderIfPersisted,
   initialChatDetailSessionState,
   loadPinnedChats,
   replacementForArchivedActiveChat,
@@ -96,6 +95,8 @@ export type ChatDetailPageControllerDeps = {
   supportApi: ChatDetailPageSupportApi;
   readSessionState: () => ChatDetailSessionState;
   writeSessionState: (state: ChatDetailSessionState) => void;
+  /** True when `chatId` is an unsent client-only draft with no backend thread. */
+  isLocalDraft?: (chatId: string) => boolean;
   onReadModelState: (state: ReadModelEntityState) => void;
   onLoadingChats: (loading: boolean) => void;
   onChatError: (error: ApiError | null) => void;
@@ -164,7 +165,8 @@ export class ChatDetailPageController {
     const command = activateChatDetail(this.readSession(), {
       detailId: this.requestedDetailFromUrl(),
       chats: this.requestedDetailFromUrl() ? this.currentChats() : [],
-      hasCachedDetail: (chatId) => this.hasCachedDetail(chatId)
+      hasCachedDetail: (chatId) => this.hasCachedDetail(chatId),
+      isLocalDraft: (chatId) => (this.deps.isLocalDraft?.(chatId) ?? false)
     });
     this.applySelectionCommand(command);
   }
@@ -185,12 +187,9 @@ export class ChatDetailPageController {
     else this.stopActiveClock();
   }
 
-  clearCommittedDraftPlaceholder(persistedChats: ChatSummary[]): void {
-    this.writeSession(clearCommittedDraftPlaceholderIfPersisted(this.readSession(), persistedChats));
-  }
-
   async selectChat(chatId: string, options: { syncUrl?: boolean } = {}): Promise<ChatDetailSelectionCommand> {
-    const cached = this.hasCachedDetail(chatId);
+    // Drafts have no backend thread; treat as cached so selection never fetches.
+    const cached = (this.deps.isLocalDraft?.(chatId) ?? false) || this.hasCachedDetail(chatId);
     const command = selectChatDetail(this.readSession(), chatId, {
       cached,
       syncUrl: options.syncUrl ?? false
@@ -262,7 +261,8 @@ export class ChatDetailPageController {
     const command = activateRequestedChatFromRows(this.readSession(), {
       loadedChats,
       requestedChatId: this.requestedDetailFromUrl(),
-      hasCachedDetail: (chatId) => this.hasCachedDetail(chatId)
+      hasCachedDetail: (chatId) => this.hasCachedDetail(chatId),
+      isLocalDraft: (chatId) => (this.deps.isLocalDraft?.(chatId) ?? false)
     });
     this.applySelectionCommand(command);
     if (archivedFilterForSelectedChat(loadedChats, command.state.activeChatId)) this.deps.onFilterArchived();

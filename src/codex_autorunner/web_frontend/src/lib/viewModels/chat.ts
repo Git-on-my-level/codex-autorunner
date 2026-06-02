@@ -2469,6 +2469,44 @@ export function removePendingAttachment(
   return attachments.filter((attachment) => attachment.id !== attachmentId);
 }
 
+const PENDING_ATTACHMENT_KINDS: PendingAttachmentKind[] = ['file', 'image', 'link'];
+const PENDING_ATTACHMENT_UPLOAD_STATES: PendingAttachment['uploadState'][] = ['pending', 'uploaded', 'error'];
+
+/**
+ * Coerce loosely-typed persisted data (e.g. localStorage draft records) back
+ * into a clean `PendingAttachment[]`. Pending attachments are pure metadata —
+ * the uploaded file already lives on the server — so they round-trip through
+ * JSON safely.
+ */
+export function normalizePendingAttachments(raw: unknown): PendingAttachment[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PendingAttachment[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const record = entry as Partial<PendingAttachment>;
+    const id = typeof record.id === 'string' ? record.id.trim() : '';
+    if (!id) continue;
+    const kind = PENDING_ATTACHMENT_KINDS.includes(record.kind as PendingAttachmentKind)
+      ? (record.kind as PendingAttachmentKind)
+      : 'file';
+    const uploadState = PENDING_ATTACHMENT_UPLOAD_STATES.includes(
+      record.uploadState as PendingAttachment['uploadState']
+    )
+      ? (record.uploadState as PendingAttachment['uploadState'])
+      : 'uploaded';
+    out.push({
+      id,
+      kind,
+      title: typeof record.title === 'string' ? record.title : id,
+      sizeLabel: typeof record.sizeLabel === 'string' ? record.sizeLabel : null,
+      url: typeof record.url === 'string' ? record.url : null,
+      uploadedName: typeof record.uploadedName === 'string' ? record.uploadedName : null,
+      uploadState
+    });
+  }
+  return out;
+}
+
 export function pendingAttachmentToIntent(attachment: PendingAttachment | DocumentFileIntentPayload): DocumentFileIntentPayload {
   if ('intent' in attachment) return attachment as DocumentFileIntentPayload;
   const intent = attachment.kind === 'link' ? 'include_link' : 'attach_uploaded_file';
