@@ -5,8 +5,99 @@ import {
   buildRepoWorktreeIndexViewModel,
   countRepoWorktreeIndexEntities,
   filterRepoWorktreeIndexRows,
-  visibleRepoWorktreeChildren
+  visibleRepoWorktreeChildren,
+  isActiveWorktreeChild,
+  isStaleWorktreeChild,
+  repoDefaultExpanded,
+  STALE_WORKTREE_THRESHOLD_MS
 } from './repoWorktree';
+import type { RepoWorktreeChildRow, RepoWorktreeIndexRow } from './repoWorktree';
+
+function makeChildRow(overrides: Partial<RepoWorktreeChildRow> = {}): RepoWorktreeChildRow {
+  return {
+    id: 'wt',
+    label: 'wt',
+    status: 'idle',
+    branch: null,
+    path: null,
+    activeRuns: 0,
+    openTickets: 0,
+    totalTickets: 0,
+    doneTickets: 0,
+    activeTickets: 0,
+    failedTickets: 0,
+    queuedTickets: 0,
+    chats: [],
+    currentRunTitle: null,
+    currentTicketId: null,
+    lastActivityAt: null,
+    href: '/repos/r/worktrees/wt',
+    ticketHref: null,
+    chatHref: '/chats',
+    codingAgentChatHref: '/chats',
+    signalWaiting: 0,
+    signalFailed: 0,
+    signalActive: 0,
+    hasCarState: false,
+    unboundManagedThreadCount: 0,
+    chatBound: false,
+    chatBindingCount: 0,
+    chatBindingSources: {},
+    chatBindingDisplayNames: [],
+    cleanupBlockedByChatBinding: false,
+    ...overrides
+  };
+}
+
+function makeIndexRow(overrides: Partial<RepoWorktreeIndexRow> = {}): RepoWorktreeIndexRow {
+  return {
+    ...(makeChildRow() as unknown as RepoWorktreeIndexRow),
+    kind: 'repo',
+    detail: null,
+    repoHref: null,
+    childWorktrees: [],
+    isPinned: false,
+    totalWorktrees: 0,
+    inUseWorktrees: 0,
+    dirtyWorktrees: 0,
+    worktreeSetupCommands: null,
+    ...overrides
+  };
+}
+
+describe('repo index scale helpers', () => {
+  const now = Date.parse('2026-06-02T00:00:00Z');
+  const old = new Date(now - STALE_WORKTREE_THRESHOLD_MS - 1000).toISOString();
+  const fresh = new Date(now - 60_000).toISOString();
+
+  it('treats running or signalled worktrees as active', () => {
+    expect(isActiveWorktreeChild(makeChildRow({ status: 'running' }))).toBe(true);
+    expect(isActiveWorktreeChild(makeChildRow({ status: 'failed' }))).toBe(true);
+    expect(isActiveWorktreeChild(makeChildRow({ activeRuns: 1 }))).toBe(true);
+    expect(isActiveWorktreeChild(makeChildRow({ signalWaiting: 1 }))).toBe(true);
+    expect(isActiveWorktreeChild(makeChildRow({ status: 'idle' }))).toBe(false);
+  });
+
+  it('marks worktrees stale only when idle and untouched past the threshold', () => {
+    expect(isStaleWorktreeChild(makeChildRow({ lastActivityAt: old }), now)).toBe(true);
+    expect(isStaleWorktreeChild(makeChildRow({ lastActivityAt: fresh }), now)).toBe(false);
+    // Active overrides staleness even with an old timestamp.
+    expect(isStaleWorktreeChild(makeChildRow({ lastActivityAt: old, activeRuns: 2 }), now)).toBe(false);
+    // No recorded activity is left alone (possibly freshly created).
+    expect(isStaleWorktreeChild(makeChildRow({ lastActivityAt: null }), now)).toBe(false);
+  });
+
+  it('defaults a repo to expanded when pinned or needing attention', () => {
+    expect(repoDefaultExpanded(makeIndexRow())).toBe(false);
+    expect(repoDefaultExpanded(makeIndexRow({ isPinned: true }))).toBe(true);
+    expect(repoDefaultExpanded(makeIndexRow({ activeRuns: 1 }))).toBe(true);
+    expect(repoDefaultExpanded(makeIndexRow({ status: 'waiting' }))).toBe(true);
+    expect(repoDefaultExpanded(makeIndexRow({ status: 'blocked' }))).toBe(true);
+    expect(repoDefaultExpanded(makeIndexRow({ status: 'failed' }))).toBe(true);
+    expect(repoDefaultExpanded(makeIndexRow({ signalFailed: 1 }))).toBe(true);
+    expect(repoDefaultExpanded(makeIndexRow({ childWorktrees: [makeChildRow({ signalWaiting: 1 })] }))).toBe(true);
+  });
+});
 
 const repoTicketSummary = {
   ...mockTicketSummary,

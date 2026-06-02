@@ -746,6 +746,47 @@
   .worktree-item.status-blocked .worktree-dot { background: var(--color-warning); }
   .worktree-item.status-failed .worktree-dot { background: var(--color-danger); }
 
+  /* Stale worktrees (untouched 14+ days, not active): quiet at rest, legible on hover. */
+  .worktree-item.is-stale .worktree-card-body,
+  .worktree-item.is-stale .worktree-dot {
+    opacity: 0.5;
+    transition: opacity var(--transition-fast);
+  }
+
+  .worktree-item.is-stale .worktree-card:hover .worktree-card-body,
+  .worktree-item.is-stale .worktree-card:hover .worktree-dot {
+    opacity: 1;
+  }
+
+  /* "Show N more worktrees" disclosure — blends into the sunken children strip,
+     aligned under the worktree name column. */
+  .worktree-show-more {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: var(--space-2) var(--space-5) var(--space-3) 39px;
+    background: var(--color-surface-sunken);
+    border: none;
+    border-top: 1px solid var(--color-border-subtle);
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-1);
+    font-weight: 550;
+    cursor: pointer;
+    transition: color var(--transition-fast), background-color var(--transition-fast);
+  }
+
+  .worktree-show-more:hover {
+    color: var(--color-accent);
+    background: var(--color-surface-muted);
+  }
+
+  /* Hide-stale toggle in the controls row reads "pressed" when active. */
+  .hide-stale-button.is-on {
+    border-color: var(--color-border-strong);
+    background: var(--color-surface-muted);
+    color: var(--color-ink);
+  }
+
   .worktree-card-body {
     min-width: 0;
     display: grid;
