@@ -226,16 +226,33 @@ export function filterItems(items: PaletteItem[], query: string): PaletteItem[] 
   if (!query.trim()) return items;
   const lower = query.toLowerCase();
   const terms = lower.split(/\s+/).filter(Boolean);
-  return items.map((item) => {
+  const scored = items.map((item) => {
     const haystack = `${item.label} ${item.group} ${item.keywords}`.toLowerCase();
     const termScores = terms.map((term) => fuzzyScore(haystack, term));
     const score = termScores.every((termScore) => termScore > 0)
       ? termScores.reduce((total, termScore) => total + termScore, 0)
       : 0;
     return { item, score };
-  }).filter((entry) => entry.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .map((entry) => entry.item);
+  }).filter((entry) => entry.score > 0);
+
+  const groupOrder: string[] = [];
+  const byGroup = new Map<string, typeof scored>();
+  for (const entry of scored) {
+    const group = entry.item.group;
+    if (!byGroup.has(group)) {
+      groupOrder.push(group);
+      byGroup.set(group, []);
+    }
+    byGroup.get(group)!.push(entry);
+  }
+
+  const result: PaletteItem[] = [];
+  for (const group of groupOrder) {
+    const entries = byGroup.get(group)!;
+    entries.sort((a, b) => b.score - a.score);
+    for (const entry of entries) result.push(entry.item);
+  }
+  return result;
 }
 
 function fuzzyScore(haystack: string, needle: string): number {

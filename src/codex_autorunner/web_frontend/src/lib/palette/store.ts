@@ -55,10 +55,16 @@ export function createPaletteStore(
   });
   for (const binding of standardShortcuts) registry.register(binding);
 
-  function recompute(): void {
+  function recompute(options?: { preserveActiveId?: boolean }): void {
+    const activeId = options?.preserveActiveId ? filteredItems[activeIdx]?.id : undefined;
     allItems = loadAllItems(currentSources);
     filteredItems = filterItems(allItems, query);
-    if (activeIdx >= filteredItems.length) activeIdx = Math.max(0, filteredItems.length - 1);
+    if (activeId) {
+      const nextIdx = filteredItems.findIndex((item) => item.id === activeId);
+      activeIdx = nextIdx >= 0 ? nextIdx : Math.min(activeIdx, Math.max(0, filteredItems.length - 1));
+    } else if (activeIdx >= filteredItems.length) {
+      activeIdx = Math.max(0, filteredItems.length - 1);
+    }
   }
 
   function notify(): void {
@@ -112,12 +118,12 @@ export function createPaletteStore(
       store.closePalette();
     },
     refresh() {
-      recompute();
+      recompute({ preserveActiveId: true });
       notify();
     },
     updateSources(newSources: PaletteSource[]) {
       currentSources = newSources;
-      recompute();
+      recompute({ preserveActiveId: true });
       notify();
     },
     handleKeydown(event: KeyboardEvent | KeyEventLike) {
