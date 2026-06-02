@@ -348,6 +348,10 @@ class DiscordMessageTurnResult:
     record_planned_injections: bool = True
 
 
+def _should_record_planned_injections(result: object) -> bool:
+    return bool(getattr(result, "record_planned_injections", True))
+
+
 @dataclass(frozen=True)
 class _DiscordMessageTurnDispatch:
     service: Any
@@ -1320,7 +1324,7 @@ async def _execute_discord_thread_message(
                 DiscordMessageTurnResult,
                 await run_turn(**run_turn_kwargs),
             )
-            if result.record_planned_injections:
+            if _should_record_planned_injections(result):
                 for planned in planned_injections:
                     record_planned_prompt_injection(
                         dispatch.service._config.root,
@@ -1340,7 +1344,7 @@ async def _execute_discord_thread_message(
                 DiscordMessageTurnResult,
                 await dispatch.service._run_agent_turn_for_message(**run_turn_kwargs),
             )
-            if result.record_planned_injections:
+            if _should_record_planned_injections(result):
                 for planned in planned_injections:
                     record_planned_prompt_injection(
                         dispatch.service._config.root,
