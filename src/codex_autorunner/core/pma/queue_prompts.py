@@ -92,6 +92,7 @@ def build_queue_execution_prompt(
         prompt_state_key=inputs.prompt_state_key,
         force_full_base_prompt=force_full_base_prompt,
         user_input_texts=[inputs.message],
+        record_worktree_pr_hint=False,
     )
     planned_pma_injections: tuple[PlannedPromptInjection, ...] = ()
     # Queue prompts do not use the two-variant PMA builder, so collect equivalent

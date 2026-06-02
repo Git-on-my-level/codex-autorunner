@@ -230,7 +230,7 @@ async def maybe_inject_github_context(
                         },
                         exc_info=True,
                     )
-                    return prompt_text, False
+                    return append_capsules_to_prompt(prompt_text, (capsule,))
             return append_capsules_to_prompt(prompt_text, (capsule,))
 
     log_event(

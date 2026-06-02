@@ -234,6 +234,7 @@ class _TurnRunResult:
     durable_delivery_pending: bool = False
     durable_delivery_id: Optional[str] = None
     durable_delivery_claim_token: Optional[str] = None
+    record_planned_injections: bool = True
 
 
 @dataclass(frozen=True)
@@ -3324,6 +3325,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
             intermediate_response=turn_delivery_state.intermediate_response,
             interrupt_status_turn_id=turn_handle_id,
             interrupt_status_fallback_text=interrupt_status_fallback_text,
+            record_planned_injections=not was_interrupted,
         )
 
     def _prepare_turn_prompt(
@@ -3765,6 +3767,8 @@ class ExecutionCommands(TelegramCommandSupportMixin):
 
         def _record_pending_planned_injections(result: object) -> None:
             if not isinstance(result, _TurnRunResult):
+                return
+            if not result.record_planned_injections:
                 return
             for planned in pending_planned_injections:
                 record_planned_prompt_injection(

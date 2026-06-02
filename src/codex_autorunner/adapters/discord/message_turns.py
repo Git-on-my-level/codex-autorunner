@@ -345,6 +345,7 @@ class DiscordMessageTurnResult:
     durable_delivery_claim_token: Optional[str] = None
     deferred_delivery: bool = False
     preserve_progress_lease: bool = False
+    record_planned_injections: bool = True
 
 
 @dataclass(frozen=True)
@@ -1319,12 +1320,13 @@ async def _execute_discord_thread_message(
                 DiscordMessageTurnResult,
                 await run_turn(**run_turn_kwargs),
             )
-            for planned in planned_injections:
-                record_planned_prompt_injection(
-                    dispatch.service._config.root,
-                    planned.prompt_text,
-                    planned.render_plans,
-                )
+            if result.record_planned_injections:
+                for planned in planned_injections:
+                    record_planned_prompt_injection(
+                        dispatch.service._config.root,
+                        planned.prompt_text,
+                        planned.render_plans,
+                    )
             return result
         except TypeError as exc:
             error_text = str(exc)
@@ -1338,12 +1340,13 @@ async def _execute_discord_thread_message(
                 DiscordMessageTurnResult,
                 await dispatch.service._run_agent_turn_for_message(**run_turn_kwargs),
             )
-            for planned in planned_injections:
-                record_planned_prompt_injection(
-                    dispatch.service._config.root,
-                    planned.prompt_text,
-                    planned.render_plans,
-                )
+            if result.record_planned_injections:
+                for planned in planned_injections:
+                    record_planned_prompt_injection(
+                        dispatch.service._config.root,
+                        planned.prompt_text,
+                        planned.render_plans,
+                    )
             return result
     except DiscordTurnStartupFailure as exc:
         dispatch.log_event_fn(
@@ -2709,12 +2712,14 @@ async def _run_discord_orchestrated_turn_for_message(
                         ),
                         execution_id=progress_execution_id,
                         send_final_message=not acknowledgement_delivered,
+                        record_planned_injections=False,
                     )
                 return DiscordMessageTurnResult(
                     final_message="",
                     preview_message_id=progress_message_id,
                     execution_id=progress_execution_id,
                     send_final_message=False,
+                    record_planned_injections=False,
                 )
             raise RuntimeError(str(finalized.error or public_execution_error))
         summary_snapshot = ""
