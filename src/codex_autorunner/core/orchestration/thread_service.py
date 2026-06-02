@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from ..agent_model_defaults import builtin_default_model_for_agent
 from ..car_context import CarContextProfile
 from ..domain.refs import ScopeRef
 from ..logging_utils import log_event
@@ -59,9 +60,10 @@ class ForeignModelError(ValueError):
     """Raised when a turn specifies a model the resolved agent cannot use.
 
     An agent without the ``model_listing`` capability (e.g. Hermes/ACP) has no
-    caller-selectable model catalog, so any non-empty model on such a turn is
-    foreign. The turn is rejected before dispatch so the model never reaches
-    the agent session and never lands in ``orch_thread_executions`` (#1854).
+    caller-selectable model catalog, so a non-empty model that is not the
+    agent's built-in default is foreign. The turn is rejected before dispatch so
+    the foreign model never reaches the agent session and never lands in
+    ``orch_thread_executions`` (#1854).
     """
 
     def __init__(self, *, agent_id: str, model: str) -> None:
@@ -814,13 +816,17 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
 
         # Reject a caller-specified model the resolved agent cannot use, before
         # the turn is created or dispatched. An agent without `model_listing`
-        # (e.g. Hermes/ACP) has no caller-selectable model catalog, so a
-        # non-empty model on such a turn is foreign. Letting it through pins
-        # the bad model onto the agent session and bricks every later turn
-        # (#1854). Raising here keeps the foreign model out of the agent
-        # session and out of orch_thread_executions entirely.
+        # (e.g. Hermes/ACP) has no caller-selectable model catalog, but its own
+        # built-in default can be persisted as system-resolved runtime metadata.
+        # Any other non-empty model is foreign; letting it through pins the bad
+        # model onto the agent session and bricks every later turn (#1854).
         requested_model = (message_request.model or "").strip()
-        if requested_model and "model_listing" not in definition.capabilities:
+        builtin_model = builtin_default_model_for_agent(definition.agent_id)
+        if (
+            requested_model
+            and "model_listing" not in definition.capabilities
+            and requested_model != builtin_model
+        ):
             raise ForeignModelError(
                 agent_id=definition.agent_id,
                 model=requested_model,

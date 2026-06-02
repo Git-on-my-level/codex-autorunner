@@ -293,6 +293,7 @@ async def run_managed_thread_message_send(
             sandbox_policy=options.sandbox_policy or "dangerFullAccess",
             profile=options.agent_profile,
             client_request_id=client_turn_id,
+            configured_default_model=options.model,
         )
         automation_child_plan = _prepare_automation_child_for_managed_send(
             hub_root,

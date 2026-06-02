@@ -924,6 +924,7 @@ class GitHubCommands(TelegramCommandSupportMixin):
                     client_request_id=(
                         f"telegram:{topic_key}:review:{secrets.token_hex(6)}"
                     ),
+                    configured_default_model=record.model,
                     origin_metadata={
                         "chat_id": message.chat_id,
                         "thread_id": message.thread_id,

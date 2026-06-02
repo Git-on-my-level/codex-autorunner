@@ -1496,6 +1496,24 @@ def test_normalize_discord_command_path_preserves_compatibility_aliases() -> Non
     )
 
 
+def test_discord_surface_turn_default_model_uses_hub_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = SimpleNamespace(_config=SimpleNamespace(root=tmp_path))
+    monkeypatch.setattr(
+        discord_message_turns,
+        "load_hub_config",
+        lambda root: SimpleNamespace(codex_model="gpt-configured"),
+    )
+
+    assert (
+        discord_message_turns._resolve_configured_surface_turn_default_model(
+            service, agent="codex"
+        )
+        == "gpt-configured"
+    )
+
+
 def _bind_select_interaction(
     *, selected_value: str = "repo-1", user_id: str = "user-1"
 ) -> dict[str, Any]:
