@@ -20,6 +20,7 @@ export type PaletteStore = {
   refresh: () => void;
   updateSources: (sources: PaletteSource[]) => void;
   handleKeydown: (event: KeyboardEvent | KeyEventLike) => boolean;
+  subscribe: (listener: () => void) => () => void;
   destroy: () => void;
 };
 
@@ -42,6 +43,7 @@ export function createPaletteStore(
   let isOpen = false;
   let query = '';
   let activeIdx = 0;
+  let listeners: Array<() => void> = [];
 
   const standardShortcuts = buildStandardShortcuts({
     togglePalette: () => store.toggle(),
@@ -57,6 +59,10 @@ export function createPaletteStore(
     allItems = loadAllItems(currentSources);
     filteredItems = filterItems(allItems, query);
     if (activeIdx >= filteredItems.length) activeIdx = Math.max(0, filteredItems.length - 1);
+  }
+
+  function notify(): void {
+    for (const listener of listeners) listener();
   }
 
   const store: PaletteStore = {
@@ -75,19 +81,23 @@ export function createPaletteStore(
       query = '';
       activeIdx = 0;
       recompute();
+      notify();
     },
     closePalette() {
       isOpen = false;
       query = '';
+      notify();
     },
     setQuery(newQuery: string) {
       query = newQuery;
       activeIdx = 0;
       recompute();
+      notify();
     },
     moveActive(delta: number) {
       if (filteredItems.length === 0) return;
       activeIdx = (activeIdx + delta + filteredItems.length) % filteredItems.length;
+      notify();
     },
     selectActive() {
       if (filteredItems[activeIdx]) store.selectItem(filteredItems[activeIdx]);
@@ -103,10 +113,12 @@ export function createPaletteStore(
     },
     refresh() {
       recompute();
+      notify();
     },
     updateSources(newSources: PaletteSource[]) {
       currentSources = newSources;
       recompute();
+      notify();
     },
     handleKeydown(event: KeyboardEvent | KeyEventLike) {
       const key = 'key' in event ? event.key : '';
@@ -143,8 +155,15 @@ export function createPaletteStore(
       }
       return registry.handleKeydown(event);
     },
+    subscribe(listener: () => void) {
+      listeners.push(listener);
+      return () => {
+        listeners = listeners.filter((candidate) => candidate !== listener);
+      };
+    },
     destroy() {
       registry.destroy();
+      listeners = [];
     }
   };
 

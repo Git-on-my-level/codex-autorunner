@@ -7,6 +7,11 @@ export type PaletteItem = {
   label: string;
   group: string;
   keywords: string;
+  glyph?: string | null;
+  accent?: string | null;
+  meta?: string | null;
+  chip?: string | null;
+  lastActivityAt?: string | null;
   action: PaletteAction;
 };
 

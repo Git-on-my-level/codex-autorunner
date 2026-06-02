@@ -3,6 +3,8 @@ export { createPaletteStore, type PaletteStore } from './store';
 export { createShortcutRegistry, buildStandardShortcuts, createBinding, type ShortcutRegistry } from './registry';
 export {
   threadSource,
+  repoSource,
+  worktreeSource,
   scopeSource,
   ticketSource,
   contextspaceSource,

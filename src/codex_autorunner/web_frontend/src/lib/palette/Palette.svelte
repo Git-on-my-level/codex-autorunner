@@ -1,25 +1,26 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import type { PaletteStore } from '$lib/palette/store';
 
   let { store }: { store: PaletteStore } = $props();
   let searchInput: HTMLInputElement | null = $state(null);
+  let revision = $state(0);
 
   $effect(() => {
+    revision;
     if (store.open) {
       queueMicrotask(() => searchInput?.focus());
     }
   });
 
-  function handleKeydown(event: KeyboardEvent): void {
-    if (store.handleKeydown(event)) return;
-  }
+  onMount(() => store.subscribe(() => revision += 1));
 
   function handleInputKeydown(event: KeyboardEvent): void {
     if (store.handleKeydown(event)) return;
   }
 </script>
 
-{#if store.open}
+{#if revision >= 0 && store.open}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="palette-backdrop" onclick={() => store.closePalette()} onkeydown={() => {}}>
     <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -41,7 +42,7 @@
           bind:this={searchInput}
           class="palette-input"
           type="text"
-          placeholder="Search commands, threads, scopes, tickets..."
+          placeholder="Search repos, worktrees, chats..."
           value={store.query}
           oninput={(event) => store.setQuery((event.target as HTMLInputElement).value)}
           onkeydown={handleInputKeydown}
@@ -52,6 +53,9 @@
       </div>
       <ul class="palette-list" role="listbox" aria-label="Palette results">
         {#each store.items as item, index (item.id)}
+          {#if index === 0 || item.group !== store.items[index - 1]?.group}
+            <li class="palette-group" role="presentation">{item.group}</li>
+          {/if}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <li
             class={`palette-item ${index === store.activeIndex ? 'active' : ''}`}
@@ -60,8 +64,18 @@
             onclick={() => store.selectItem(item)}
             onpointerenter={() => { store.moveActive(index - store.activeIndex); }}
           >
-            <span class="palette-item-label">{item.label}</span>
-            <span class="palette-item-group">{item.group}</span>
+            <span class="palette-glyph" style:--palette-accent={item.accent ?? 'var(--color-accent)'} aria-hidden="true">
+              {item.glyph ?? item.label.slice(0, 1).toUpperCase()}
+            </span>
+            <span class="palette-item-copy">
+              <span class="palette-item-label">{item.label}</span>
+              {#if item.meta}
+                <span class="palette-item-meta">{item.meta}</span>
+              {/if}
+            </span>
+            {#if item.chip}
+              <span class="palette-item-chip">{item.chip}</span>
+            {/if}
           </li>
         {/each}
         {#if store.items.length === 0}
@@ -137,11 +151,19 @@
     flex: 1;
   }
 
+  .palette-group {
+    padding: var(--space-3) var(--space-4) var(--space-1);
+    color: var(--color-ink-faint);
+    font-size: var(--font-size-0);
+    font-weight: 650;
+    text-transform: uppercase;
+  }
+
   .palette-item {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: var(--space-3);
+    min-height: 48px;
     padding: var(--space-2) var(--space-4);
     cursor: pointer;
     font-size: var(--font-size-1);
@@ -163,6 +185,7 @@
   }
 
   .palette-item-label {
+    display: block;
     flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -170,7 +193,36 @@
     font-weight: 500;
   }
 
-  .palette-item-group {
+  .palette-item-copy {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .palette-item-meta {
+    display: block;
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--font-size-0);
+    color: var(--color-ink-muted);
+  }
+
+  .palette-glyph {
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-2);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    background: color-mix(in srgb, var(--palette-accent) 12%, white);
+    color: var(--palette-accent);
+    font-size: var(--font-size-0);
+    font-weight: 700;
+  }
+
+  .palette-item-chip {
     font-size: var(--font-size-0);
     color: var(--color-ink-faint);
     flex-shrink: 0;

@@ -1,6 +1,8 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import {
   threadSource,
+  repoSource,
+  worktreeSource,
   scopeSource,
   ticketSource,
   contextspaceSource,
@@ -40,10 +42,12 @@ describe('threadSource', () => {
       }
     ];
     const source = threadSource(threads);
-    expect(source.group).toBe('Threads');
+    expect(source.group).toBe('Chats');
     const items = source.load();
     expect(items).toHaveLength(1);
     expect(items[0].label).toBe('Fix login bug');
+    expect(items[0].group).toBe('Chats');
+    expect(items[0].chip).toBe('#1');
     expect(items[0].action.kind).toBe('navigate');
     if (items[0].action.kind === 'navigate') {
       expect(items[0].action.href).toContain('thread-1');
@@ -52,21 +56,48 @@ describe('threadSource', () => {
 });
 
 describe('scopeSource', () => {
-  it('produces navigation items for repos and worktrees', () => {
-    const repos: RepoSummary[] = [
-      { id: 'repo-1', name: 'my-repo', path: null, status: 'idle', defaultBranch: null, worktreeCount: 0, activeRuns: 0, openTickets: 0, lastActivityAt: null, raw: {} }
-    ];
-    const worktrees: WorktreeSummary[] = [
-      { id: 'wt-1', repoId: 'repo-1', name: 'feature-branch', path: null, branch: 'feature', status: 'idle', activeRuns: 0, openTickets: 0, lastActivityAt: null, raw: {} }
-    ];
-    const source = scopeSource(repos, worktrees);
+  it('produces navigation items', () => {
+    const source = scopeSource();
     const items = source.load();
     const labels = items.map((i) => i.label);
     expect(labels).toContain('Chats');
     expect(labels).toContain('Repos');
     expect(labels).toContain('Settings');
-    expect(labels).toContain('my-repo');
-    expect(labels).toContain('feature-branch');
+    expect(items.every((item) => item.group === 'Navigation')).toBe(true);
+  });
+});
+
+describe('repoSource', () => {
+  it('produces repo navigation results with identity metadata', () => {
+    const repos: RepoSummary[] = [
+      { id: 'repo-1', name: 'my-repo', path: '/tmp/my-repo', status: 'idle', defaultBranch: 'main', worktreeCount: 0, activeRuns: 0, openTickets: 0, lastActivityAt: null, raw: {} }
+    ];
+    const source = repoSource(repos);
+    const items = source.load();
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      label: 'my-repo',
+      group: 'Repos',
+      chip: '#1'
+    });
+    expect(items[0].meta).toContain('main');
+  });
+});
+
+describe('worktreeSource', () => {
+  it('produces worktree navigation results with branch metadata', () => {
+    const worktrees: WorktreeSummary[] = [
+      { id: 'wt-1', repoId: 'repo-1', name: 'feature-branch', path: null, branch: 'feature', status: 'idle', activeRuns: 0, openTickets: 0, lastActivityAt: null, raw: {} }
+    ];
+    const source = worktreeSource(worktrees);
+    const items = source.load();
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      label: 'feature-branch',
+      group: 'Worktrees',
+      chip: '#1'
+    });
+    expect(items[0].meta).toContain('feature');
   });
 });
 
@@ -189,7 +220,7 @@ describe('filterItems', () => {
   });
 
   it('filters by group', () => {
-    const result = filterItems(items, 'scopes');
+    const result = filterItems(items, 'scope');
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe('2');
   });
@@ -204,6 +235,12 @@ describe('filterItems', () => {
     const result = filterItems(items, 'add palette');
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe('3');
+  });
+
+  it('supports fuzzy subsequence search', () => {
+    const result = filterItems(items, 'fxlgn');
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe('1');
   });
 
   it('returns empty for no matches', () => {
