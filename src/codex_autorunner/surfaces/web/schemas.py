@@ -184,6 +184,15 @@ class HubRetireWorktreeRequest(Payload):
     )
 
 
+class HubArchiveWorktreeRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    worktree_repo_id: str = Field(
+        validation_alias=AliasChoices("worktree_repo_id", "worktreeRepoId")
+    )
+    archived: bool = True
+
+
 class HubDeleteWorktreeRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 

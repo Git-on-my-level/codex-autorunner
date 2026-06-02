@@ -1223,6 +1223,26 @@ print(
             archive_profile=archive_profile,
         )
 
+    def set_worktree_archived(
+        self,
+        *,
+        worktree_repo_id: str,
+        archived: bool,
+    ) -> Dict[str, object]:
+        self._ctx.invalidate_cache()
+        manifest = self._topology_repository.load_manifest()
+        entry = manifest.get(worktree_repo_id)
+        if not entry or entry.kind != "worktree":
+            raise ValueError(f"Worktree repo not found: {worktree_repo_id}")
+        entry.archived = bool(archived)
+        self._topology_repository.save_manifest(manifest)
+        return {
+            "status": "ok",
+            "worktree_repo_id": worktree_repo_id,
+            "archive_state": "archived" if archived else "active",
+            "archived": bool(archived),
+        }
+
     def _collect_cleanup_worktrees(
         self,
         *,
@@ -1243,6 +1263,8 @@ print(
             if not entry.worktree_of:
                 if not is_legacy_linked_worktree:
                     continue
+            if entry.archived:
+                continue
             try:
                 if self._has_active_chat_binding(entry.id):
                     continue

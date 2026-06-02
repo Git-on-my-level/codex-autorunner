@@ -21,6 +21,12 @@ export type RetireWorktreeTarget = {
   cleanupBlockedByChatBinding: boolean;
 };
 
+export type ArchiveWorktreeTarget = {
+  id: string;
+  label: string;
+  archived: boolean;
+};
+
 export type RetireStateTarget = {
   kind: 'repo' | 'worktree';
   id: string;
@@ -74,6 +80,22 @@ export async function confirmAndRetireWorktree(target: RetireWorktreeTarget): Pr
     readModelEntityTags.worktree(target.id)
   ]);
   return { tone: 'success', message: `Retired worktree ${target.label}.` };
+}
+
+export async function archiveWorktree(target: ArchiveWorktreeTarget): Promise<ActionNotice> {
+  const result = await webApi.hub.archiveWorktree({
+    worktreeRepoId: target.id,
+    archived: !target.archived
+  });
+  if (!result.ok) return { tone: 'danger', message: result.error.message };
+  await invalidateReadModelTags([
+    readModelEntityTags.repoWorktreeIndex,
+    readModelEntityTags.worktree(target.id)
+  ]);
+  return {
+    tone: 'success',
+    message: target.archived ? `Unarchived worktree ${target.label}.` : `Archived worktree ${target.label}.`
+  };
 }
 
 export async function confirmAndRetireState(target: RetireStateTarget): Promise<ActionNotice | null> {

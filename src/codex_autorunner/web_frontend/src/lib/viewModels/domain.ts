@@ -255,6 +255,7 @@ export type RepoSummary = {
   activeRuns: number;
   openTickets: number;
   lastActivityAt: string | null;
+  archiveState?: 'active' | 'archived';
   gitStatus?: GitStatusSummary | null;
   raw: JsonRecord;
 };
@@ -270,6 +271,7 @@ export type WorktreeSummary = {
   activeRuns: number;
   openTickets: number;
   lastActivityAt: string | null;
+  archiveState?: 'active' | 'archived';
   gitStatus?: GitStatusSummary | null;
   raw: JsonRecord;
 };
@@ -599,6 +601,7 @@ export function mapRepoSummary(raw: JsonRecord): RepoSummary {
       numberOrNull(raw.open_tickets ?? raw.open_ticket_count) ??
       (totalTickets !== null && doneTickets !== null ? Math.max(0, totalTickets - doneTickets) : 0),
     lastActivityAt: dateString(raw.last_activity_at ?? raw.updated_at ?? runState.last_event_at ?? raw.last_run_started_at),
+    archiveState: raw.archived === true || raw.archive_state === 'archived' || raw.archiveState === 'archived' ? 'archived' : 'active',
     gitStatus: mapGitStatusSummary(raw),
     raw
   };
@@ -626,6 +629,7 @@ export function mapWorktreeSummary(raw: JsonRecord): WorktreeSummary {
       numberOrNull(raw.open_tickets ?? raw.open_ticket_count) ??
       (totalTickets !== null && doneTickets !== null ? Math.max(0, totalTickets - doneTickets) : 0),
     lastActivityAt: dateString(raw.last_activity_at ?? raw.updated_at ?? runState.last_event_at ?? raw.last_run_started_at),
+    archiveState: raw.archived === true || raw.archive_state === 'archived' || raw.archiveState === 'archived' ? 'archived' : 'active',
     gitStatus: mapGitStatusSummary(raw),
     raw
   };

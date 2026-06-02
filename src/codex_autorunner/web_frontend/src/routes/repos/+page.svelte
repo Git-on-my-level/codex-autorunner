@@ -6,7 +6,7 @@
   import NewRepoDialog from '$lib/components/NewRepoDialog.svelte';
   import NewWorktreeDialog from '$lib/components/NewWorktreeDialog.svelte';
   import RepoSettingsDialog, { type RepoSettingsTarget } from '$lib/components/RepoSettingsDialog.svelte';
-  import { confirmAndRetireState, confirmAndRetireWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
+  import { archiveWorktree, confirmAndRetireState, confirmAndRetireWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
   import { webApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
   import {
     ensureChatIndexLoaded,
@@ -98,6 +98,12 @@
     if (result.tone === 'success') await loadRepos();
   }
 
+  async function handleArchiveWorktree(target: Parameters<typeof archiveWorktree>[0]): Promise<void> {
+    const result = await archiveWorktree(target);
+    notice = result;
+    if (result.tone === 'success') await loadRepos();
+  }
+
   async function handleRetireState(target: Parameters<typeof confirmAndRetireState>[0]): Promise<void> {
     const result = await confirmAndRetireState(target);
     if (!result) return;
@@ -151,6 +157,7 @@
   {index}
   {sectionIssues}
   onRetry={loadRepos}
+  onArchiveWorktree={handleArchiveWorktree}
   onRetireWorktree={handleRetireWorktree}
   onRetireState={handleRetireState}
   onRepoPin={handleRepoPin}

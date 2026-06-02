@@ -13,6 +13,7 @@
     errorMessage = null,
     sectionIssues = [],
     onRetry = undefined,
+    onArchiveWorktree = undefined,
     onRetireWorktree = undefined,
     onRetireState = undefined,
     onRepoPin = undefined,
@@ -29,6 +30,7 @@
     errorMessage?: string | null;
     sectionIssues?: PartialPageIssue[];
     onRetry?: (() => void) | undefined;
+    onArchiveWorktree?: ((worktree: { id: string; label: string; archived: boolean }) => void | Promise<void>) | undefined;
     onRetireWorktree?: ((worktree: { id: string; label: string; chatBound: boolean; cleanupBlockedByChatBinding: boolean }) => void | Promise<void>) | undefined;
     onRetireState?: ((target: { kind: 'repo' | 'worktree'; id: string; label: string; hasCarState: boolean; unboundManagedThreadCount: number }) => void | Promise<void>) | undefined;
     onRepoPin?: ((target: { id: string; pinned: boolean }) => void | Promise<void>) | undefined;
@@ -51,6 +53,7 @@
     {index}
     {sectionIssues}
     {onRetry}
+    {onArchiveWorktree}
     {onRetireWorktree}
     {onRetireState}
     {onRepoPin}

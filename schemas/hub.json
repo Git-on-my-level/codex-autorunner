@@ -51,6 +51,7 @@
       "cleanup_blocked_by_chat_binding": {"type": "boolean"},
       "has_car_state": {"type": "boolean"},
       "resource_kind": {"type": "string", "enum": ["repo"]},
+      "archived": {"type": "boolean"},
       "mounted": {"type": "boolean"},
       "mount_error": {"type": ["null", "string"]},
       "ticket_flow": {

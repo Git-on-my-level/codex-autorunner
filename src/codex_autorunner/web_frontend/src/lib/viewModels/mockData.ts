@@ -92,6 +92,7 @@ export const mockRepoSummary: RepoSummary = {
   activeRuns: 1,
   openTickets: 3,
   lastActivityAt: '2026-05-04T00:02:00Z',
+  archiveState: 'active',
   gitStatus: null,
   raw: {}
 };
@@ -106,6 +107,7 @@ export const mockWorktreeSummary: WorktreeSummary = {
   activeRuns: 1,
   openTickets: 1,
   lastActivityAt: '2026-05-04T00:02:00Z',
+  archiveState: 'active',
   gitStatus: null,
   raw: {}
 };

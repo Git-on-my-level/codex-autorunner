@@ -505,6 +505,7 @@ class RepoTopology(ReadModelContract):
     label: str
     path: str
     archived: bool = False
+    archive_state: Literal["active", "archived"] = "active"
     is_pinned: bool = False
     destination_id: Optional[str] = None
     child_worktree_ids: list[str] = Field(default_factory=list)
@@ -522,6 +523,7 @@ class WorktreeTopology(ReadModelContract):
     path: str
     branch: Optional[str] = None
     archived: bool = False
+    archive_state: Literal["active", "archived"] = "active"
     destination_id: Optional[str] = None
     chat_bound: bool = False
     chat_binding_count: int = Field(default=0, ge=0)

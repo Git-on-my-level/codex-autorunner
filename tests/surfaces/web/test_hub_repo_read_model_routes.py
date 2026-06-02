@@ -79,6 +79,47 @@ def test_repo_worktree_topology_and_runtime_snapshots_are_windowed(hub_env) -> N
     assert len(runtime_payload["runtime"]) == 7
 
 
+def test_archive_worktree_is_non_destructive_and_projects_archive_state(
+    hub_env,
+) -> None:
+    worktree_root = _add_workspace(
+        hub_env.hub_root,
+        repo_id="repo-00--archive-me",
+        kind="worktree",
+        worktree_of=hub_env.repo_id,
+    )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    archive = client.post(
+        "/hub/worktrees/archive",
+        json={"worktreeRepoId": "repo-00--archive-me", "archived": True},
+    )
+    assert archive.status_code == 200
+    assert archive.json()["archive_state"] == "archived"
+    assert worktree_root.exists()
+
+    topology = client.get(
+        "/hub/read-models/repo-worktree/topology",
+        params={"kind": "worktree", "limit": 20},
+    )
+    topology.raise_for_status()
+    worktree = next(
+        item
+        for item in topology.json()["worktrees"]
+        if item["worktreeId"] == "repo-00--archive-me"
+    )
+    assert worktree["archived"] is True
+    assert worktree["archiveState"] == "archived"
+
+    unarchive = client.post(
+        "/hub/worktrees/archive",
+        json={"worktreeRepoId": "repo-00--archive-me", "archived": False},
+    )
+    assert unarchive.status_code == 200
+    assert unarchive.json()["archive_state"] == "active"
+    assert worktree_root.exists()
+
+
 def test_repo_worktree_topology_surfaces_chat_bound_channel_display(
     hub_env,
 ) -> None:

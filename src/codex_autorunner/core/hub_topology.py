@@ -189,6 +189,7 @@ class RepoSnapshot:
     cleanup_blocked_by_chat_binding: bool = False
     has_car_state: bool = False
     resource_kind: str = "repo"
+    archived: bool = False
 
     def to_dict(self, hub_root: Path) -> Dict[str, object]:
         try:
@@ -228,6 +229,7 @@ class RepoSnapshot:
             "cleanup_blocked_by_chat_binding": self.cleanup_blocked_by_chat_binding,
             "has_car_state": self.has_car_state,
             "resource_kind": self.resource_kind,
+            "archived": self.archived,
         }
 
 
@@ -698,6 +700,7 @@ def build_repo_snapshot(
         last_exit_code=runner_state.last_exit_code if runner_state else None,
         runner_pid=runner_state.runner_pid if runner_state else None,
         effective_destination=effective_destination,
+        archived=bool(record.repo.archived),
     )
 
 
@@ -813,6 +816,7 @@ def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
                     normalize_manifest_destination(entry.get("effective_destination"))
                     or default_local_destination()
                 ),
+                archived=bool(entry.get("archived", False)),
             )
             repos.append(repo)
         except (ValueError, TypeError, KeyError) as exc:
