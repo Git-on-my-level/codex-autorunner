@@ -12,7 +12,8 @@ import type { ChatDetailStreamState } from './chatDetailLiveProjection';
 export type ChatTranscriptListItem =
   | { kind: 'card'; id: string; card: ChatTranscriptCard }
   | { kind: 'typing'; id: string; title: string }
-  | { kind: 'shared-files'; id: string };
+  | { kind: 'shared-files'; id: string }
+  | { kind: 'tail-spacer'; id: string };
 
 export type ChatDetailDisplayReadModelInput = {
   transcriptCards: ChatTranscriptCard[];
@@ -73,7 +74,7 @@ export function buildChatDetailDisplayReadModel(
   const statusBar = buildChatStatusBar(input.displayedProgress, input.activeChat);
   const streamingMessageId = activeStreamingMessageId(input.displayedProgress, lastAssistantMessageCard);
   const showTypingIndicator = shouldShowTypingIndicator(input.displayedProgress, activeCards);
-  const showStatusBar = shouldShowChatDetailStatusBar(statusBar, input.displayedProgress);
+  const showStatusBar = shouldShowChatDetailStatusBar(statusBar, input.displayedProgress, activeCards);
   const chatHasActivity = activeCards.length > 0 || showStatusBar;
   const hasRunnableDraft = Boolean(input.activeChat && (input.draft.trim() || input.pendingAttachmentCount > 0));
   const composerWillQueue = shouldQueueComposerDraft(
@@ -91,7 +92,8 @@ export function buildChatDetailDisplayReadModel(
     transcriptListItems: [
       ...displayTranscriptCards.map((card) => ({ kind: 'card' as const, id: card.id, card })),
       ...(showTypingIndicator ? [{ kind: 'typing' as const, id: 'typing-indicator', title: 'Assistant is typing' }] : []),
-      ...(input.assistantSharedFileCount > 0 ? [{ kind: 'shared-files' as const, id: 'assistant-shared-files' }] : [])
+      ...(input.assistantSharedFileCount > 0 ? [{ kind: 'shared-files' as const, id: 'assistant-shared-files' }] : []),
+      ...(showStatusBar ? [{ kind: 'tail-spacer' as const, id: 'status-bar-tail-spacer' }] : [])
     ],
     statusAnnouncement: screenReaderStatusAnnouncement(input, statusBar, lastAssistantMessageCard),
     alertAnnouncement: screenReaderAlertAnnouncement(statusBar),
@@ -240,11 +242,13 @@ function screenReaderAlertAnnouncement(statusBar: ChatStatusBar | null): string 
 
 function shouldShowChatDetailStatusBar(
   statusBar: ChatStatusBar | null,
-  progress: ChatRunProgress | null
+  progress: ChatRunProgress | null,
+  activeCards: ChatTranscriptCard[]
 ): boolean {
-  if (!statusBar || statusBar.state === 'idle') return false;
+  if (!statusBar) return false;
+  if (statusBar.state === 'idle') return activeCards.length > 0;
   if (statusBar.state === 'done') {
-    return Boolean(statusBar.tokenUsageLabel || statusBar.contextRemainingLabel);
+    return activeCards.length > 0 || Boolean(statusBar.tokenUsageLabel || statusBar.contextRemainingLabel);
   }
   return Boolean(
     (progress?.elapsedSeconds !== null && progress?.elapsedSeconds !== undefined) ||

@@ -15,7 +15,8 @@
     onEndReached,
     onScrollState,
     onReady,
-    bottomThresholdPx = 32
+    bottomThresholdPx = 32,
+    preserveBottomOnResize = false
   }: {
     items: T[];
     children: Snippet<[T, number]>;
@@ -31,6 +32,7 @@
     onScrollState?: (state: { atBottom: boolean; distanceFromBottom: number }) => void;
     onReady?: (api: { scrollToBottom: (behavior?: ScrollBehavior) => void }) => void;
     bottomThresholdPx?: number;
+    preserveBottomOnResize?: boolean;
   } = $props();
 
   let viewport: HTMLDivElement | null = $state(null);
@@ -40,6 +42,7 @@
   let viewportHeight = $state(0);
   let measuredHeights = $state<Record<string, number>>({});
   let rowGap = $state(0);
+  let lastAtBottom = true;
 
   const safeItemSize = $derived(Math.max(1, estimatedItemSize));
   const itemKeys = $derived(items.map((item, index) => key ? key(item, index) : String(index)));
@@ -92,17 +95,28 @@
     if (distanceFromBottom <= safeItemSize * 4) onEndReached();
   }
 
-  function reportScrollState(): void {
-    if (!onScrollState || !viewport) return;
-    if (!scrollable) {
-      onScrollState({ atBottom: true, distanceFromBottom: 0 });
-      return;
-    }
-    const distanceFromBottom = Math.max(
+  function distanceFromBottom(): number {
+    if (!viewport || !scrollable) return 0;
+    return Math.max(
       0,
       viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight
     );
-    onScrollState({ atBottom: distanceFromBottom <= bottomThresholdPx, distanceFromBottom });
+  }
+
+  function reportScrollState(): void {
+    if (!viewport) return;
+    if (!scrollable) {
+      lastAtBottom = true;
+      onScrollState?.({ atBottom: true, distanceFromBottom: 0 });
+      return;
+    }
+    const distance = distanceFromBottom();
+    lastAtBottom = distance <= bottomThresholdPx;
+    onScrollState?.({ atBottom: lastAtBottom, distanceFromBottom: distance });
+  }
+
+  function isNearBottom(): boolean {
+    return distanceFromBottom() <= bottomThresholdPx;
   }
 
   function updateMeasurements(): void {
@@ -122,7 +136,24 @@
     viewport.scrollTo({ top: viewport.scrollHeight, behavior });
   }
 
+  async function preserveBottomIfNeeded(wasAtBottom: boolean): Promise<void> {
+    if (!preserveBottomOnResize || !wasAtBottom || !viewport || !scrollable) return;
+    await tick();
+    if (!viewport) return;
+    viewport.scrollTop = viewport.scrollHeight;
+    updateMeasurements();
+  }
+
   function handleScroll(): void {
+    updateMeasurements();
+  }
+
+  function handleViewportResize(): void {
+    const wasAtBottom = lastAtBottom;
+    if (preserveBottomOnResize && wasAtBottom) {
+      void preserveBottomIfNeeded(wasAtBottom);
+      return;
+    }
     updateMeasurements();
   }
 
@@ -140,7 +171,9 @@
     const record = () => {
       const height = node.offsetHeight;
       if (!Number.isFinite(height) || height <= 0 || measuredHeights[currentKey] === height) return;
+      const wasAtBottom = lastAtBottom || isNearBottom();
       measuredHeights = { ...measuredHeights, [currentKey]: height };
+      void preserveBottomIfNeeded(wasAtBottom);
     };
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(record);
     observer?.observe(node);
@@ -159,7 +192,7 @@
   onMount(() => {
     mounted = true;
     void tick().then(updateMeasurements);
-    const observer = new ResizeObserver(updateMeasurements);
+    const observer = new ResizeObserver(handleViewportResize);
     if (viewport) observer.observe(viewport);
     onReady?.({ scrollToBottom });
     return () => observer.disconnect();

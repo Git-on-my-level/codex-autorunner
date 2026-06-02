@@ -542,7 +542,6 @@
   // bottom of the transcript. Once they scroll up, we stop force-scrolling
   // on every content change; scrolling back near the bottom re-arms it.
   let followBottom = true;
-  let messageStackResizeObserver: ResizeObserver | null = null;
 
   const activeChat = $derived(activeChatId ? chatSummaryForId(activeChatId) : null);
   const activeSurfaceDeliveries = $derived<ArtifactDelivery[]>(artifactDeliveriesForActiveSurface(activeChat, artifactDeliveries));
@@ -1845,13 +1844,6 @@
     return messageStack?.querySelector<HTMLElement>('.chat-transcript-virtual-list') ?? messageStack;
   }
 
-  function isMessageStackNearBottom(): boolean {
-    const scroller = messageScroller();
-    if (!scroller) return true;
-    const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-    return distanceFromBottom <= TRANSCRIPT_BOTTOM_THRESHOLD_PX;
-  }
-
   async function scrollMessagesToBottom(): Promise<void> {
     await tick();
     const scroller = messageScroller();
@@ -1859,33 +1851,10 @@
     scroller.scrollTop = scroller.scrollHeight;
   }
 
-  function handleMessageScroll(): void {
-    // The user's scroll position is the source of truth for follow-bottom.
-    // Programmatic scrolls fire this too, but they land at the bottom so
-    // followBottom stays true; user-initiated scrolls up flip it false.
-    followBottom = isMessageStackNearBottom();
+  function updateTranscriptScrollState(atBottom: boolean): void {
+    transcriptAtBottom = atBottom;
+    followBottom = atBottom;
   }
-
-  $effect(() => {
-    // Attach scroll listener + ResizeObserver to whichever element is the
-    // scroller right now. The ResizeObserver catches growing message content
-    // (streaming tokens, live commentary) which doesn't change card count,
-    // so the cardCount-keyed effect below would otherwise miss it.
-    if (!messageStack) return;
-    const scroller = messageScroller();
-    if (!scroller) return;
-    scroller.addEventListener('scroll', handleMessageScroll, { passive: true });
-    messageStackResizeObserver = new ResizeObserver(() => {
-      if (followBottom) scroller.scrollTop = scroller.scrollHeight;
-    });
-    messageStackResizeObserver.observe(scroller);
-    if (scroller.firstElementChild) messageStackResizeObserver.observe(scroller.firstElementChild);
-    return () => {
-      scroller.removeEventListener('scroll', handleMessageScroll);
-      messageStackResizeObserver?.disconnect();
-      messageStackResizeObserver = null;
-    };
-  });
 
   async function createChat(options: { preserveSelectedScope?: boolean; preserveSelectedKind?: boolean } = {}): Promise<void> {
     creating = true;
@@ -2859,7 +2828,7 @@
       {/if}
     </div>
 
-    <div bind:this={messageStack} class="message-stack">
+    <div bind:this={messageStack} class="message-stack" class:has-status-overlay={showStatusBar && statusBar}>
       {#if refreshingActive && (activeChat || activeChatId)}
         <div class="state-panel loading-state">
           <span class="state-icon" aria-hidden="true"></span>
@@ -2917,7 +2886,8 @@
           class="chat-transcript-virtual-list"
           itemClass="chat-transcript-virtual-item"
           bottomThresholdPx={TRANSCRIPT_BOTTOM_THRESHOLD_PX}
-          onScrollState={({ atBottom }) => { transcriptAtBottom = atBottom; }}
+          preserveBottomOnResize
+          onScrollState={({ atBottom }) => updateTranscriptScrollState(atBottom)}
           onReady={(api) => { transcriptApi = api; }}
         >
           {#snippet children(item)}
@@ -2933,6 +2903,8 @@
                 assistantLabel={chatAgentDisplayLabel}
                 sharedFiles={assistantSharedFiles}
               />
+            {:else if item.kind === 'tail-spacer'}
+              <div class="chat-transcript-tail-spacer" aria-hidden="true"></div>
             {:else}
               {@render typingDots(item.title)}
             {/if}

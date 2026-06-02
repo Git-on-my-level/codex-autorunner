@@ -2138,6 +2138,16 @@ textarea:hover {
   min-height: 180px;
 }
 
+.message-stack.has-status-overlay:not(:has(.chat-transcript-virtual-list)) {
+  padding-bottom: var(--chat-status-overlay-clearance, 52px);
+}
+
+.chat-transcript-tail-spacer {
+  height: var(--chat-status-overlay-clearance, 52px);
+  min-height: var(--chat-status-overlay-clearance, 52px);
+  pointer-events: none;
+}
+
 .message-stack > :first-child {
   /* Bottom-anchor short transcripts without reversing DOM, screen-reader, or keyboard order. */
   margin-top: auto;

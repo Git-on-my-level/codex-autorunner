@@ -46,7 +46,7 @@ describe('chat detail state composition', () => {
       'turn:run-1:assistant'
     ]);
     expect(model.streamingMessageId).toBe('turn:run-1:assistant');
-    expect(model.transcriptListItems.map((item) => item.kind)).toEqual(['card', 'card', 'shared-files']);
+    expect(model.transcriptListItems.map((item) => item.kind)).toEqual(['card', 'card', 'shared-files', 'tail-spacer']);
     expect(model.statusAnnouncement).toBe('Assistant is responding. 1 queued message');
     expect(model.alertAnnouncement).toBe('');
     expect(model.showStreamHealthAside).toBe(true);
@@ -89,7 +89,7 @@ describe('chat detail state composition', () => {
       text: 'I am checking the renderer.',
       turnId: 'run-1'
     });
-    expect(model.transcriptListItems.map((item) => item.kind)).toEqual(['card', 'card', 'typing']);
+    expect(model.transcriptListItems.map((item) => item.kind)).toEqual(['card', 'card', 'typing', 'tail-spacer']);
   });
 
   it('keeps terminal live commentary before the final assistant reply', () => {
@@ -128,7 +128,7 @@ describe('chat detail state composition', () => {
       'intermediate:intermediate-event-1',
       'message:turn:run-1:assistant'
     ]);
-    expect(model.transcriptListItems.map((item) => item.kind)).toEqual(['card', 'card', 'card']);
+    expect(model.transcriptListItems.map((item) => item.kind)).toEqual(['card', 'card', 'card', 'tail-spacer']);
   });
 
   it('does not duplicate live progress already projected by the backend transcript', () => {
@@ -252,6 +252,45 @@ describe('chat detail state composition', () => {
     expect(model.showStartPicker).toBe(true);
     expect(model.hasRunnableDraft).toBe(false);
     expect(model.composerWillQueue).toBe(false);
+  });
+
+  it('keeps the status bar visible for idle chats with transcript history', () => {
+    const model = buildChatDetailDisplayReadModel({
+      transcriptCards: [assistantCard('turn:old:assistant', 'done')],
+      queuedTurns: [],
+      displayedProgress: null,
+      activeChat: { ...chatSummary('chat-1'), status: 'idle' },
+      assistantSharedFileCount: 0,
+      streamState: 'idle',
+      loadingActive: false,
+      activeError: null,
+      draft: '',
+      pendingAttachmentCount: 0
+    });
+
+    expect(model.showStatusBar).toBe(true);
+    expect(model.statusBar?.state).toBe('idle');
+    expect(model.transcriptListItems.at(-1)?.kind).toBe('tail-spacer');
+    expect(model.chatHasActivity).toBe(true);
+    expect(model.showStartPicker).toBe(false);
+  });
+
+  it('keeps the status bar visible for completed chats with transcript history', () => {
+    const model = buildChatDetailDisplayReadModel({
+      transcriptCards: [assistantCard('turn:done:assistant', 'done')],
+      queuedTurns: [],
+      displayedProgress: null,
+      activeChat: { ...chatSummary('chat-1'), status: 'done' },
+      assistantSharedFileCount: 0,
+      streamState: 'idle',
+      loadingActive: false,
+      activeError: null,
+      draft: '',
+      pendingAttachmentCount: 0
+    });
+
+    expect(model.showStatusBar).toBe(true);
+    expect(model.statusBar?.state).toBe('done');
   });
 
 });
