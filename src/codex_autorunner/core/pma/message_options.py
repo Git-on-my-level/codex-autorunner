@@ -6,10 +6,15 @@ from typing import Any, Optional
 
 from ..car_context import (
     build_car_context_bundle,
+    build_car_context_capsule,
     default_managed_thread_context_profile,
     normalize_car_context_profile,
 )
+from ..context_capsule_planner import plan_context_capsules_for_prompt
+from ..context_capsules import ContextCapsuleRenderPlan
 from ..managed_thread_kinds import infer_managed_thread_chat_kind
+from ..orchestration.context_capsule_ledger import SQLiteContextCapsuleLedger
+from ..orchestration.sqlite import open_orchestration_sqlite
 from ..text_utils import _normalize_optional_text
 from .attachments import (
     build_managed_thread_attachment_execution_context,
@@ -37,6 +42,7 @@ class ManagedThreadMessageInput:
     attachments: Any
     defaults: dict[str, Any]
     thread: dict[str, Any]
+    managed_thread_id: str
     hub_root: Path
     runtime_cwd: Path | None
     live_backend_thread_id: str
@@ -63,6 +69,7 @@ class ManagedThreadMessageOptions:
     live_backend_thread_id: str
     execution_prompt: str
     capsule_refs: tuple[dict[str, Any], ...]
+    capsule_render_plans: tuple[ContextCapsuleRenderPlan, ...]
     execution_input_items: Optional[list[dict[str, Any]]]
     delivery_payload: dict[str, Any]
 
@@ -110,6 +117,18 @@ def resolve_managed_thread_message_options(
         context_profile,
         prompt_text=message,
     )
+    context_capsule = build_car_context_capsule(context_bundle)
+    with open_orchestration_sqlite(input.hub_root) as conn:
+        planned_context = plan_context_capsules_for_prompt(
+            (context_capsule,),
+            ledger=SQLiteContextCapsuleLedger(conn),
+            surface_kind="web",
+            surface_key=input.managed_thread_id,
+            managed_thread_id=input.managed_thread_id,
+            backend_thread_id=input.live_backend_thread_id,
+            repo_id=_normalize_optional_text(input.thread.get("repo_id")),
+            worktree_id=_normalize_optional_text(input.thread.get("workspace_root")),
+        )
     prompt_assembly = compose_managed_thread_execution_prompt_with_capsules(
         ManagedThreadPromptRequest(
             agent=input.thread.get("agent"),
@@ -119,6 +138,8 @@ def resolve_managed_thread_message_options(
             compact_seed=compact_seed,
             message=execution_message,
             context_bundle=context_bundle,
+            rendered_context=planned_context.rendered_text,
+            capsule_refs=planned_context.capsule_refs,
             chat_kind=chat_kind,
         )
     )
@@ -146,6 +167,7 @@ def resolve_managed_thread_message_options(
         live_backend_thread_id=input.live_backend_thread_id,
         execution_prompt=execution_prompt,
         capsule_refs=tuple(ref.to_dict() for ref in prompt_assembly.capsule_refs),
+        capsule_render_plans=planned_context.plans,
         execution_input_items=(
             attachment_context.input_items if attachment_context is not None else None
         ),

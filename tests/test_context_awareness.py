@@ -4,6 +4,8 @@ from codex_autorunner.core.context_awareness import (
     CAR_AWARENESS_BLOCK,
     maybe_inject_filebox_hint,
     maybe_inject_worktree_pr_hint,
+    plan_car_awareness_injection,
+    plan_prompt_writing_hint_injection,
 )
 
 
@@ -48,3 +50,55 @@ def test_worktree_pr_hint_not_injected_from_existing_context_only() -> None:
 
     assert injected is False
     assert prompt == CAR_AWARENESS_BLOCK
+
+
+def test_planned_car_awareness_dedupes_by_thread_scope(tmp_path) -> None:
+    first = plan_car_awareness_injection(
+        "please check our car board",
+        hub_root=tmp_path,
+        surface_kind="discord",
+        surface_key="channel-1",
+        managed_thread_id="thread-1",
+        declared_profile="car_ambient",
+        record_rendered=True,
+    )
+    second = plan_car_awareness_injection(
+        "please check our car board",
+        hub_root=tmp_path,
+        surface_kind="discord",
+        surface_key="channel-1",
+        managed_thread_id="thread-1",
+        declared_profile="car_ambient",
+        record_rendered=True,
+    )
+
+    assert first.injected is True
+    assert "You are operating inside a Codex Autorunner" in first.prompt_text
+    assert second.injected is False
+    assert second.prompt_text == "please check our car board"
+
+
+def test_planned_prompt_writing_hint_dedupes_by_thread_scope(tmp_path) -> None:
+    first = plan_prompt_writing_hint_injection(
+        "write a prompt for this",
+        hub_root=tmp_path,
+        surface_kind="telegram",
+        surface_key="topic-1",
+        managed_thread_id="topic-1",
+        trigger_text="write a prompt for this",
+        record_rendered=True,
+    )
+    second = plan_prompt_writing_hint_injection(
+        "write a prompt for this",
+        hub_root=tmp_path,
+        surface_kind="telegram",
+        surface_key="topic-1",
+        managed_thread_id="topic-1",
+        trigger_text="write a prompt for this",
+        record_rendered=True,
+    )
+
+    assert first.injected is True
+    assert "put the prompt in a ```code block```" in first.prompt_text
+    assert second.injected is False
+    assert second.prompt_text == "write a prompt for this"

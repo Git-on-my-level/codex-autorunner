@@ -154,6 +154,40 @@ class ContextCapsuleRenderPlan:
         return self.capsule.can_seed_durable_user_fields
 
 
+def ledger_backend_thread_id_for_scope(
+    capsule: ContextCapsule,
+    *,
+    backend_thread_id: str | None,
+) -> str:
+    """Return the backend id component that belongs in a capsule ledger key."""
+    if capsule.scope is ContextCapsuleScope.BACKEND_SESSION:
+        return (backend_thread_id or "").strip()
+    return ""
+
+
+def ledger_scope_id_for_capsule(
+    capsule: ContextCapsule,
+    *,
+    repo_id: str | None = None,
+    worktree_id: str | None = None,
+    managed_thread_id: str | None = None,
+    backend_thread_id: str | None = None,
+    turn_id: str | None = None,
+) -> str:
+    """Resolve the scope id for a capsule from the standard runtime ids."""
+    if capsule.scope is ContextCapsuleScope.REPO:
+        return _required_text(repo_id or managed_thread_id, "scope_id")
+    if capsule.scope is ContextCapsuleScope.WORKTREE:
+        return _required_text(worktree_id or managed_thread_id, "scope_id")
+    if capsule.scope is ContextCapsuleScope.THREAD:
+        return _required_text(managed_thread_id or backend_thread_id, "scope_id")
+    if capsule.scope is ContextCapsuleScope.BACKEND_SESSION:
+        return _required_text(backend_thread_id or managed_thread_id, "scope_id")
+    if capsule.scope is ContextCapsuleScope.TURN:
+        return _required_text(turn_id or managed_thread_id, "scope_id")
+    return _required_text(managed_thread_id or backend_thread_id, "scope_id")
+
+
 def stable_json_digest(value: Any) -> str:
     encoded = json.dumps(
         value,
@@ -199,7 +233,7 @@ def plan_capsule_render(
     )
 
 
-def _required_text(value: str, field_name: str) -> str:
+def _required_text(value: object, field_name: str) -> str:
     text = value.strip() if isinstance(value, str) else ""
     if not text:
         raise ValueError(f"{field_name} is required")
@@ -216,6 +250,8 @@ __all__ = [
     "ContextCapsuleScope",
     "ContextCapsuleVisibility",
     "capsule_payload_digest",
+    "ledger_backend_thread_id_for_scope",
+    "ledger_scope_id_for_capsule",
     "plan_capsule_render",
     "stable_json_digest",
 ]

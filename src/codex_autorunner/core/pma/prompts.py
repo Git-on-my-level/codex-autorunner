@@ -4,16 +4,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..car_context import build_car_context_capsule
 from ..managed_thread_kinds import (
     MANAGED_THREAD_CHAT_KIND_PMA,
     ManagedThreadChatKind,
     normalize_managed_thread_chat_kind,
 )
-from ..orchestration.turn_context import (
-    ManagedThreadCapsuleRef,
-    render_context_capsule_for_prompt,
-)
+from ..orchestration.turn_context import ManagedThreadCapsuleRef
 from ..pma_context import format_pma_discoverability_preamble
 
 
@@ -26,6 +22,8 @@ class ManagedThreadPromptRequest:
     compact_seed: str | None
     message: str
     context_bundle: Any
+    rendered_context: str = ""
+    capsule_refs: tuple[ManagedThreadCapsuleRef, ...] = ()
     chat_kind: ManagedThreadChatKind = MANAGED_THREAD_CHAT_KIND_PMA
 
 
@@ -70,19 +68,15 @@ def compose_managed_thread_execution_prompt_with_capsules(
             f"Hub root: `{request.hub_root.expanduser().resolve()}`.\n{runtime_text}\n"
         )
     user_message = f"<user_message>\n{execution_message}\n</user_message>\n"
-    capsule = build_car_context_capsule(request.context_bundle)
-    car_context = render_context_capsule_for_prompt(capsule) if capsule else ""
-    capsule_refs = (
-        (ManagedThreadCapsuleRef.from_capsule(capsule),) if capsule is not None else ()
-    )
-    if not car_context:
+    rendered_context = str(request.rendered_context or "").strip()
+    if not rendered_context:
         return ManagedThreadPromptAssembly(
             prompt=f"{preamble}{user_message}",
-            capsule_refs=capsule_refs,
+            capsule_refs=request.capsule_refs,
         )
     return ManagedThreadPromptAssembly(
-        prompt=f"{preamble}{car_context}\n\n{user_message}",
-        capsule_refs=capsule_refs,
+        prompt=f"{preamble}{rendered_context}\n\n{user_message}",
+        capsule_refs=request.capsule_refs,
     )
 
 

@@ -7,10 +7,15 @@ from unittest.mock import patch
 import pytest
 from fastapi import HTTPException
 
+from codex_autorunner.core.context_capsule_planner import record_context_capsule_renders
+from codex_autorunner.core.orchestration.context_capsule_ledger import (
+    SQLiteContextCapsuleLedger,
+)
 from codex_autorunner.core.orchestration.runtime_threads import (
     RUNTIME_THREAD_INTERRUPTED_ERROR,
     RUNTIME_THREAD_TIMEOUT_ERROR,
 )
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.surfaces.web.routes.pma_routes.managed_thread_runtime_payloads import (
     MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
     build_accepted_send_payload,
@@ -156,6 +161,52 @@ def test_resolve_message_options_uses_thread_metadata_profile(tmp_path: Path) ->
     )
 
     assert options.agent_profile == "alpha"
+
+
+def test_resolve_message_options_dedupes_thread_scoped_car_awareness(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace_root = tmp_path / "repo"
+    hub_root.mkdir()
+    workspace_root.mkdir()
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(config=SimpleNamespace(root=hub_root, raw={}))
+        )
+    )
+    thread = {
+        "agent": "codex",
+        "workspace_root": str(workspace_root),
+        "resource_kind": "repo",
+    }
+
+    first = resolve_managed_thread_message_options(
+        request,
+        ManagedThreadMessageRequest(message="Can you check our car board?"),
+        managed_thread_id="thread-1",
+        thread=thread,
+        service=SimpleNamespace(),
+    )
+    with open_orchestration_sqlite(hub_root) as conn:
+        record_context_capsule_renders(
+            SQLiteContextCapsuleLedger(conn),
+            first.capsule_render_plans,
+        )
+    second = resolve_managed_thread_message_options(
+        request,
+        ManagedThreadMessageRequest(message="Can you check our car board?"),
+        managed_thread_id="thread-1",
+        thread=thread,
+        service=SimpleNamespace(),
+    )
+
+    assert "<injected context>" in first.execution_prompt
+    assert "You are operating inside a Codex Autorunner" in first.execution_prompt
+    assert "<injected context>" not in second.execution_prompt
+    assert "You are operating inside a Codex Autorunner" not in second.execution_prompt
+    assert first.capsule_refs[0]["render_decision"] == "new"
+    assert second.capsule_refs[0]["render_decision"] == "skip_duplicate"
 
 
 @patch(

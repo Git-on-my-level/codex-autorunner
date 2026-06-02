@@ -2879,6 +2879,13 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         *,
         link_source_text: Optional[str] = None,
         allow_cross_repo: bool = False,
+        surface_kind: Optional[str] = None,
+        surface_key: Optional[str] = None,
+        managed_thread_id: Optional[str] = None,
+        backend_thread_id: Optional[str] = None,
+        repo_id: Optional[str] = None,
+        worktree_id: Optional[str] = None,
+        planned_injections: Optional[list[Any]] = None,
     ) -> tuple[str, bool]:
         return await maybe_inject_github_context(
             prompt_text=prompt_text,
@@ -2887,6 +2894,14 @@ class DiscordBotService(DiscordInteractionResponseMixin):
             logger=self._logger,
             event_prefix="discord.github_context",
             allow_cross_repo=allow_cross_repo,
+            hub_root=self._config.root,
+            surface_kind=surface_kind,
+            surface_key=surface_key,
+            managed_thread_id=managed_thread_id,
+            backend_thread_id=backend_thread_id,
+            repo_id=repo_id,
+            worktree_id=worktree_id,
+            planned_injections=planned_injections,
         )
 
     def _build_message_session_key(

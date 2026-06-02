@@ -7,7 +7,12 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, cast
 
 from .config_contract import ConfigError
-from .context_awareness import maybe_inject_worktree_pr_hint
+from .context_awareness import (
+    PlannedPromptInjection,
+    maybe_inject_planned_worktree_pr_hint,
+    maybe_inject_worktree_pr_hint,
+    plan_worktree_pr_hint_injection,
+)
 from .hub import HubSupervisor
 from .managed_thread_snapshot import (
     snapshot_managed_threads as _snapshot_managed_threads,
@@ -63,6 +68,7 @@ class PmaPromptVariants:
 
     new_session_prompt: str
     existing_session_prompt: str
+    planned_injections: tuple[PlannedPromptInjection, ...] = ()
 
 
 def format_pma_discoverability_preamble(
@@ -97,11 +103,23 @@ def format_pma_prompt(
     force_full_context: bool = False,
     force_full_base_prompt: bool = False,
     user_input_texts: Sequence[str | None] | None = None,
+    record_worktree_pr_hint: bool = True,
 ) -> str:
-    message, _ = maybe_inject_worktree_pr_hint(
-        message,
-        user_input_texts=user_input_texts,
-    )
+    if hub_root is not None and prompt_state_key:
+        message, _ = maybe_inject_planned_worktree_pr_hint(
+            message,
+            hub_root=hub_root,
+            surface_kind="pma",
+            surface_key=prompt_state_key,
+            managed_thread_id=prompt_state_key,
+            user_input_texts=user_input_texts,
+            record_rendered=record_worktree_pr_hint,
+        )
+    else:
+        message, _ = maybe_inject_worktree_pr_hint(
+            message,
+            user_input_texts=user_input_texts,
+        )
     limits = PmaPromptRenderLimits.from_snapshot(snapshot)
     snapshot_text = _render_hub_snapshot(
         snapshot,
@@ -200,6 +218,7 @@ def format_pma_prompt_variants(
         prompt_state_key=prompt_state_key,
         force_full_context=force_full_context,
         user_input_texts=user_input_texts,
+        record_worktree_pr_hint=False,
     )
     existing_session_prompt = new_session_prompt
     if hub_root is not None and prompt_state_key and not force_full_context:
@@ -210,10 +229,24 @@ def format_pma_prompt_variants(
             hub_root=hub_root,
             prompt_state_key=prompt_state_key,
             user_input_texts=user_input_texts,
+            record_worktree_pr_hint=False,
         )
+    planned_injections: tuple[PlannedPromptInjection, ...] = ()
+    if hub_root is not None and prompt_state_key:
+        planned_worktree = plan_worktree_pr_hint_injection(
+            message,
+            hub_root=hub_root,
+            surface_kind="pma",
+            surface_key=prompt_state_key,
+            managed_thread_id=prompt_state_key,
+            user_input_texts=user_input_texts,
+        )
+        if planned_worktree.injected:
+            planned_injections = (planned_worktree,)
     return PmaPromptVariants(
         new_session_prompt=new_session_prompt,
         existing_session_prompt=existing_session_prompt,
+        planned_injections=planned_injections,
     )
 
 

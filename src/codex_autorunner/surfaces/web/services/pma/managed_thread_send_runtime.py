@@ -23,14 +23,17 @@ from .....core.automation.models import (
     AutomationChildExecutionEdge,
 )
 from .....core.automation.store import AutomationStore
+from .....core.context_capsule_planner import record_context_capsule_renders
 from .....core.managed_thread_store import (
     ManagedThreadAlreadyHasRunningTurnError,
     ManagedThreadNotActiveError,
     ManagedThreadStore,
 )
 from .....core.orchestration import MessageRequest
+from .....core.orchestration.context_capsule_ledger import SQLiteContextCapsuleLedger
 from .....core.orchestration.runtime_threads import RuntimeThreadExecution
 from .....core.orchestration.service import BusyInterruptFailedError
+from .....core.orchestration.sqlite import open_orchestration_sqlite
 from .....core.orchestration.turn_execution_contract import TurnExecutionRequest
 from .....core.pma.message_options import ManagedThreadMessageOptions
 from .....core.pma.outbound_payloads import (
@@ -397,6 +400,19 @@ async def run_managed_thread_message_send(
             error=detail,
             delivery_payload=options.delivery_payload,
         )
+    if options.capsule_render_plans:
+        try:
+            with open_orchestration_sqlite(hub_root) as conn:
+                record_context_capsule_renders(
+                    SQLiteContextCapsuleLedger(conn),
+                    options.capsule_render_plans,
+                )
+        except Exception:
+            logger.warning(
+                "Failed to record managed-thread context capsule renders",
+                extra={"managed_thread_id": managed_thread_id},
+                exc_info=True,
+            )
 
     notification: Optional[dict[str, Any]] = None
     if options.notify_on == "terminal":

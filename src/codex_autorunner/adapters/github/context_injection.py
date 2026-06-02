@@ -7,7 +7,16 @@ from pathlib import Path
 from typing import Optional
 
 from ...core.config import load_repo_config
+from ...core.context_awareness import PlannedPromptInjection
+from ...core.context_capsule_planner import plan_context_capsules_for_prompt
+from ...core.context_capsules import (
+    ContextCapsule,
+    ContextCapsuleExpiry,
+    ContextCapsuleScope,
+)
 from ...core.logging_utils import log_event
+from ...core.orchestration.context_capsule_ledger import SQLiteContextCapsuleLedger
+from ...core.orchestration.sqlite import open_orchestration_sqlite
 from ...core.surface_context_capsules import (
     append_capsules_to_prompt,
     build_github_context_capsule,
@@ -77,6 +86,14 @@ async def maybe_inject_github_context(
     logger: logging.Logger,
     event_prefix: str,
     allow_cross_repo: bool = False,
+    hub_root: Optional[Path] = None,
+    surface_kind: Optional[str] = None,
+    surface_key: Optional[str] = None,
+    managed_thread_id: Optional[str] = None,
+    backend_thread_id: Optional[str] = None,
+    repo_id: Optional[str] = None,
+    worktree_id: Optional[str] = None,
+    planned_injections: Optional[list[PlannedPromptInjection]] = None,
 ) -> tuple[str, bool]:
     if not prompt_text or not workspace_root:
         return prompt_text, False
@@ -159,6 +176,16 @@ async def maybe_inject_github_context(
                 path=str(result.get("path") or ""),
                 kind=str(result.get("kind") or (parsed[1] if parsed else "")),
             )
+            capsule = ContextCapsule(
+                capsule_id=capsule.capsule_id,
+                version=capsule.version,
+                scope=ContextCapsuleScope.THREAD,
+                visibility=capsule.visibility,
+                source_digest=capsule.source_digest,
+                expiry=ContextCapsuleExpiry.WHEN_SOURCE_CHANGES,
+                reason=capsule.reason,
+                payload=capsule.payload,
+            )
             log_event(
                 logger,
                 logging.INFO,
@@ -167,6 +194,43 @@ async def maybe_inject_github_context(
                 path=result.get("path"),
                 source="user_message",
             )
+            if hub_root and surface_kind and surface_key and managed_thread_id:
+                try:
+                    with open_orchestration_sqlite(hub_root) as conn:
+                        planned = plan_context_capsules_for_prompt(
+                            (capsule,),
+                            ledger=SQLiteContextCapsuleLedger(conn),
+                            surface_kind=surface_kind,
+                            surface_key=surface_key,
+                            managed_thread_id=managed_thread_id,
+                            backend_thread_id=backend_thread_id,
+                            repo_id=repo_id,
+                            worktree_id=worktree_id or str(repo_root),
+                        )
+                    injection = planned.rendered_text.strip()
+                    if not injection:
+                        continue
+                    separator = "\n" if prompt_text.endswith("\n") else "\n\n"
+                    planned_prompt = f"{prompt_text}{separator}{injection}"
+                    if planned_injections is not None:
+                        planned_injections.append(
+                            PlannedPromptInjection(
+                                planned_prompt,
+                                True,
+                                planned.plans,
+                            )
+                        )
+                    return planned_prompt, True
+                except Exception:
+                    logger.warning(
+                        "Failed to plan GitHub context capsule",
+                        extra={
+                            "surface_kind": surface_kind,
+                            "surface_key": surface_key,
+                        },
+                        exc_info=True,
+                    )
+                    return append_capsules_to_prompt(prompt_text, (capsule,))
             return append_capsules_to_prompt(prompt_text, (capsule,))
 
     log_event(

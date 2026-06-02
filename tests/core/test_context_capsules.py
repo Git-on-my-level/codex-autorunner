@@ -12,6 +12,8 @@ from codex_autorunner.core.context_capsules import (
     ContextCapsuleScope,
     ContextCapsuleVisibility,
     capsule_payload_digest,
+    ledger_backend_thread_id_for_scope,
+    ledger_scope_id_for_capsule,
     plan_capsule_render,
 )
 from codex_autorunner.core.injected_context import (
@@ -75,6 +77,55 @@ def test_capsule_identity_uses_canonical_scope_and_boundaries() -> None:
         "1",
     )
     assert first.stable_id() != second.stable_id()
+
+
+def test_capsule_ledger_scope_helpers_keep_thread_scope_backend_independent() -> None:
+    capsule = _capsule()
+
+    assert (
+        ledger_backend_thread_id_for_scope(
+            capsule,
+            backend_thread_id="backend-1",
+        )
+        == ""
+    )
+    assert (
+        ledger_scope_id_for_capsule(
+            capsule,
+            managed_thread_id="managed-1",
+            backend_thread_id="backend-1",
+        )
+        == "managed-1"
+    )
+
+
+def test_capsule_ledger_scope_helpers_keep_backend_session_specific() -> None:
+    capsule = ContextCapsule(
+        capsule_id="pma.base_prompt",
+        version=1,
+        scope=ContextCapsuleScope.BACKEND_SESSION,
+        visibility=ContextCapsuleVisibility.MODEL_ONLY,
+        source_digest="source",
+        expiry=ContextCapsuleExpiry.WHEN_SOURCE_CHANGES,
+        reason="test",
+        payload={"text": "base prompt"},
+    )
+
+    assert (
+        ledger_backend_thread_id_for_scope(
+            capsule,
+            backend_thread_id="backend-1",
+        )
+        == "backend-1"
+    )
+    assert (
+        ledger_scope_id_for_capsule(
+            capsule,
+            managed_thread_id="managed-1",
+            backend_thread_id="backend-1",
+        )
+        == "backend-1"
+    )
 
 
 def test_capsule_payload_digest_is_stable_before_transport_rendering() -> None:
