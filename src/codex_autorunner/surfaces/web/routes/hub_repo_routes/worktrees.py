@@ -10,6 +10,7 @@ from fastapi import HTTPException
 if TYPE_CHECKING:
     from ...app_state import HubAppContext
     from ...schemas import (
+        HubArchiveWorktreeRequest,
         HubCreateWorktreeRequest,
         HubRetireWorktreeRequest,
     )
@@ -174,6 +175,28 @@ class HubWorktreeService:
             request_id=self._get_request_id(),
         )
         return job.to_dict()
+
+    async def archive_worktree(
+        self, payload: HubArchiveWorktreeRequest
+    ) -> dict[str, Any]:
+        from .....core.logging_utils import safe_log
+
+        safe_log(
+            self._context.logger,
+            logging.INFO,
+            "Hub archive worktree id=%s archived=%s"
+            % (payload.worktree_repo_id, payload.archived),
+        )
+        try:
+            result = await asyncio.to_thread(
+                self._context.supervisor.set_worktree_archived,
+                worktree_repo_id=str(payload.worktree_repo_id),
+                archived=bool(payload.archived),
+            )
+        except (RuntimeError, OSError, ValueError, TypeError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        self._enricher.invalidate_runtime_caches()
+        return cast(dict[str, Any], result)
 
     async def delete_worktree(
         self,

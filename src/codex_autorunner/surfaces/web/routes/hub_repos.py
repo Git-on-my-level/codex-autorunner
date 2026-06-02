@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 from ....core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from ..app_state import HubAppContext
 from ..schemas import (
+    HubArchiveWorktreeRequest,
     HubCreateWorktreeRequest,
     HubDeleteWorktreeRequest,
     HubDestinationSetRequest,
@@ -133,6 +134,10 @@ def build_hub_repo_routes(
     @router.post("/hub/jobs/worktrees/retire", response_model=HubJobResponse)
     async def retire_worktree_job(payload: HubRetireWorktreeRequest):
         return await worktree.retire_worktree_job(payload)
+
+    @router.post("/hub/worktrees/archive")
+    async def archive_worktree(payload: HubArchiveWorktreeRequest):
+        return await worktree.archive_worktree(payload)
 
     @router.post("/hub/worktrees/delete")
     async def delete_worktree(payload: HubDeleteWorktreeRequest):

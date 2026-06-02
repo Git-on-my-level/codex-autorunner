@@ -100,6 +100,7 @@ class HubRepoProjectionService:
             str(repo_root),
             bool(snapshot.exists_on_disk),
             bool(snapshot.initialized),
+            bool(getattr(snapshot, "archived", False)),
             snapshot.last_run_id,
             snapshot.last_run_started_at,
             snapshot.last_run_finished_at,

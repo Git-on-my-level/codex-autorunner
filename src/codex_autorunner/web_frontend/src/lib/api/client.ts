@@ -108,6 +108,11 @@ export type WorktreeRetireRequest = {
   retireNote?: string | null;
 };
 
+export type WorktreeArchiveRequest = {
+  worktreeRepoId: string;
+  archived: boolean;
+};
+
 export type RepoStateRetireRequest = {
   kind: 'repo' | 'worktree';
   id: string;
@@ -844,6 +849,14 @@ export class WebApiClient {
           forceAttestation: request.forceAttestation ?? null,
           forceRetire: request.forceRetire ?? false,
           retireNote: request.retireNote ?? null
+        }
+      }),
+    archiveWorktree: async (request: WorktreeArchiveRequest): Promise<ApiResult<JsonRecord>> =>
+      this.requestJson<JsonRecord>('/hub/worktrees/archive', {
+        method: 'POST',
+        body: {
+          worktreeRepoId: request.worktreeRepoId,
+          archived: request.archived
         }
       }),
     retireState: async (request: RepoStateRetireRequest): Promise<ApiResult<JsonRecord>> => {

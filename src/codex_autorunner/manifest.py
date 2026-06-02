@@ -89,6 +89,7 @@ class ManifestRepo:
     display_name: Optional[str] = None
     worktree_setup_commands: Optional[List[str]] = None
     destination: Optional[Dict[str, Any]] = None
+    archived: bool = False
 
     def to_dict(self, hub_root: Path) -> Dict[str, object]:
         rel = _relative_to_hub_root(hub_root, self.path)
@@ -109,6 +110,8 @@ class ManifestRepo:
             payload["worktree_setup_commands"] = [
                 str(cmd) for cmd in self.worktree_setup_commands if str(cmd).strip()
             ]
+        if self.archived:
+            payload["archived"] = True
         destination = preserve_manifest_destination(self.destination)
         if destination is not None:
             payload["destination"] = destination
@@ -326,6 +329,7 @@ def _parse_manifest_repos_with_issues(
                     or None
                 ),
                 destination=destination,
+                archived=bool(entry.get("archived", False)),
             )
         )
 

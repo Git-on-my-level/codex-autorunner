@@ -314,6 +314,8 @@ export function selectRepoSummaries(state: ReadModelEntityState): RepoSummary[] 
         kind: 'base',
         worktree_count: repo.childWorktreeIds.length,
         is_pinned: Boolean(repo.isPinned),
+        archiveState: repo.archiveState,
+        archived: Boolean(repo.archived),
         ...(Array.isArray(repo.worktreeSetupCommands)
           ? { worktree_setup_commands: repo.worktreeSetupCommands }
           : {}),
@@ -338,6 +340,8 @@ export function selectWorktreeSummaries(state: ReadModelEntityState): WorktreeSu
         kind: 'worktree',
         worktree_of: worktree.repoId,
         branch: worktree.branch,
+        archiveState: worktree.archiveState,
+        archived: Boolean(worktree.archived),
         ...runtimeRaw(state.runtime[`worktree:${worktree.worktreeId}`]),
         chat_bound: Boolean(worktree.chatBound),
         chat_bound_thread_count: worktree.chatBindingCount ?? 0,

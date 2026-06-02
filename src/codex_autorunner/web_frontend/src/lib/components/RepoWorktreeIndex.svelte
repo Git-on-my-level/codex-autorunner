@@ -15,6 +15,7 @@
     index,
     sectionIssues = [],
     onRetry = undefined,
+    onArchiveWorktree = undefined,
     onRetireWorktree = undefined,
     onRetireState = undefined,
     onRepoPin = undefined,
@@ -25,6 +26,7 @@
     index: RepoWorktreeIndexViewModel;
     sectionIssues?: PartialPageIssue[];
     onRetry?: (() => void) | undefined;
+    onArchiveWorktree?: ((worktree: { id: string; label: string; archived: boolean }) => void | Promise<void>) | undefined;
     onRetireWorktree?: ((worktree: { id: string; label: string; chatBound: boolean; cleanupBlockedByChatBinding: boolean }) => void | Promise<void>) | undefined;
     onRetireState?: ((target: { kind: 'repo' | 'worktree'; id: string; label: string; hasCarState: boolean; unboundManagedThreadCount: number }) => void | Promise<void>) | undefined;
     onRepoPin?: ((target: { id: string; pinned: boolean }) => void | Promise<void>) | undefined;
@@ -36,7 +38,7 @@
   const currentRunIssues = $derived(sectionIssues.filter((issue) => issue.id === 'current_run'));
   const ticketIssues = $derived(sectionIssues.filter((issue) => issue.id === 'tickets'));
 
-  const REPO_FILTERS: RepoWorktreeIndexFilter[] = ['all', 'waiting', 'active', 'chat_bound'];
+  const REPO_FILTERS: RepoWorktreeIndexFilter[] = ['all', 'waiting', 'active', 'chat_bound', 'archived'];
   let search = $state('');
   let filter = $state<RepoWorktreeIndexFilter>('all');
 
@@ -78,11 +80,13 @@
     if (key === 'all') return countRepoWorktreeIndexEntities(indexRows);
     if (key === 'active') return index.activeCount;
     if (key === 'chat_bound') return index.chatBoundCount;
+    if (key === 'archived') return index.archivedCount;
     return index.waitingCount;
   }
 
   function repoFilterLabel(key: RepoWorktreeIndexFilter): string {
     if (key === 'chat_bound') return 'Chat-bound';
+    if (key === 'archived') return 'Archived';
     return key === 'all' ? 'All' : key.charAt(0).toUpperCase() + key.slice(1);
   }
 
@@ -106,6 +110,15 @@
     event.preventDefault();
     event.stopPropagation();
     void onRetireWorktree?.(worktree);
+  }
+
+  function handleArchiveClick(
+    event: MouseEvent,
+    worktree: { id: string; label: string; archiveState: 'active' | 'archived' }
+  ): void {
+    event.preventDefault();
+    event.stopPropagation();
+    void onArchiveWorktree?.({ id: worktree.id, label: worktree.label, archived: worktree.archiveState === 'archived' });
   }
 
   function handleRetireStateClick(
@@ -217,7 +230,7 @@
           {@const accent = repoAccent(row.label)}
           {@const collapsible = row.kind === 'repo' && row.totalWorktrees > 0}
           {@const collapsed = collapsible && isRepoCollapsed(row.id)}
-          <div class={`repo-item status-${row.status}`} class:has-children={row.childWorktrees.length > 0} class:is-collapsed={collapsed} role="listitem" style={`--repo-accent: ${accent};`}>
+          <div class={`repo-item status-${row.status}`} class:has-children={row.childWorktrees.length > 0} class:is-collapsed={collapsed} class:is-archived={row.archiveState === 'archived'} role="listitem" style={`--repo-accent: ${accent};`}>
             <div
               class="repo-head row-click-target"
               role="link"
@@ -276,6 +289,9 @@
                       <span class="chat-binding-pill" title={chatBindingLabel(row)}>
                         Chat-bound
                       </span>
+                    {/if}
+                    {#if row.archiveState === 'archived'}
+                      <span class="archive-pill">Archived</span>
                     {/if}
                   </div>
                   <div class="repo-card-meta">
@@ -347,6 +363,7 @@
               {/if}
               {#if
                 (row.kind === 'repo' && onOpenRepoSettings) ||
+                (row.kind === 'worktree' && onArchiveWorktree) ||
                 (onRetireState && canRetireState(row)) ||
                 (row.kind === 'worktree' && onRetireWorktree)}
                 <span class="repo-head-icon-actions">
@@ -367,6 +384,17 @@
                       }}
                     >
                       {@render settingsIcon()}
+                    </button>
+                  {/if}
+                  {#if row.kind === 'worktree' && onArchiveWorktree}
+                    <button
+                      class="ghost-button archive-action"
+                      type="button"
+                      title={row.archiveState === 'archived' ? 'Unarchive worktree' : 'Archive worktree without deleting checkout'}
+                      aria-label={row.archiveState === 'archived' ? `Unarchive worktree ${row.label}` : `Archive worktree ${row.label}`}
+                      onclick={(event) => handleArchiveClick(event, row)}
+                    >
+                      {row.archiveState === 'archived' ? 'Unarchive' : 'Archive'}
                     </button>
                   {/if}
                   {#if onRetireState && canRetireState(row)}
@@ -432,7 +460,7 @@
                   scrollable={false}
                 >
                   {#snippet children(worktree)}
-                    <div class={`worktree-item status-${worktree.status}`} role="listitem">
+                    <div class={`worktree-item status-${worktree.status}`} class:is-archived={worktree.archiveState === 'archived'} role="listitem">
                     <div
                       class="worktree-card row-click-target"
                       role="link"
@@ -455,6 +483,9 @@
                             <span class="chat-binding-pill" title={chatBindingLabel(worktree)}>
                               Chat-bound
                             </span>
+                          {/if}
+                          {#if worktree.archiveState === 'archived'}
+                            <span class="archive-pill">Archived</span>
                           {/if}
                         </div>
                         {#if (worktree.branch && worktree.branch !== worktree.label) || worktree.currentRunTitle || worktree.chatBound}
@@ -503,8 +534,19 @@
                           data-sveltekit-preload-data="tap"
                           onclick={(event) => event.stopPropagation()}
                         >+ Chat</a>
-                        {#if (onRetireState && canRetireState(worktree)) || onRetireWorktree}
+                        {#if onArchiveWorktree || (onRetireState && canRetireState(worktree)) || onRetireWorktree}
                           <span class="worktree-row-icon-actions">
+                            {#if onArchiveWorktree}
+                              <button
+                                class="ghost-button archive-action"
+                                type="button"
+                                title={worktree.archiveState === 'archived' ? 'Unarchive worktree' : 'Archive worktree without deleting checkout'}
+                                aria-label={worktree.archiveState === 'archived' ? `Unarchive worktree ${worktree.label}` : `Archive worktree ${worktree.label}`}
+                                onclick={(event) => handleArchiveClick(event, worktree)}
+                              >
+                                {worktree.archiveState === 'archived' ? 'Unarchive' : 'Archive'}
+                              </button>
+                            {/if}
                             {#if onRetireState && canRetireState(worktree)}
                               <button
                                 class="icon-action retire-state"

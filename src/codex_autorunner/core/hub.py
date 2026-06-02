@@ -681,6 +681,17 @@ class HubSupervisor:
             archive_profile=archive_profile,
         )
 
+    def set_worktree_archived(
+        self,
+        *,
+        worktree_repo_id: str,
+        archived: bool,
+    ) -> Dict[str, object]:
+        return self._worktree_manager.set_worktree_archived(
+            worktree_repo_id=worktree_repo_id,
+            archived=archived,
+        )
+
     def cleanup_repo_threads(self, *, repo_id: str) -> Dict[str, object]:
         return self._repo_manager.cleanup_repo_threads(repo_id=repo_id)
 

@@ -572,6 +572,7 @@ class RepoWorktreeReadModelService:
                 label=str(item.get("name") or item.get("id")),
                 path=str(item.get("path") or ""),
                 archived=bool(item.get("archived")),
+                archive_state="archived" if bool(item.get("archived")) else "active",
                 is_pinned=bool(item.get("is_pinned")),
                 destination_id=(
                     item.get("destination_id")
@@ -596,6 +597,7 @@ class RepoWorktreeReadModelService:
                 path=str(item.get("path") or ""),
                 branch=str(item.get("branch")) if item.get("branch") else None,
                 archived=bool(item.get("archived")),
+                archive_state="archived" if bool(item.get("archived")) else "active",
                 destination_id=(
                     item.get("destination_id")
                     if isinstance(item.get("destination_id"), str)

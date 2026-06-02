@@ -35,7 +35,8 @@ import {
 } from './ticketFlowStatus';
 
 export type RepoWorktreeKind = 'repo' | 'worktree';
-export type RepoWorktreeIndexFilter = 'all' | 'active' | 'waiting' | 'chat_bound';
+export type RepoWorktreeArchiveState = 'active' | 'archived';
+export type RepoWorktreeIndexFilter = 'all' | 'active' | 'waiting' | 'chat_bound' | 'archived';
 
 export type RepoWorktreeIndexRow = {
   id: string;
@@ -43,6 +44,7 @@ export type RepoWorktreeIndexRow = {
   label: string;
   detail: string | null;
   status: WorkStatus;
+  archiveState: RepoWorktreeArchiveState;
   branch: string | null;
   path: string | null;
   activeRuns: number;
@@ -87,6 +89,7 @@ export type RepoWorktreeChildRow = {
   id: string;
   label: string;
   status: WorkStatus;
+  archiveState: RepoWorktreeArchiveState;
   branch: string | null;
   path: string | null;
   activeRuns: number;
@@ -219,6 +222,7 @@ export type RepoWorktreeIndexViewModel = {
   activeCount: number;
   waitingCount: number;
   chatBoundCount: number;
+  archivedCount: number;
   openTicketCount: number;
   /**
    * When false, ticket quantity chips and progress are hidden (hub ticket list did not load).
@@ -376,6 +380,7 @@ export function buildRepoWorktreeIndexViewModel(
     activeCount: countRepoWorktreeIndexEntities(rows, 'active'),
     waitingCount: countRepoWorktreeIndexEntities(rows, 'waiting'),
     chatBoundCount: countRepoWorktreeIndexEntities(rows, 'chat_bound'),
+    archivedCount: countRepoWorktreeIndexEntities(rows, 'archived'),
     ticketIndexMetricsAvailable,
     openTicketCount: ticketIndexMetricsAvailable
       ? rows.reduce(
@@ -728,6 +733,7 @@ function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source:
       ? `${childWorktrees.length} worktree${childWorktrees.length === 1 ? '' : 's'}`
       : null,
     status: repo.status,
+    archiveState: repo.archiveState ?? 'active',
     branch: repo.defaultBranch,
     path: repo.path,
     activeRuns: repo.activeRuns,
@@ -788,6 +794,7 @@ function worktreeToNavChildRow(
     id: worktree.id,
     label: shortenWorktreeLabel(worktree.name, repoName),
     status: worktree.status,
+    archiveState: worktree.archiveState ?? 'active',
     branch: worktree.branch,
     path: worktree.path,
     activeRuns: worktree.activeRuns,
@@ -833,6 +840,7 @@ function worktreeToIndexRow(worktree: WorktreeSummary, source: RepoWorktreeSourc
     label: worktree.name,
     detail: null,
     status: worktree.status,
+    archiveState: worktree.archiveState ?? 'active',
     branch: worktree.branch,
     path: worktree.path,
     activeRuns: worktree.activeRuns,
@@ -1431,6 +1439,8 @@ function childMatchesNeedle(child: RepoWorktreeChildRow, needle: string): boolea
 }
 
 function rowMatchesFilter(row: RepoWorktreeIndexRow, filter: RepoWorktreeIndexFilter): boolean {
+  if (filter === 'archived') return row.archiveState === 'archived';
+  if (row.archiveState === 'archived') return false;
   if (filter === 'active') return row.activeRuns > 0 || row.status === 'running' || row.signalActive > 0;
   if (filter === 'waiting') return row.status === 'waiting' || row.status === 'blocked' || row.signalWaiting > 0;
   if (filter === 'chat_bound') return row.chatBound;
@@ -1438,6 +1448,8 @@ function rowMatchesFilter(row: RepoWorktreeIndexRow, filter: RepoWorktreeIndexFi
 }
 
 function childMatchesFilter(child: RepoWorktreeChildRow, filter: RepoWorktreeIndexFilter): boolean {
+  if (filter === 'archived') return child.archiveState === 'archived';
+  if (child.archiveState === 'archived') return false;
   if (filter === 'active') return child.activeRuns > 0 || child.status === 'running' || child.signalActive > 0;
   if (filter === 'waiting') return child.status === 'waiting' || child.status === 'blocked' || child.signalWaiting > 0;
   if (filter === 'chat_bound') return child.chatBound;

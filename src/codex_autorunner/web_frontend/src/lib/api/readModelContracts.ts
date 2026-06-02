@@ -387,6 +387,7 @@ export type RepoTopology = {
   label: string;
   path: string;
   archived: boolean;
+  archiveState?: 'active' | 'archived';
   isPinned?: boolean;
   destinationId?: string | null;
   childWorktreeIds: string[];
@@ -404,6 +405,7 @@ export type WorktreeTopology = {
   path: string;
   branch?: string | null;
   archived: boolean;
+  archiveState?: 'active' | 'archived';
   destinationId?: string | null;
   chatBound?: boolean;
   chatBindingCount?: number;

@@ -191,6 +191,31 @@ describe('repo/worktree view models', () => {
     expect(filterRepoWorktreeIndexRows(vm.rows, '', 'chat_bound')[0].childWorktrees[0].id).toBe('worktree-1');
   });
 
+  it('hides archived worktrees from normal index filters and exposes them through archived', () => {
+    const vm = buildRepoWorktreeIndexViewModel({
+      repos: [mockRepoSummary],
+      worktrees: [
+        {
+          ...mockWorktreeSummary,
+          archiveState: 'archived',
+          raw: { archived: true }
+        }
+      ],
+      runs: [],
+      chats: [],
+      tickets: [],
+      artifacts: []
+    });
+
+    expect(vm.archivedCount).toBe(1);
+    expect(filterRepoWorktreeIndexRows(vm.rows, '', 'all').map((row) => row.id)).toEqual(['repo-1']);
+    expect(visibleRepoWorktreeChildren(vm.rows[0], '', 'all')).toEqual([]);
+    expect(filterRepoWorktreeIndexRows(vm.rows, '', 'archived')[0].childWorktrees[0]).toMatchObject({
+      id: 'worktree-1',
+      archiveState: 'archived'
+    });
+  });
+
   it('keeps known child worktrees under their owning repo and only promotes orphan worktrees', () => {
     const vm = buildRepoWorktreeIndexViewModel({
       repos: [mockRepoSummary],
