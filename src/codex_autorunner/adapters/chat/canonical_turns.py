@@ -18,11 +18,11 @@ def _surface_source_id(surface_kind: str, surface_key: str) -> str:
 
 
 def _resolved_model_payload(
-    agent: str, model: Optional[str]
+    agent: str, model: Optional[str], configured_default_model: Optional[str]
 ) -> tuple[Optional[str], dict[str, str]]:
-    resolved_model = model
-    if agent == "opencode" and not resolved_model:
-        resolved_model = DEFAULT_CHAT_AGENT_MODELS.get(agent)
+    resolved_model = (
+        model or configured_default_model or DEFAULT_CHAT_AGENT_MODELS.get(agent)
+    )
     payload = (
         resolve_opencode_model_payload(resolved_model) if agent == "opencode" else None
     )
@@ -41,13 +41,16 @@ def build_surface_turn_execution_request(
     sandbox_policy: Any,
     profile: Optional[str] = None,
     client_request_id: Optional[str] = None,
+    configured_default_model: Optional[str] = None,
     origin_metadata: Optional[Mapping[str, Any]] = None,
     delivery_surface_key: Optional[str] = None,
     delivery_metadata: Optional[Mapping[str, Any]] = None,
 ) -> TurnExecutionRequest:
     """Build the durable turn contract at chat-surface ingress."""
 
-    model, model_payload = _resolved_model_payload(agent, request.model)
+    model, model_payload = _resolved_model_payload(
+        agent, request.model, configured_default_model
+    )
     delivery_key = delivery_surface_key or surface_key
     return TurnExecutionRequest(
         request_id=request_id,

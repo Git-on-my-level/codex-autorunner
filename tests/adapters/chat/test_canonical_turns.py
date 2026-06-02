@@ -95,6 +95,77 @@ def test_surface_turn_builder_validates_opencode_provider_model_payload() -> Non
     }
 
 
+def test_surface_turn_builder_records_codex_default_model_when_implicit() -> None:
+    request = replace(_message_request(), model=None)
+
+    turn_request = build_surface_turn_execution_request(
+        request,
+        request_id="codex-request",
+        workspace_root="/repo",
+        surface_kind="discord",
+        surface_key="channel-1",
+        agent="codex",
+        approval_policy="never",
+        sandbox_policy="dangerFullAccess",
+    )
+
+    assert turn_request.model == "gpt-5.5"
+
+
+def test_surface_turn_builder_prefers_configured_default_model() -> None:
+    request = replace(_message_request(), model=None)
+
+    turn_request = build_surface_turn_execution_request(
+        request,
+        request_id="codex-request",
+        workspace_root="/repo",
+        surface_kind="discord",
+        surface_key="channel-1",
+        agent="codex",
+        approval_policy="never",
+        sandbox_policy="dangerFullAccess",
+        configured_default_model="gpt-configured",
+    )
+
+    assert turn_request.model == "gpt-configured"
+
+
+def test_surface_turn_builder_prefers_explicit_model_over_configured_default() -> None:
+    request = replace(_message_request(), model="gpt-explicit")
+
+    turn_request = build_surface_turn_execution_request(
+        request,
+        request_id="codex-request",
+        workspace_root="/repo",
+        surface_kind="discord",
+        surface_key="channel-1",
+        agent="codex",
+        approval_policy="never",
+        sandbox_policy="dangerFullAccess",
+        configured_default_model="gpt-configured",
+    )
+
+    assert turn_request.model == "gpt-explicit"
+
+
+def test_surface_turn_builder_leaves_unknown_agent_model_unset() -> None:
+    request = replace(_message_request(), model=None)
+
+    turn_request = build_surface_turn_execution_request(
+        request,
+        request_id="custom-agent-request",
+        workspace_root="/repo",
+        surface_kind="discord",
+        surface_key="channel-1",
+        agent="custom-agent",
+        approval_policy="never",
+        sandbox_policy="dangerFullAccess",
+    )
+
+    assert turn_request.model is None
+    assert turn_request.model_payload == {}
+
+
 @pytest.mark.parametrize("command_id", ["car.new", "car.files.inbox"])
 def test_stable_and_partial_command_metadata_can_build_valid_surface_turns(
     command_id: str,

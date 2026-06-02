@@ -763,6 +763,42 @@ async def test_prepare_rejects_foreign_model_for_non_model_listing_agent(
     assert service.get_running_execution(thread.thread_target_id) is None
 
 
+async def test_prepare_allows_builtin_default_for_non_listing_codex_agent(
+    tmp_path: Path,
+) -> None:
+    # Some tests and plugin descriptors can omit `model_listing` while still
+    # representing the built-in Codex agent. Persisting Codex's own default is
+    # not a foreign picker override and should not block dispatch.
+    harness = _HarnessWithWait()
+    service = _build_service(
+        tmp_path,
+        harness,
+        capabilities=frozenset(["durable_threads", "message_turns", "review"]),
+    )
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="hello codex",
+            model="gpt-5.5",
+        ),
+    )
+    outcome = await await_runtime_thread_outcome(
+        started,
+        interrupt_event=asyncio.Event(),
+        timeout_seconds=5,
+        execution_error_message="Managed thread execution failed",
+    )
+
+    assert outcome.status == "ok"
+    assert harness.start_turn_calls[0]["model"] == "gpt-5.5"
+
+
 async def test_prepare_allows_model_for_model_listing_agent(
     tmp_path: Path,
 ) -> None:

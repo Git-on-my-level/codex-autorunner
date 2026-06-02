@@ -1782,6 +1782,7 @@ async def _run_telegram_managed_thread_turn(
         sandbox_policy=sandbox_policy or "dangerFullAccess",
         profile=agent_profile,
         client_request_id=client_request_id,
+        configured_default_model=record.model,
         origin_metadata={
             "chat_id": message.chat_id,
             "thread_id": message.thread_id,
@@ -2925,6 +2926,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                     sandbox_policy=sandbox_policy or "dangerFullAccess",
                     profile=profile,
                     client_request_id=canonical_client_request_id,
+                    configured_default_model=record.model,
                     origin_metadata={
                         "chat_id": message.chat_id,
                         "thread_id": message.thread_id,

@@ -47,12 +47,14 @@ from ...adapters.chat.models import ChatMessageEvent
 from ...adapters.chat.runtime_thread_errors import (
     sanitize_runtime_thread_error,
 )
+from ...core.agent_model_defaults import resolve_model_for_agent
 from ...core.apps.install import installed_apps_root
 from ...core.artifact_delivery import ArtifactDeliveryService
 from ...core.artifact_instructions import (
     ArtifactDeliveryContext,
     render_agent_artifact_instructions,
 )
+from ...core.config import ConfigError, load_hub_config
 from ...core.context_awareness import (
     maybe_inject_car_awareness,
     maybe_inject_filebox_hint,
@@ -87,6 +89,8 @@ from ...core.pma_notification_store import (
     build_notification_context_block,
     notification_surface_key,
 )
+from ...core.state import load_state
+from ...core.state_roots import resolve_repo_runner_state_db_path
 from ...core.utils import canonicalize_path
 from ..chat.agents import DEFAULT_CHAT_AGENT_MODELS
 from ..chat.bound_chat_execution_metadata import merge_bound_chat_execution_metadata
@@ -484,6 +488,29 @@ def _extract_binding_resource_fields(
             if isinstance(resource_id, str) and resource_id.strip()
             else None
         ),
+    )
+
+
+def _resolve_configured_surface_turn_default_model(
+    service: Any,
+    *,
+    agent: str,
+) -> Optional[str]:
+    hub_root = Path(getattr(service._config, "root", Path.cwd()))
+    try:
+        hub_config = load_hub_config(hub_root)
+    except (ConfigError, OSError, RuntimeError, TypeError, ValueError):
+        hub_config = None
+    try:
+        state_path = resolve_repo_runner_state_db_path(hub_root)
+        state = load_state(state_path) if state_path.exists() else None
+    except (OSError, RuntimeError, TypeError, ValueError):
+        state = None
+    return resolve_model_for_agent(
+        agent,
+        state=state,
+        config=hub_config,
+        include_builtin=False,
     )
 
 
@@ -2766,6 +2793,9 @@ async def _run_discord_orchestrated_turn_for_message(
         sandbox_policy=sandbox_policy,
         profile=getattr(thread, "agent_profile", None),
         client_request_id=client_request_id,
+        configured_default_model=_resolve_configured_surface_turn_default_model(
+            service, agent=agent
+        ),
         origin_metadata={
             "channel_id": channel_id,
             "session_key": session_key,
