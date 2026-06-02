@@ -1263,6 +1263,8 @@ print(
             if not entry.worktree_of:
                 if not is_legacy_linked_worktree:
                     continue
+            if entry.archived:
+                continue
             try:
                 if self._has_active_chat_binding(entry.id):
                     continue
