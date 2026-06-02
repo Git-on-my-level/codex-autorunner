@@ -17,7 +17,7 @@ describe('/chats page', () => {
 
   function chatDetailPageSource(): string {
     return readFileSync(
-      fileURLToPath(new URL('./+page.svelte', import.meta.url)),
+      fileURLToPath(new URL('../../lib/routes/ChatsPage.svelte', import.meta.url)),
       'utf8'
     );
   }
@@ -103,16 +103,17 @@ describe('/chats page', () => {
     expect(pageSource).not.toContain('read-active:');
   });
 
-  it('projects committed chat URLs without SvelteKit navigation', () => {
+  it('navigates committed chat URLs through SvelteKit route state', () => {
     const source = chatDetailPageSource();
     const syncCommittedBody = source.match(
       /async function syncCommittedDetailUrl[\s\S]*?\n  async function refreshActive/
     )?.[0];
 
     expect(syncCommittedBody).toContain('await replaceDetailUrl(detailId);');
-    expect(source).toContain('replaceChatDetailProjection(detailId');
-    expect(source).toContain('pushChatDetailProjection(detailId');
-    expect(syncCommittedBody).not.toContain('goto(');
+    expect(source).toContain('chatDetailProjectionTarget(detailId');
+    expect(source).toContain('chatDetailProjectionTarget(detailId, { url: currentBrowserUrl() });');
+    expect(syncCommittedBody).toContain('await goto(target');
+    expect(syncCommittedBody).not.toContain('pushChatDetailProjection');
     expect(syncCommittedBody).not.toContain('pendingCommittedDetailUrlChatId');
   });
 
@@ -130,17 +131,28 @@ describe('/chats page', () => {
     expect(filterSyncBody).not.toContain('goto(');
   });
 
-  it('pushes the selected chat URL and lets the updated route activate the detail controller', () => {
+  it('pushes the selected chat URL through SvelteKit and lets the route activate the detail controller', () => {
     const source = chatDetailPageSource();
     const selectChatBody = source.match(
       /async function selectChat[\s\S]*?\n  function chatIdFromRowEvent/
     )?.[0];
 
     expect(selectChatBody).toBeTruthy();
-    expect(selectChatBody).toMatch(
-      /await syncCommittedDetailUrl\(chatId, \{ mode: 'push' \}\);[\s\S]*?pageController\.setRoute\(currentRouteSnapshot\(\)\);/
-    );
+    expect(selectChatBody).toContain("await syncCommittedDetailUrl(chatId, { mode: 'push' });");
     expect(selectChatBody).not.toContain('pageController.selectChat');
+    expect(selectChatBody).not.toContain('pageController.setRoute(currentRouteSnapshot())');
+  });
+
+  it('keeps route snapshots consolidated and preserves forced-stream refresh options', () => {
+    const source = chatDetailPageSource();
+    const refreshActiveBody = source.match(
+      /async function refreshActive[\s\S]*?\n  async function refreshArtifactDeliveries/
+    )?.[0];
+
+    expect(source).not.toContain('function initialRouteSnapshot');
+    expect(source).toContain('route: currentRouteSnapshot()');
+    expect(refreshActiveBody).toContain('ChatDetailLiveProjectionRefreshOptions');
+    expect(refreshActiveBody).toContain('pageController.refreshActive(chatId, options)');
   });
 
   it('keeps migrated PMA transcript, stream, queue, send, and normalization calls out of the page', () => {

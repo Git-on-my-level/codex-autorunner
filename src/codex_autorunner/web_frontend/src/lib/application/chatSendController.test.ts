@@ -106,6 +106,7 @@ describe('chat send controller', () => {
         client_turn_id: 'optimistic:user:1778932800000:turn'
       })
     );
+    expect(harness.refreshActive).toHaveBeenCalledWith(draftChat.id, { quiet: true, forceStream: true });
     expect(harness.state.session.activeChatId).toBe(draftChat.id);
     expect(harness.transcriptIds(draftChat.id)).toEqual(['optimistic:user:1778932800000:turn']);
   });
@@ -192,7 +193,7 @@ function createHarness(options: {
     }
   } as unknown as MockedApi;
   api.pma.uploadInboxFile.mockResolvedValue(ok(['uploaded.md']));
-  const refreshActive = vi.fn(async (_chatId: string, _options: { quiet?: boolean }) => {});
+  const refreshActive = vi.fn(async (_chatId: string, _options: { quiet?: boolean; forceStream?: boolean }) => {});
   const confirm = vi.fn(async () => true);
   const controller = createChatSendController({
     api: api as ChatSendControllerApi,

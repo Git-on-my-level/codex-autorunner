@@ -39,6 +39,11 @@ export type ChatDetailLiveProjectionOptions = {
   repairDelayMs?: number;
 };
 
+export type ChatDetailLiveProjectionRefreshOptions = {
+  quiet?: boolean;
+  forceStream?: boolean;
+};
+
 export type ChatDetailLiveProjectionDeps = {
   api: ChatDetailLiveProjectionApi;
   readModelStore: ReadModelEntityStore;
@@ -111,7 +116,7 @@ export class ChatDetailLiveProjection {
     this.setState(next);
   }
 
-  async activate(chatId: string | null, options: { quiet?: boolean } = {}): Promise<void> {
+  async activate(chatId: string | null, options: ChatDetailLiveProjectionRefreshOptions = {}): Promise<void> {
     if (!chatId) {
       this.close();
       this.setState({ loadingActive: false });
@@ -128,7 +133,7 @@ export class ChatDetailLiveProjection {
     await this.refreshActive(chatId, options);
   }
 
-  async refresh(chatId: string, options: { quiet?: boolean } = {}): Promise<void> {
+  async refresh(chatId: string, options: ChatDetailLiveProjectionRefreshOptions = {}): Promise<void> {
     if (this.activeChatId !== chatId) {
       await this.activate(chatId, options);
       return;
@@ -136,7 +141,7 @@ export class ChatDetailLiveProjection {
     await this.refreshActive(chatId, options);
   }
 
-  private async refreshActive(chatId: string, options: { quiet?: boolean } = {}): Promise<void> {
+  private async refreshActive(chatId: string, options: ChatDetailLiveProjectionRefreshOptions = {}): Promise<void> {
     const refreshSeq = ++this.activeRefreshSeq;
     if (!options.quiet) this.setState({ loadingActive: true, activeError: null });
 
@@ -170,7 +175,7 @@ export class ChatDetailLiveProjection {
       this.closeStream();
       return;
     }
-    this.ensureStreamAfterSnapshot(chatId);
+    this.ensureStreamAfterSnapshot(chatId, { force: options.forceStream });
     if (!options.quiet || this.state.loadingActive) this.setState({ loadingActive: false });
   }
 
@@ -185,7 +190,7 @@ export class ChatDetailLiveProjection {
     }
   }
 
-  connect(chatId: string): void {
+  connect(chatId: string, options: { force?: boolean } = {}): void {
     if (this.activeChatId !== chatId) {
       this.activeRefreshSeq += 1;
       this.activeQueueRefreshSeq += 1;
@@ -197,7 +202,7 @@ export class ChatDetailLiveProjection {
     }
     const seedProgress = this.currentProgress(chatId);
     const seedChat = this.getChatSummary(chatId);
-    if (!this.shouldUseStream(seedChat, seedProgress, this.currentQueueDepth(chatId))) {
+    if (!options.force && !this.shouldUseStream(seedChat, seedProgress, this.currentQueueDepth(chatId))) {
       this.setState({ streamState: 'idle', streamError: null });
       return;
     }
@@ -283,11 +288,13 @@ export class ChatDetailLiveProjection {
     this.scheduleRefresh(chatId, this.repairDelayMs, 'repair');
   }
 
-  private ensureStreamAfterSnapshot(chatId: string): void {
+  private ensureStreamAfterSnapshot(chatId: string, options: { force?: boolean } = {}): void {
     if (this.activeChatId !== chatId || this.subscription) return;
     const seedProgress = this.currentProgress(chatId);
     const seedChat = this.getChatSummary(chatId);
-    if (this.shouldUseStream(seedChat, seedProgress, this.currentQueueDepth(chatId))) this.connect(chatId);
+    if (options.force || this.shouldUseStream(seedChat, seedProgress, this.currentQueueDepth(chatId))) {
+      this.connect(chatId, { force: options.force });
+    }
   }
 
   private scheduleRefresh(chatId: string, delayMs: number, reason: 'terminal' | 'repair'): void {

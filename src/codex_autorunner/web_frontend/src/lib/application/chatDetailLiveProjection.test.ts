@@ -32,6 +32,20 @@ describe('ChatDetailLiveProjection', () => {
     expect(projection.snapshot().loadingActive).toBe(false);
   });
 
+  it('can force-open the transcript stream after an accepted first send before status projection catches up', async () => {
+    const store = new ReadModelEntityStore();
+    const stream = streamFixture();
+    const projection = projectionFixture(store, apiFixture(), {
+      openStream: stream.open,
+      shouldUseStream: () => false
+    });
+
+    await projection.refresh('chat-1', { quiet: true, forceStream: true });
+
+    expect(stream.openedChatIds).toEqual(['chat-1']);
+    expect(projection.snapshot().streamState).toBe('connecting');
+  });
+
   it('applies transcript append and patch events to normalized read-model state', () => {
     const store = new ReadModelEntityStore();
     const stream = streamFixture();
