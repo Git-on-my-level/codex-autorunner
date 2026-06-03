@@ -3321,6 +3321,67 @@ def test_sync_main_rejects_dirty_tree(tmp_path: Path) -> None:
         supervisor.sync_main("demo")
 
 
+def test_sync_worktree_uses_worktree_cleanliness_not_dirty_parent(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _write_default_hub_config(hub_root)
+    supervisor = _make_supervisor(hub_root)
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    run_git(["branch", "-M", "main"], base.path, check=True)
+
+    origin = tmp_path / "origin.git"
+    origin.mkdir(parents=True, exist_ok=True)
+    run_git(["init", "--bare"], origin, check=True)
+    run_git(["remote", "add", "origin", str(origin)], base.path, check=True)
+    run_git(["push", "-u", "origin", "main"], base.path, check=True)
+    run_git(["symbolic-ref", "HEAD", "refs/heads/main"], origin, check=True)
+
+    worktree = supervisor.create_worktree(base_repo_id="base", branch="feature/test")
+    run_git(
+        ["branch", "--set-upstream-to", "origin/main", "feature/test"],
+        worktree.path,
+        check=True,
+    )
+    original_worktree_sha = _git_stdout(worktree.path, "rev-parse", "HEAD")
+
+    clone = tmp_path / "clone"
+    run_git(["clone", str(origin), str(clone)], tmp_path, check=True)
+    updated_origin_sha = _commit_file(clone, "origin.txt", "origin\n", "origin update")
+    run_git(["push", "origin", "main"], clone, check=True)
+    assert updated_origin_sha != original_worktree_sha
+
+    (base.path / "dirty-parent.txt").write_text("dirty\n", encoding="utf-8")
+    assert (
+        run_git(["status", "--porcelain"], base.path, check=True).stdout or ""
+    ).strip()
+    assert not (
+        run_git(["status", "--porcelain"], worktree.path, check=True).stdout or ""
+    ).strip()
+
+    synced = supervisor.sync_worktree(worktree.id)
+
+    assert synced.id == worktree.id
+    assert _git_stdout(worktree.path, "rev-parse", "HEAD") == updated_origin_sha
+    assert (base.path / "dirty-parent.txt").exists()
+
+
+def test_sync_worktree_rejects_dirty_worktree(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    _write_default_hub_config(hub_root)
+    supervisor = _make_supervisor(hub_root)
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base", branch="feature/test", start_point="HEAD"
+    )
+    (worktree.path / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Worktree has uncommitted changes"):
+        supervisor.sync_worktree(worktree.id)
+
+
 def test_set_worktree_setup_commands_rejects_unknown_repo(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     _write_default_hub_config(hub_root)
@@ -3353,7 +3414,9 @@ def test_set_worktree_setup_commands_rejects_non_base_repo(tmp_path: Path) -> No
         check=True,
     )
     run_git(["push", "-u", "origin", "master"], base.path, check=False)
-    wt = supervisor.create_worktree(base_repo_id="base", branch="feature/test")
+    wt = supervisor.create_worktree(
+        base_repo_id="base", branch="feature/test", start_point="HEAD"
+    )
     with pytest.raises(ValueError, match="base repos"):
         supervisor.set_worktree_setup_commands(wt.id, ["echo hi"])
 

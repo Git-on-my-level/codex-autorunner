@@ -45,12 +45,57 @@
     return detail.title;
   });
 
-  const detailSubtitle = $derived.by(() => {
-    const parts: string[] = [];
-    if (detail.branch) parts.push(detail.branch);
-    if (detail.path) parts.push(detail.path);
-    return parts.join(' · ');
+  /**
+   * Middle-truncation split for the worktree title. The leading category
+   * (`automation-…`) and the trailing hash (`…-1f96854c-c39`) are the
+   * disambiguators, so we pin a short tail and let the middle ellipsize.
+   * Snaps the cut to a `-` boundary near the end to avoid slicing mid-token.
+   */
+  const titleSplit = $derived.by(() => {
+    const full = shortDetailTitle;
+    if (detail.kind !== 'worktree' || full.length <= 28) {
+      return { head: full, tail: '' };
+    }
+    const minTail = 8;
+    const maxTail = 18;
+    let cut = -1;
+    for (let i = full.length - minTail; i >= full.length - maxTail && i > 0; i--) {
+      if (full[i] === '-') {
+        cut = i;
+        break;
+      }
+    }
+    if (cut === -1) cut = full.length - maxTail;
+    return { head: full.slice(0, cut), tail: full.slice(cut) };
   });
+
+  /**
+   * Branch chip split on `/` so the namespace prefix and the trailing segment
+   * stay visible (`automation/…/1f96854c-c39`) while the long middle ellipsizes.
+   */
+  const branchSplit = $derived.by(() => {
+    const branch = detail.branch ?? '';
+    const lastSlash = branch.lastIndexOf('/');
+    if (lastSlash <= 0) return { head: branch, tail: '' };
+    return { head: branch.slice(0, lastSlash), tail: branch.slice(lastSlash) };
+  });
+
+  let pathCopied = $state(false);
+  let pathCopyTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function handleCopyPath(): Promise<void> {
+    if (!detail.path) return;
+    try {
+      await navigator.clipboard.writeText(detail.path);
+      pathCopied = true;
+      clearTimeout(pathCopyTimer);
+      pathCopyTimer = setTimeout(() => {
+        pathCopied = false;
+      }, 1600);
+    } catch {
+      /* clipboard unavailable — no-op */
+    }
+  }
 
   const contextspaceHasContent = $derived(detail.contextspace.some((doc) => doc.status === 'present'));
 
@@ -116,7 +161,39 @@
         </div>
       </section>
     {:else}
-    <PageHero title={shortDetailTitle} subtitle={detailSubtitle}>
+    <PageHero
+      title={titleSplit.head}
+      titleTail={titleSplit.tail || null}
+      titleFull={shortDetailTitle}
+    >
+      {#snippet meta()}
+        {#if detail.branch}
+          <span class="detail-branch" title={detail.branch}>
+            <span class="branch-glyph" aria-hidden="true">⎇</span>
+            {#if branchSplit.tail}
+              <span class="detail-branch-head">{branchSplit.head}</span><span class="detail-branch-tail">{branchSplit.tail}</span>
+            {:else}
+              <span class="detail-branch-head">{branchSplit.head}</span>
+            {/if}
+          </span>
+        {/if}
+        {#if detail.path}
+          <button
+            type="button"
+            class="detail-copy-path"
+            class:is-copied={pathCopied}
+            onclick={handleCopyPath}
+            title={detail.path}
+            aria-label={`Copy path: ${detail.path}`}
+          >
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="9" y="9" width="11" height="11" rx="2" />
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+            </svg>
+            <span>{pathCopied ? 'Copied' : 'Copy path'}</span>
+          </button>
+        {/if}
+      {/snippet}
       {#snippet actions()}
         <a class="ghost-button is-primary" href={href(detail.chatHref)} data-sveltekit-preload-data="tap">+ New chat</a>
         <a class="ghost-button" href={href(detail.newTicketHref)} data-sveltekit-preload-data="tap">+ New ticket</a>
@@ -428,7 +505,9 @@
                 disabled={syncRepoBusy || git.dirty}
                 title={git.dirty
                   ? 'Commit or stash changes before syncing'
-                  : 'Fetch and fast-forward the default branch from origin'}
+                  : detail.kind === 'repo'
+                    ? 'Fetch and fast-forward the default branch from origin'
+                    : 'Fetch and fast-forward this worktree branch from its upstream'}
                 aria-busy={syncRepoBusy ? 'true' : undefined}
                 onclick={(event) => {
                   event.preventDefault();

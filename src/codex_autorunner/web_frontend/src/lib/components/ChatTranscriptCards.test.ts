@@ -442,6 +442,68 @@ describe('ChatTranscriptCards', () => {
     expect(body).toContain('Reasoning through the request');
   });
 
+  function toolGroupCard(states: Array<'started' | 'completed' | 'failed'>): ChatTranscriptCard {
+    return {
+      kind: 'tool_group',
+      id: 'tools-1',
+      turnId: 'turn-1',
+      orderKey: '00000003|tools',
+      timestamp: '2026-05-10T00:00:00.000Z',
+      tools: states.map((state, index) => ({
+        id: `tool-${index}`,
+        title: 'bash',
+        summary: 'tool: bash',
+        detail: null,
+        state,
+        eventIds: []
+      }))
+    };
+  }
+
+  it('strips the redundant "tool:" prefix and same-tool count in the headline', () => {
+    const { body } = render(ChatTranscriptCards, {
+      props: { cards: [toolGroupCard(['completed', 'completed', 'completed'])] }
+    });
+    expect(body).toContain('bash ×3');
+    expect(body).not.toContain('tool: bash');
+    expect(body).not.toContain('· +2 more');
+  });
+
+  it('stops spinning tool calls once the run is no longer active', () => {
+    const { body } = render(ChatTranscriptCards, {
+      props: { cards: [toolGroupCard(['completed', 'started'])], runActive: false }
+    });
+    // The stale "started" tool downgrades to an indeterminate marker, not a spinner.
+    expect(body).not.toContain('tool-status-started');
+    expect(body).toContain('tool-status-unknown');
+  });
+
+  it('keeps the spinner while the run is genuinely active', () => {
+    const { body } = render(ChatTranscriptCards, {
+      props: { cards: [toolGroupCard(['completed', 'started'])], runActive: true }
+    });
+    expect(body).toContain('tool-status-started');
+  });
+
+  it('renders thinking summaries as plain text, not raw markdown', () => {
+    const { body } = render(ChatTranscriptCards, {
+      props: {
+        cards: [
+          intermediateCard(
+            'thinking-md',
+            'thinking',
+            'No. This branch has **zero commits** ahead of `origin/main`.'
+          )
+        ]
+      }
+    });
+    expect(body).toContain('zero commits ahead of origin/main');
+    // Summary teaser must not leak markdown syntax.
+    const summary = body.slice(0, body.indexOf('thinking-trace-body'));
+    expect(summary).not.toContain('**zero commits**');
+    expect(summary).not.toContain('`origin/main`');
+  });
+
   it('renders assistant shared delivery files as downloadable pills', () => {
     const { body } = render(ChatTranscriptCards, {
       props: {

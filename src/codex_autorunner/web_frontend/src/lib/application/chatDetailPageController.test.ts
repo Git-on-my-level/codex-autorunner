@@ -5,6 +5,7 @@ import {
   READ_MODEL_CONTRACT_VERSION,
   type ChatIndexRow,
   type ProjectionCursor,
+  type RepoWorktreeDetailSnapshot,
   type RepoWorktreeRuntimeSnapshot,
   type RepoWorktreeTopologySnapshot
 } from '$lib/api/readModelContracts';
@@ -33,8 +34,7 @@ describe('ChatDetailPageController', () => {
       currentRequest: { filter: 'all', limit: 50 },
       ticketRunGroupRequest: CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST
     });
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushAsyncWork();
 
     expect(harness.session.activate).toHaveBeenCalledWith({
       primaryRequest: { filter: 'all', limit: 50 },
@@ -64,8 +64,7 @@ describe('ChatDetailPageController', () => {
       currentRequest: { filter: 'all', limit: 50 },
       ticketRunGroupRequest: CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST
     });
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushAsyncWork();
 
     expect(harness.supportData.at(-1)).toMatchObject({
       agents: [],
@@ -73,6 +72,61 @@ describe('ChatDetailPageController', () => {
       defaultAgent: 'codex'
     });
     expect(createInitialDraft).toHaveBeenCalledOnce();
+  });
+
+  it('loads a route-requested repo scope that is outside the first topology window', async () => {
+    const repoDetail = vi.fn(async (repoId: string) => ok(repoDetailSnapshot(repoId)));
+    const harness = createHarness({
+      supportApi: {
+        ...supportApi(),
+        repoDetail
+      }
+    });
+
+    harness.controller.mount({
+      route: { ...route(), searchParams: new URLSearchParams('new=repo:repo-99&kind=pma') },
+      currentRequest: { filter: 'all', limit: 50 },
+      ticketRunGroupRequest: CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST
+    });
+    await flushAsyncWork();
+
+    expect(repoDetail).toHaveBeenCalledWith('repo-99');
+    expect(harness.supportData.at(-1)?.scopeOptions).toContainEqual(
+      expect.objectContaining({
+        id: 'repo:repo-99',
+        kind: 'repo',
+        resourceId: 'repo-99',
+        scopeUrn: 'repo:repo-99'
+      })
+    );
+  });
+
+  it('loads a route-requested worktree scope that is outside the first topology window', async () => {
+    const worktreeDetail = vi.fn(async (worktreeId: string) => ok(worktreeDetailSnapshot(worktreeId, 'repo-parent')));
+    const harness = createHarness({
+      supportApi: {
+        ...supportApi(),
+        worktreeDetail
+      }
+    });
+
+    harness.controller.mount({
+      route: { ...route(), searchParams: new URLSearchParams('new=worktree:wt-99&kind=agent') },
+      currentRequest: { filter: 'all', limit: 50 },
+      ticketRunGroupRequest: CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST
+    });
+    await flushAsyncWork();
+
+    expect(worktreeDetail).toHaveBeenCalledWith('wt-99');
+    expect(harness.supportData.at(-1)?.scopeOptions).toContainEqual(
+      expect.objectContaining({
+        id: 'worktree:wt-99',
+        kind: 'worktree',
+        resourceId: 'wt-99',
+        parentRepoId: 'repo-parent',
+        scopeUrn: 'worktree:repo-parent/wt-99'
+      })
+    );
   });
 
   it('activates a route replacement and delegates active transcript runtime to the live projection', () => {
@@ -96,8 +150,7 @@ describe('ChatDetailPageController', () => {
       currentRequest: { filter: 'all', limit: 50 },
       ticketRunGroupRequest: CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST
     });
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushAsyncWork();
     expect(harness.sessionState.activeChatId).toBe('previous-chat');
     harness.liveProjection.activate.mockClear();
 
@@ -245,7 +298,10 @@ function supportApi() {
       window: windowInfo(),
       runtime: [],
       repair: repairPolicy()
-    })
+    }),
+    repoDetail: async (repoId: string): Promise<ApiResult<RepoWorktreeDetailSnapshot>> => ok(repoDetailSnapshot(repoId)),
+    worktreeDetail: async (worktreeId: string): Promise<ApiResult<RepoWorktreeDetailSnapshot>> =>
+      ok(worktreeDetailSnapshot(worktreeId, 'repo-1'))
   };
 }
 
@@ -302,6 +358,63 @@ function repairPolicy() {
   };
 }
 
+function repoDetailSnapshot(repoId: string): RepoWorktreeDetailSnapshot {
+  return detailSnapshot({
+    ownerKind: 'repo',
+    ownerId: repoId,
+    identity: { id: repoId, name: `Repo ${repoId}`, path: `/repos/${repoId}`, kind: 'base', worktree_count: 0 },
+    topology: {}
+  });
+}
+
+function worktreeDetailSnapshot(worktreeId: string, repoId: string | null): RepoWorktreeDetailSnapshot {
+  return detailSnapshot({
+    ownerKind: 'worktree',
+    ownerId: worktreeId,
+    identity: {
+      id: worktreeId,
+      name: `Worktree ${worktreeId}`,
+      path: `/repos/${repoId ?? 'unknown'}/${worktreeId}`,
+      kind: 'worktree',
+      worktree_of: repoId
+    },
+    topology: {}
+  });
+}
+
+function detailSnapshot(input: {
+  ownerKind: 'repo' | 'worktree';
+  ownerId: string;
+  identity: Record<string, unknown>;
+  topology: Record<string, unknown>;
+}): RepoWorktreeDetailSnapshot {
+  return {
+    contractVersion: READ_MODEL_CONTRACT_VERSION,
+    kind: 'repo_worktree.detail.snapshot',
+    cursor: projectionCursor(1),
+    ownerKind: input.ownerKind,
+    ownerId: input.ownerId,
+    identity: input.identity,
+    parentLinks: {},
+    topology: input.topology,
+    runtime: {},
+    ticketQueue: [],
+    runQueue: [],
+    chatQueue: [],
+    contextspaceSummary: [],
+    currentArtifacts: [],
+    ticketWindow: windowInfo(),
+    runWindow: windowInfo(),
+    chatWindow: windowInfo(),
+    artifactWindow: windowInfo(),
+    repair: repairPolicy()
+  };
+}
+
 function ok<T>(data: T): ApiResult<T> {
   return { ok: true, data };
+}
+
+async function flushAsyncWork(): Promise<void> {
+  for (let i = 0; i < 5; i += 1) await Promise.resolve();
 }

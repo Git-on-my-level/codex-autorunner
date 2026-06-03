@@ -487,6 +487,9 @@ def build_managed_thread_crud_routes(
                         active_work_summary=active_work_by_thread.get(
                             thread.thread_target_id
                         ),
+                        latest_execution=latest_execution_by_thread[
+                            thread.thread_target_id
+                        ],
                     ),
                     service=service,
                     managed_thread_id=thread.thread_target_id,
@@ -505,13 +508,18 @@ def build_managed_thread_crud_routes(
         binding_metadata = _load_chat_binding_metadata_by_thread(
             get_pma_request_context(request).hub_root
         )
+        latest_execution = _resolve_running_or_latest_execution(
+            service, managed_thread_id
+        )
         serialized_thread = _attach_latest_execution_fields(
             _serialize_thread_target(
                 thread,
                 binding_metadata_by_thread=binding_metadata,
+                latest_execution=latest_execution,
             ),
             service=service,
             managed_thread_id=managed_thread_id,
+            execution=latest_execution,
         )
         return {
             "thread": serialized_thread,

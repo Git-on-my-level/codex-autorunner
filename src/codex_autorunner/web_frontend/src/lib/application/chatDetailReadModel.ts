@@ -46,6 +46,7 @@ export type ChatDetailDisplayReadModel = {
   canInterruptWithDraft: boolean;
   composerWillQueue: boolean;
   queueDepthForCommands: number;
+  runActive: boolean;
 };
 
 export function visibleChatDetailTranscriptCards(
@@ -106,7 +107,8 @@ export function buildChatDetailDisplayReadModel(
       input.activeChat && input.displayedProgress?.status === 'running' && hasRunnableDraft
     ),
     composerWillQueue,
-    queueDepthForCommands: input.queuedTurns.length || input.displayedProgress?.queueDepth || 0
+    queueDepthForCommands: input.queuedTurns.length || input.displayedProgress?.queueDepth || 0,
+    runActive: input.displayedProgress?.status === 'running' && !input.displayedProgress.terminal
   };
 }
 

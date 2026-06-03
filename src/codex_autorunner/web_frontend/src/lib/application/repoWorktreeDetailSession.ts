@@ -54,6 +54,7 @@ export type RepoWorktreeDetailSessionDependencies = {
   loadRepoDetail?: typeof ensureRepoDetailLoaded;
   loadWorktreeDetail?: typeof ensureWorktreeDetailLoaded;
   syncRepoMain: (repoId: string) => Promise<{ ok: true } | { ok: false; error: ApiError }>;
+  syncWorktree: (worktreeId: string) => Promise<{ ok: true } | { ok: false; error: ApiError }>;
   invalidateTags?: typeof invalidateReadModelTags;
   retireWorktree: (target: RetireWorktreeTarget) => Promise<ActionNotice | null>;
   retireState: (target: RetireStateTarget) => Promise<ActionNotice | null>;
@@ -186,20 +187,32 @@ export class RepoWorktreeDetailSession {
   async syncRepo(): Promise<void> {
     if (this.state.syncRepoBusy) return;
     const repoId = this.state.ownerKind === 'repo' ? this.state.ownerId : this.state.backingRepoId;
-    if (!repoId) {
+    if (this.state.ownerKind === 'worktree' && !repoId) {
       this.state = { ...this.state, notice: { tone: 'danger', message: 'Could not resolve parent repo for sync.' } };
       return;
     }
 
     this.state = { ...this.state, syncRepoBusy: true };
     try {
-      const result = await this.dependencies.syncRepoMain(repoId);
+      const result =
+        this.state.ownerKind === 'repo'
+          ? await this.dependencies.syncRepoMain(this.state.ownerId)
+          : await this.dependencies.syncWorktree(this.state.ownerId);
       if (!result.ok) {
         this.state = { ...this.state, notice: { tone: 'danger', message: result.error.message } };
         return;
       }
-      await this.dependencies.invalidateTags(this.syncInvalidationTags(repoId));
-      this.state = { ...this.state, notice: { tone: 'success', message: 'Synced default branch with origin.' } };
+      await this.dependencies.invalidateTags(this.syncInvalidationTags(repoId ?? this.state.ownerId));
+      this.state = {
+        ...this.state,
+        notice: {
+          tone: 'success',
+          message:
+            this.state.ownerKind === 'repo'
+              ? 'Synced default branch with origin.'
+              : 'Synced worktree branch with upstream.'
+        }
+      };
       await this.load(false);
     } finally {
       this.state = { ...this.state, syncRepoBusy: false };

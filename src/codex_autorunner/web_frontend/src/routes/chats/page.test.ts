@@ -53,6 +53,45 @@ describe('/chats page', () => {
     expect(slashCommandBody).toContain("await createChat({ preserveSelectedKind: true });");
   });
 
+  it('keeps the global picker scope synced to the active unsent draft scope', () => {
+    const source = chatDetailPageSource();
+    const draftScopeSyncBody = source.match(
+      /\$effect\(\(\) => \{\n    const chat = localDraftChat;[\s\S]*?\n  \}\);/
+    )?.[0];
+
+    expect(draftScopeSyncBody).toBeTruthy();
+    expect(draftScopeSyncBody).toContain('const scopeId = scopeIdForChat(chat);');
+    expect(draftScopeSyncBody).toContain('selectedScopeId = scopeId;');
+    expect(draftScopeSyncBody).toContain("selectedScopeSource === 'route_explicit'");
+  });
+
+  it('sends unsent drafts using the draft-owned scope when present', () => {
+    const source = chatDetailPageSource();
+    const sendControllerDeps = source.match(
+      /const chatSendController = createChatSendController\(\{[\s\S]*?\n  \}\);/
+    )?.[0];
+
+    expect(sendControllerDeps).toBeTruthy();
+    expect(sendControllerDeps).toContain('getSelectedScope: () => scopeOptionForChat(localDraftChat) ?? selectedScope');
+    expect(sendControllerDeps).toContain('getSelectedScopeSource: () => scopeSourceForChat(localDraftChat) ?? selectedScopeSource');
+    expect(sendControllerDeps).toContain('getNewChatKind: () => draftKindForChat(localDraftChat) ?? newChatKind');
+  });
+
+  it('creates route-scoped drafts from the captured new-chat scope instead of ambient picker state', () => {
+    const source = chatDetailPageSource();
+    const routeNewChatBody = source.match(
+      /function applyNewChatQueryParam[\s\S]*?\n  function applyLastNewChatPreference/
+    )?.[0];
+
+    expect(routeNewChatBody).toBeTruthy();
+    expect(routeNewChatBody).toContain('let routeScopeId: string | null = null;');
+    expect(routeNewChatBody).toContain('routeScopeId = sid;');
+    expect(routeNewChatBody).toContain('const routeKind = newChatKind;');
+    expect(routeNewChatBody).toContain('scopeId: routeScopeId');
+    expect(routeNewChatBody).toContain("scopeSource: 'route_explicit'");
+    expect(routeNewChatBody).toContain('kind: routeKind');
+  });
+
   it('delegates terminal snapshot queue reconciliation to the live projection service', () => {
     const pageSource = chatDetailPageSource();
     const serviceSource = readFileSync(
@@ -380,15 +419,48 @@ describe('/chats page', () => {
     expect(pageSource).toContain('contextualFacetCounts.transport');
   });
 
-  it('renders the agent-kind badge (PMA or Coding agent) in the active header', () => {
+  it('renders the full agent-kind badge set in the active header', () => {
     const pageSource = chatDetailPageSource();
     const subtitleBody = pageSource.match(
       /<p class="chat-header-subtitle">[\s\S]*?<\/p>/
     )?.[0];
 
     expect(subtitleBody).toBeTruthy();
-    expect(pageSource).toContain('chatBadgeViews(activeChat, { showManagerAgent: false })');
+    expect(pageSource).toContain('chatBadgeViews(activeChat)');
+    expect(pageSource).not.toContain('chatBadgeViews(activeChat, { showManagerAgent: false })');
     expect(subtitleBody).toContain('{#each activeChatBadges as badge}');
+
+    readModelEntityStore.applyChatIndexSnapshot({
+      cursor: projectionCursor(),
+      rows: [
+        {
+          ...chatIndexRow(),
+          chatId: 'pma-coding-agent',
+          title: 'PMA managed coding agent chat',
+          chatKind: 'coding_agent',
+          facets: {
+            category: 'regular',
+            turnKinds: ['message'],
+            originKinds: ['surface'],
+            transports: ['pma'],
+            scopeKind: 'repo',
+            scopeId: 'repo-1',
+            agentKind: 'pma'
+          }
+        }
+      ],
+      groups: [],
+      counters: { total: 1, waiting: 0, running: 1, unread: 0, archived: 0 }
+    });
+    readModelEntityStore.setActiveChatId('pma-coding-agent');
+
+    const { body } = render(Page);
+    const renderedSubtitle = body.match(
+      /<p class="chat-header-subtitle">[\s\S]*?<\/p>/
+    )?.[0];
+
+    expect(renderedSubtitle).toContain('PMA');
+    expect(renderedSubtitle).toContain('Coding agent');
   });
 
   it('renders cached chat rows instead of the skeleton while the index cursor is still missing', () => {

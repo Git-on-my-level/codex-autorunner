@@ -93,7 +93,11 @@ def build_hub_repo_routes(
         }
 
     worktree = HubWorktreeService(
-        context, mount_manager, enricher, _build_force_attestation_payload
+        context,
+        mount_manager,
+        enricher,
+        _build_force_attestation_payload,
+        cache_coordinator=cache,
     )
     destination = HubDestinationService(context, mount_manager)
 
@@ -117,6 +121,10 @@ def build_hub_repo_routes(
     @router.post("/hub/jobs/worktrees/create", response_model=HubJobResponse)
     async def create_worktree_job(payload: HubCreateWorktreeRequest):
         return await worktree.create_worktree_job(payload)
+
+    @router.post("/hub/worktrees/{worktree_repo_id}/sync")
+    async def sync_worktree(worktree_repo_id: str):
+        return await worktree.sync_worktree(worktree_repo_id)
 
     @router.post("/hub/worktrees/retire")
     async def retire_worktree(payload: HubRetireWorktreeRequest):

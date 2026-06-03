@@ -1634,3 +1634,60 @@
     color: var(--color-ink-soft);
     transform: translateX(2px);
   }
+
+  /* Detail hero meta: a single quiet branch chip + copy-path button. Replaces
+     the old `branch · path` subtitle, which stacked the same slug three ways. */
+  .detail-branch {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-width: 0;
+    max-width: min(48ch, 100%);
+    font-family: var(--font-mono);
+    color: var(--color-ink-soft);
+  }
+
+  .detail-branch .branch-glyph {
+    flex-shrink: 0;
+  }
+
+  .detail-branch-head {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .detail-branch-tail {
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .detail-copy-path {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 2px var(--space-2);
+    border: 1px solid transparent;
+    border-radius: var(--radius-2);
+    background: transparent;
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-0);
+    cursor: pointer;
+    transition: background var(--transition-fast), color var(--transition-fast),
+      border-color var(--transition-fast);
+  }
+
+  .detail-copy-path:hover {
+    background: var(--color-surface-muted);
+    border-color: var(--color-border-subtle);
+    color: var(--color-ink-soft);
+  }
+
+  .detail-copy-path.is-copied {
+    color: var(--color-success);
+  }
+
+  .detail-copy-path svg {
+    flex-shrink: 0;
+  }

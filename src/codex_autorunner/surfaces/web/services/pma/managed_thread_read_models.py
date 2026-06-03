@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from fastapi import HTTPException
 
@@ -22,6 +22,10 @@ from .....core.managed_thread_kinds import infer_managed_thread_chat_kind
 from .....core.managed_thread_status import derive_managed_thread_operator_status
 from .....core.orchestration import ActiveWorkSummary, ManagedThreadExecutionStore
 from .....core.orchestration.models import Binding, ThreadTarget
+from .....core.runtime_identity import (
+    RuntimeIdentityContractError,
+    RuntimeIdentityEnvelope,
+)
 from .....core.text_utils import _truncate_text
 from .....tickets.files import ticket_is_done
 from ..chat_status_contract import normalize_chat_effective_status
@@ -409,6 +413,7 @@ def _serialize_thread_target(
     *,
     binding_metadata_by_thread: Optional[dict[str, dict[str, Any]]] = None,
     active_work_summary: Optional[ActiveWorkSummary] = None,
+    latest_execution: Any = None,
 ) -> dict[str, Any]:
     target_runtime_status = normalize_optional_text(thread.status)
     execution_status = (
@@ -425,31 +430,16 @@ def _serialize_thread_target(
         or "idle"
     )
     model = normalize_optional_text(getattr(thread, "model", None))
-    runtime = {
-        "stage": "unknown",
-        "source": "thread_target" if model else "unknown",
-        "runtime_source": "thread_target" if model else "unknown",
-        "agent": normalize_optional_text(thread.agent_id),
-        "profile": normalize_optional_text(thread.agent_profile),
-        "model": model,
-        "provider_id": None,
-        "provider_model_id": None,
-        "reasoning": None,
-        "backend_runtime_id": normalize_optional_text(
+    runtime = _runtime_projection_from_execution(
+        latest_execution,
+        default_agent=normalize_optional_text(thread.agent_id),
+        default_profile=normalize_optional_text(thread.agent_profile),
+        default_model=model,
+        default_backend_runtime_id=normalize_optional_text(
             getattr(thread, "backend_runtime_instance_id", None)
         ),
-        "model_unknown": model is None,
-        "reasoning_unknown": True,
-        "agent_unknown": normalize_optional_text(thread.agent_id) is None,
-        "profile_unknown": normalize_optional_text(thread.agent_profile) is None,
-        "provider_unknown": True,
-        "backend_runtime_unknown": normalize_optional_text(
-            getattr(thread, "backend_runtime_instance_id", None)
-        )
-        is None,
-        "model_source": "thread_target.model" if model else "unknown",
-        "reasoning_source": "unknown",
-    }
+    )
+    model = normalize_optional_text(runtime.get("model"))
     payload = {
         "managed_thread_id": thread.thread_target_id,
         "agent": thread.agent_id,
@@ -523,6 +513,118 @@ def _serialize_thread_target(
         managed_thread_id=thread.thread_target_id,
         binding_metadata_by_thread=binding_metadata_by_thread,
     )
+
+
+def _runtime_projection_from_execution(
+    execution: Any,
+    *,
+    default_agent: Optional[str],
+    default_profile: Optional[str],
+    default_model: Optional[str],
+    default_backend_runtime_id: Optional[str],
+) -> dict[str, Any]:
+    envelope = _runtime_identity_from_execution(execution)
+    for stage_name in ("effective", "launch", "resolved", "requested"):
+        stage = getattr(envelope, stage_name)
+        if stage is None:
+            continue
+        model = normalize_optional_text(stage.canonical_model_label)
+        reasoning = normalize_optional_text(stage.reasoning)
+        agent = (
+            normalize_optional_text(stage.logical_agent)
+            or normalize_optional_text(stage.runtime_agent)
+            or default_agent
+        )
+        profile = normalize_optional_text(stage.profile) or default_profile
+        provider_id = normalize_optional_text(stage.provider_id)
+        provider_model_id = normalize_optional_text(stage.provider_model_id)
+        backend_runtime_id = (
+            normalize_optional_text(stage.backend_runtime_id)
+            or default_backend_runtime_id
+        )
+        source = normalize_optional_text(stage.source) or stage_name
+        runtime_source = (
+            f"{stage_name}:{source}" if source != stage_name else stage_name
+        )
+        return {
+            "stage": stage_name,
+            "source": source,
+            "runtime_source": runtime_source,
+            "agent": agent,
+            "profile": profile,
+            "model": model,
+            "provider_id": provider_id,
+            "provider_model_id": provider_model_id,
+            "reasoning": reasoning,
+            "backend_runtime_id": backend_runtime_id,
+            "model_unknown": model is None,
+            "reasoning_unknown": reasoning is None,
+            "agent_unknown": agent is None,
+            "profile_unknown": profile is None,
+            "provider_unknown": provider_id is None and provider_model_id is None,
+            "backend_runtime_unknown": backend_runtime_id is None,
+            "model_source": (
+                f"{stage_name}.canonical_model_label"
+                if model is not None
+                else "unknown"
+            ),
+            "reasoning_source": (
+                f"{stage_name}.reasoning" if reasoning is not None else "unknown"
+            ),
+        }
+    return {
+        "stage": "unknown",
+        "source": "thread_target" if default_model else "unknown",
+        "runtime_source": "thread_target" if default_model else "unknown",
+        "agent": default_agent,
+        "profile": default_profile,
+        "model": default_model,
+        "provider_id": None,
+        "provider_model_id": None,
+        "reasoning": None,
+        "backend_runtime_id": default_backend_runtime_id,
+        "model_unknown": default_model is None,
+        "reasoning_unknown": True,
+        "agent_unknown": default_agent is None,
+        "profile_unknown": default_profile is None,
+        "provider_unknown": True,
+        "backend_runtime_unknown": default_backend_runtime_id is None,
+        "model_source": "thread_target.model" if default_model else "unknown",
+        "reasoning_source": "unknown",
+    }
+
+
+def _runtime_identity_from_execution(execution: Any) -> RuntimeIdentityEnvelope:
+    raw = _runtime_identity_payload_from_execution(execution)
+    if isinstance(raw, RuntimeIdentityEnvelope):
+        return raw
+    try:
+        if isinstance(raw, str):
+            return RuntimeIdentityEnvelope.from_json(raw)
+        if isinstance(raw, Mapping):
+            return RuntimeIdentityEnvelope.from_mapping(raw)
+    except RuntimeIdentityContractError:
+        _logger.warning("ignoring invalid managed thread runtime identity")
+    return RuntimeIdentityEnvelope()
+
+
+def _runtime_identity_payload_from_execution(execution: Any) -> Any:
+    if execution is None:
+        return None
+    if isinstance(execution, Mapping):
+        metadata = execution.get("metadata")
+        if (
+            isinstance(metadata, Mapping)
+            and metadata.get("runtime_identity") is not None
+        ):
+            return metadata.get("runtime_identity")
+        return execution.get("runtime_identity") or execution.get(
+            "runtime_identity_json"
+        )
+    metadata = getattr(execution, "metadata", None)
+    if isinstance(metadata, Mapping) and metadata.get("runtime_identity") is not None:
+        return metadata.get("runtime_identity")
+    return getattr(execution, "runtime_identity", None)
 
 
 def resolve_managed_thread_list_query(

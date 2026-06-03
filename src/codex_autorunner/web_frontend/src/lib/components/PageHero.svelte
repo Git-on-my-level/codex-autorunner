@@ -3,12 +3,22 @@
 
   let {
     title,
+    titleTail = null,
+    titleFull = null,
     subtitle = null,
     stats = undefined,
     actions = undefined,
     meta = undefined
   }: {
     title: string;
+    /**
+     * When set, the title is middle-truncated: `title` is the head (ellipsized
+     * on overflow) and `titleTail` is pinned to the end so a trailing
+     * disambiguator (e.g. a worktree hash) always stays visible.
+     */
+    titleTail?: string | null;
+    /** Full, untruncated title for the hover/`title` tooltip. */
+    titleFull?: string | null;
     subtitle?: string | null;
     stats?: Snippet | undefined;
     actions?: Snippet | undefined;
@@ -18,7 +28,13 @@
 
 <header class="page-hero">
   <div class="page-hero-copy">
-    <h1>{title}</h1>
+    {#if titleTail}
+      <h1 class="is-truncated" title={titleFull ?? `${title}${titleTail}`}>
+        <span class="page-hero-title-head">{title}</span><span class="page-hero-title-tail">{titleTail}</span>
+      </h1>
+    {:else}
+      <h1>{title}</h1>
+    {/if}
     {#if subtitle}
       <p class="page-hero-sub">{subtitle}</p>
     {/if}
@@ -61,6 +77,26 @@
     font-weight: 650;
     letter-spacing: -0.022em;
     line-height: 1.18;
+  }
+
+  /* Middle-truncated title: head flexes and ellipsizes, tail stays pinned so
+     the trailing disambiguator (worktree hash) never gets clipped. */
+  .page-hero h1.is-truncated {
+    display: flex;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .page-hero-title-head {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .page-hero-title-tail {
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .page-hero-sub {

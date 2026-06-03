@@ -879,6 +879,10 @@ export class WebApiClient {
       this.requestJson<JsonRecord>(`/hub/repos/${encodeURIComponent(repoId)}/sync-main`, {
         method: 'POST'
       }),
+    syncWorktree: async (worktreeId: string): Promise<ApiResult<JsonRecord>> =>
+      this.requestJson<JsonRecord>(`/hub/worktrees/${encodeURIComponent(worktreeId)}/sync`, {
+        method: 'POST'
+      }),
     setWorktreeSetup: async (repoId: string, commands: string[]): Promise<ApiResult<JsonRecord>> =>
       this.requestJson<JsonRecord>(`/hub/repos/${encodeURIComponent(repoId)}/worktree-setup`, {
         method: 'POST',
