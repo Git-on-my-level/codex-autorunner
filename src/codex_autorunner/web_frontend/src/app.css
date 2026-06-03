@@ -2859,45 +2859,90 @@ textarea:hover {
   color: var(--color-ink-muted);
 }
 
-.tool-call-bar ol {
+/* Compact status glyph used both on the group summary and on each tool row.
+   A spinner while running, a faint check when done (calm — completed work is
+   terminal), a red cross on failure. The state word is kept for screen readers
+   via an adjacent .sr-only span. */
+.tool-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.tool-status-started::before {
+  content: '';
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 1.5px solid var(--color-border-strong);
+  border-top-color: var(--color-ink-muted);
+  animation: chat-files-spin 0.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-status-started::before { animation: none; }
+}
+
+.tool-status-completed::before {
+  content: '✓';
+  color: var(--color-ink-faint);
+}
+
+.tool-status-failed::before {
+  content: '✕';
+  color: var(--color-danger);
+  font-weight: 700;
+}
+
+.tool-status-unknown::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--color-ink-faint);
+}
+
+.tool-call-bar .tool-row-list {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
   margin: 0;
   padding: var(--space-1) 0 var(--space-2) calc(8px + var(--space-2));
   list-style: none;
 }
 
-.tool-call-bar li {
+.tool-call-bar li.tool-row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-2);
   min-width: 0;
   color: var(--color-ink-muted);
   font-size: 13px;
 }
 
-.tool-call-bar li span {
-  display: inline-block;
-  margin-right: var(--space-2);
-  color: var(--color-ink-faint);
-  font-size: 11px;
-  font-weight: 760;
-  text-transform: uppercase;
+.tool-call-bar li.tool-row .tool-status {
+  margin-top: 1px;
 }
 
-.tool-call-bar li.failed span {
-  color: var(--color-danger);
+.tool-call-bar .tool-row-body {
+  min-width: 0;
 }
 
-.tool-call-bar li.completed span {
-  color: var(--color-success);
-}
-
-.tool-call-bar li strong {
+.tool-call-bar .tool-row-body > strong {
   color: var(--color-ink);
+  font-weight: 500;
   overflow-wrap: anywhere;
 }
 
-.tool-call-bar li small {
+.tool-call-bar .tool-row-body > small {
   display: block;
   margin-top: 2px;
+  color: var(--color-ink-muted);
   overflow-wrap: anywhere;
 }
 

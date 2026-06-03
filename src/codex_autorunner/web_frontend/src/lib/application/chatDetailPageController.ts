@@ -25,10 +25,12 @@ import {
   type PinnedChatMap
 } from './chatDetailSession';
 import type { ChatSummary, SurfaceArtifact } from '$lib/viewModels/domain';
+import { mapRepoSummary, mapWorktreeSummary } from '$lib/viewModels/domain';
 import {
   buildChatScopeOptions,
   type ChatScopeOption
 } from '$lib/viewModels/chat';
+import type { RepoWorktreeDetailSnapshot } from '$lib/api/readModelContracts';
 
 type ChatIndexSessionState = {
   status: 'idle' | 'loading' | 'connected' | 'interrupted' | 'closed';
@@ -71,6 +73,8 @@ export type ChatDetailPageSupportApi = {
   listAgents: () => Promise<ApiResult<{ agents: JsonRecord[]; defaults: JsonRecord; default: string }>>;
   repoWorktreeTopology: (filter?: 'repo' | 'worktree' | 'all', limit?: number) => Promise<ApiResult<unknown>>;
   repoWorktreeRuntime: (filter?: 'repo' | 'worktree' | 'all', limit?: number) => Promise<ApiResult<unknown>>;
+  repoDetail: (repoId: string) => Promise<ApiResult<RepoWorktreeDetailSnapshot>>;
+  worktreeDetail: (worktreeId: string) => Promise<ApiResult<RepoWorktreeDetailSnapshot>>;
 };
 
 export type ChatDetailPageSupportData = {
@@ -287,15 +291,66 @@ export class ChatDetailPageController {
     if (topologyResult.ok) this.deps.readModelStore.applyRepoWorktreeTopologySnapshot(topologyResult.data as Parameters<ReadModelEntityStore['applyRepoWorktreeTopologySnapshot']>[0]);
     if (runtimeResult.ok) this.deps.readModelStore.applyRepoWorktreeRuntimeSnapshot(runtimeResult.data as Parameters<ReadModelEntityStore['applyRepoWorktreeRuntimeSnapshot']>[0]);
     const scopeState = this.deps.readModelStore.snapshot();
+    const exactRouteScope = await this.loadExactRouteScope(scopeState);
+    const repoSummaries = selectRepoSummaries(scopeState);
+    const worktreeSummaries = selectWorktreeSummaries(scopeState);
+    if (exactRouteScope?.ownerKind === 'repo' && !repoSummaries.some((repo) => repo.id === exactRouteScope.ownerId)) {
+      repoSummaries.push(mapRepoSummary({ ...exactRouteScope.identity, id: exactRouteScope.ownerId }));
+    } else if (
+      exactRouteScope?.ownerKind === 'worktree' &&
+      !worktreeSummaries.some((worktree) => worktree.id === exactRouteScope.ownerId)
+    ) {
+      worktreeSummaries.push(mapWorktreeSummary({ ...exactRouteScope.identity, id: exactRouteScope.ownerId }));
+    }
     this.deps.onSupportDataLoaded({
       agents: agentResult.ok ? agentResult.data.agents : [],
       defaults: agentResult.ok ? agentResult.data.defaults : {},
       defaultAgent: agentResult.ok ? agentResult.data.default : 'codex',
       scopeOptions: buildChatScopeOptions(
-        topologyResult.ok ? selectRepoSummaries(scopeState) : [],
-        topologyResult.ok ? selectWorktreeSummaries(scopeState) : []
+        topologyResult.ok || exactRouteScope ? repoSummaries : [],
+        topologyResult.ok || exactRouteScope ? worktreeSummaries : []
       )
     });
+  }
+
+  private requestedNewScope(): { kind: 'repo' | 'worktree'; id: string } | null {
+    const raw = this.route?.searchParams.get('new')?.trim();
+    if (!raw) return null;
+    let decoded = raw;
+    try {
+      decoded = decodeURIComponent(raw);
+    } catch {
+      decoded = raw;
+    }
+    if (decoded.startsWith('repo:')) {
+      const id = decoded.slice('repo:'.length).trim();
+      return id ? { kind: 'repo', id } : null;
+    }
+    if (decoded.startsWith('worktree:')) {
+      const id = decoded.slice('worktree:'.length).trim();
+      return id ? { kind: 'worktree', id } : null;
+    }
+    return null;
+  }
+
+  private async loadExactRouteScope(
+    scopeState: ReadModelEntityState
+  ): Promise<RepoWorktreeDetailSnapshot | null> {
+    const requested = this.requestedNewScope();
+    if (!requested) return null;
+    const existing =
+      requested.kind === 'repo'
+        ? scopeState.repos[requested.id]
+        : scopeState.worktrees[requested.id];
+    if (existing) return null;
+    const result =
+      requested.kind === 'repo'
+        ? await this.deps.supportApi.repoDetail(requested.id)
+        : await this.deps.supportApi.worktreeDetail(requested.id);
+    if (!result.ok) return null;
+    if (requested.kind === 'repo') this.deps.readModelStore.applyRepoDetailSnapshot(result.data);
+    else this.deps.readModelStore.applyWorktreeDetailSnapshot(result.data);
+    return result.data;
   }
 
   private requestedDetailFromUrl(): string | null {

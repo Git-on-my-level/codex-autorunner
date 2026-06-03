@@ -385,6 +385,17 @@ describe('API client error handling', () => {
     expect(fetcher).toHaveBeenCalledWith('/hub/repos/demo/pin', expect.objectContaining({ method: 'POST', body: JSON.stringify({ pinned: true }) }));
   });
 
+  it('calls repo and worktree sync endpoints separately', async () => {
+    const fetcher = vi.fn(async () => Response.json({ status: 'ok' })) as unknown as typeof fetch;
+    const client = new WebApiClient(fetcher);
+
+    await client.hub.syncRepoMain('demo');
+    await client.hub.syncWorktree('demo--feature');
+
+    expect(fetcher).toHaveBeenCalledWith('/hub/repos/demo/sync-main', expect.objectContaining({ method: 'POST' }));
+    expect(fetcher).toHaveBeenCalledWith('/hub/worktrees/demo--feature/sync', expect.objectContaining({ method: 'POST' }));
+  });
+
   it('prefixes API requests with the runtime hub base path when configured', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({

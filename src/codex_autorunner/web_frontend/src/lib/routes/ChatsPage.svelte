@@ -374,7 +374,9 @@
       listFiles: () => webApi.filebox.listFiles({ kind: 'hub' }),
       listAgents: webApi.pma.listAgents,
       repoWorktreeTopology: webApi.readModels.repoWorktreeTopology,
-      repoWorktreeRuntime: webApi.readModels.repoWorktreeRuntime
+      repoWorktreeRuntime: webApi.readModels.repoWorktreeRuntime,
+      repoDetail: webApi.readModels.repoDetail,
+      worktreeDetail: webApi.readModels.worktreeDetail
     },
     readSessionState: readChatDetailSessionState,
     writeSessionState: writeChatDetailSessionState,
@@ -757,13 +759,13 @@
       setComposerAttachments(value, chatId ?? activeChatId);
     },
     getComposerEditVersion: () => composerEditVersion,
-    getSelectedScope: () => selectedScope,
-    getSelectedScopeSource: () => selectedScopeSource,
+    getSelectedScope: () => scopeOptionForChat(localDraftChat) ?? selectedScope,
+    getSelectedScopeSource: () => scopeSourceForChat(localDraftChat) ?? selectedScopeSource,
     getSelectedAgent: () => selectedAgent,
     getSelectedProfile: () => selectedProfile,
     getSelectedModel: () => selectedModel,
     getSelectedReasoning: () => selectedReasoning,
-    getNewChatKind: () => newChatKind,
+    getNewChatKind: () => draftKindForChat(localDraftChat) ?? newChatKind,
     canStartCodingAgentChat: () => canStartCodingAgentChat,
     newChatDisplayName,
     readSessionState: readChatDetailSessionState,
@@ -780,10 +782,14 @@
     confirm: confirmDialog
   });
   const streamingMessageId = $derived(chatDetailDisplay.streamingMessageId);
+  const runActive = $derived(chatDetailDisplay.runActive);
   const transcriptListItems = $derived<ChatTranscriptListItem[]>(chatDetailDisplay.transcriptListItems);
   const srStatusAnnouncement = $derived(chatDetailDisplay.statusAnnouncement);
   const srAlertAnnouncement = $derived(chatDetailDisplay.alertAnnouncement);
-  const activeChatBadges = $derived(chatBadgeViews(activeChat, { showManagerAgent: false }));
+  // Keep the detail header aligned with sidebar row badges. PMA is a manager-agent
+  // classification here, not the generic PMA transport facet, so it should remain
+  // visible alongside Coding agent when the backend projects both.
+  const activeChatBadges = $derived(chatBadgeViews(activeChat));
   const activeSharedFileCount = $derived(activeSurfaceDeliveries.length);
   const activeRepoIngress = $derived(repoIngressForChat(activeChat));
   const createChatLabel = $derived(creating ? 'Creating...' : '+ New');
@@ -1116,6 +1122,20 @@
   });
 
   $effect(() => {
+    const chat = localDraftChat;
+    if (!chat) return;
+    const scopeId = scopeIdForChat(chat);
+    if (!scopeId || !scopeOptions.some((scope) => scope.id === scopeId)) return;
+    selectedScopeId = scopeId;
+    const source = stringField(chat.raw, 'scope_source');
+    selectedScopeSource =
+      source === 'route_explicit' || source === 'picker_explicit' || source === 'inherited_continuation'
+        ? source
+        : scopeId === 'local' ? 'default_hub' : selectedScopeSource;
+    scopeLocked = selectedScopeSource === 'route_explicit' && scopeId !== 'local';
+  });
+
+  $effect(() => {
     const chat = activeChat;
     if (!chat) {
       artifactDeliveries = [];
@@ -1240,6 +1260,7 @@
     if (!raw) return;
     let decoded = raw;
     let appliedScope = false;
+    let routeScopeId: string | null = null;
     try {
       decoded = decodeURIComponent(raw);
     } catch {
@@ -1250,6 +1271,7 @@
       if (scopeOptions.some((scope) => scope.id === sid)) {
         selectedScopeId = sid;
         selectedScopeSource = 'route_explicit';
+        routeScopeId = sid;
         appliedScope = true;
       }
     } else if (decoded.startsWith('worktree:')) {
@@ -1257,15 +1279,18 @@
       if (scopeOptions.some((scope) => scope.id === sid)) {
         selectedScopeId = sid;
         selectedScopeSource = 'route_explicit';
+        routeScopeId = sid;
         appliedScope = true;
       }
     } else if (decoded === 'local' || decoded === 'hub') {
       selectedScopeId = 'local';
       selectedScopeSource = 'route_explicit';
+      routeScopeId = 'local';
       appliedScope = true;
     }
     const requestedKind = page.url.searchParams.get('kind');
     newChatKind = requestedKind === 'agent' && selectedScopeId !== 'local' ? 'agent' : 'pma';
+    const routeKind = newChatKind;
     // Any non-local `?new=` deep-link is the caller saying "this chat belongs to
     // that scope" — pin the scope picker so the user can't accidentally rescope
     // a chat they entered from a repo/worktree page.
@@ -1278,7 +1303,13 @@
       if (appliedScope) {
         pendingInitialDraftCreate = false;
         persistCurrentNewChatPreference();
-        void createChat({ preserveSelectedScope: true });
+        void createChat({
+          preserveSelectedScope: true,
+          preserveSelectedKind: true,
+          scopeId: routeScopeId,
+          scopeSource: 'route_explicit',
+          kind: routeKind
+        });
       }
     });
   }
@@ -1794,16 +1825,38 @@
     });
   }
 
+  function scopeOptionForScopeId(scopeId: string | null | undefined): ChatScopeOption | null {
+    if (!scopeId) return null;
+    return scopeOptions.find((scope) => scope.id === scopeId) ?? null;
+  }
+
+  function scopeSourceForChat(chat: ChatSummary | null): ChatScopeSource | null {
+    const source = stringField(chat?.raw ?? null, 'scope_source');
+    return source === 'route_explicit' || source === 'picker_explicit' || source === 'inherited_continuation'
+      ? source
+      : null;
+  }
+
+  function draftKindForChat(chat: ChatSummary | null): 'pma' | 'agent' | null {
+    if (!chat || chat.lifecycleStatus !== 'draft') return null;
+    return chatKind(chat) === 'coding_agent' ? 'agent' : 'pma';
+  }
+
   function newChatDisplayName(): string {
     return newChatKind === 'agent' && canStartCodingAgentChat
       ? 'New coding agent chat'
       : 'New chat';
   }
 
-  function newDraftChatSummary(): ChatSummary {
+  function newDraftChatSummary(options: {
+    scope?: ChatScopeOption;
+    scopeSource?: ChatScopeSource;
+    kind?: 'pma' | 'agent';
+  } = {}): ChatSummary {
     const now = new Date().toISOString();
-    const scope = selectedScope;
-    const chatKind = newChatKind === 'agent' && canStartCodingAgentChat ? 'coding_agent' : 'pma';
+    const scope = options.scope ?? selectedScope;
+    const kind = options.kind ?? newChatKind;
+    const chatKind = kind === 'agent' && scope.kind !== 'local' ? 'coding_agent' : 'pma';
     return {
       id: `pma:${crypto.randomUUID()}`,
       title: newChatDisplayName(),
@@ -1823,7 +1876,7 @@
         draft: true,
         origin: 'web',
         scope_urn: scope.scopeUrn,
-        scope_source: selectedScopeSource,
+        scope_source: options.scopeSource ?? selectedScopeSource,
         chat_kind: chatKind
       }
     };
@@ -1841,6 +1894,10 @@
     if (chat.worktreeId) return `worktree:${chat.worktreeId}`;
     if (chat.repoId) return `repo:${chat.repoId}`;
     return 'local';
+  }
+
+  function scopeOptionForChat(chat: ChatSummary | null): ChatScopeOption | null {
+    return scopeOptionForScopeId(scopeIdForChat(chat));
   }
 
   function repoIngressForChat(chat: ChatSummary | null): { href: string; label: string; detail: string } | null {
@@ -1898,11 +1955,17 @@
     followBottom = atBottom;
   }
 
-  async function createChat(options: { preserveSelectedScope?: boolean; preserveSelectedKind?: boolean } = {}): Promise<void> {
+  async function createChat(options: {
+    preserveSelectedScope?: boolean;
+    preserveSelectedKind?: boolean;
+    scopeId?: string | null;
+    scopeSource?: ChatScopeSource;
+    kind?: 'pma' | 'agent';
+  } = {}): Promise<void> {
     creating = true;
     composeError = null;
     try {
-      const requestedKind = newChatKind;
+      const requestedKind = options.kind ?? newChatKind;
       if (!options.preserveSelectedScope) {
         const applied = applyLastNewChatPreference();
         if (!applied) {
@@ -1912,12 +1975,21 @@
         }
         scopeLocked = false;
       }
+      const explicitScope = scopeOptionForScopeId(options.scopeId);
+      if (explicitScope) {
+        selectedScopeId = explicitScope.id;
+        selectedScopeSource = options.scopeSource ?? (explicitScope.kind === 'local' ? 'default_hub' : 'picker_explicit');
+      }
       if (options.preserveSelectedKind) {
         newChatKind = requestedKind;
         if (newChatKind === 'agent') ensureCodingAgentScope();
       }
       persistCurrentNewChatPreference();
-      const draftChat = newDraftChatSummary();
+      const draftChat = newDraftChatSummary({
+        scope: explicitScope ?? selectedScope,
+        scopeSource: options.scopeSource ?? selectedScopeSource,
+        kind: newChatKind
+      });
       // Persist the draft shell so the new chat survives navigation and reload,
       // then make it the active chat. The shell carries no managed thread, so
       // the live projection will not fetch it.
@@ -2943,6 +3015,7 @@
                 cards={[item.card]}
                 assistantLabel={chatAgentDisplayLabel}
                 {streamingMessageId}
+                {runActive}
               />
             {:else if item.kind === 'shared-files'}
               <ChatTranscriptCards

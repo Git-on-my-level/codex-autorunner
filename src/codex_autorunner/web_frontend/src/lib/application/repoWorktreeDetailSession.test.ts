@@ -84,10 +84,13 @@ describe('repo worktree detail session', () => {
     const store = new ReadModelEntityStore();
     store.applyWorktreeDetailSnapshot(worktreeDetailSnapshot('wt-1', 'repo-1'));
     const invalidateTags = vi.fn(async () => undefined);
+    const syncRepoMain = vi.fn(async () => ({ ok: true as const }));
+    const syncWorktree = vi.fn(async () => ({ ok: true as const }));
     const session = createSession('worktree', 'wt-1', {
       store,
       invalidateTags,
-      syncRepoMain: vi.fn(async () => ({ ok: true as const })),
+      syncRepoMain,
+      syncWorktree,
       loadWorktreeDetail: vi.fn(async (worktreeId: string) => {
         store.applyWorktreeDetailSnapshot(worktreeDetailSnapshot(worktreeId, 'repo-1'));
         return { status: 'fetched' as const, tags: [`entity:worktree:${worktreeId}`] };
@@ -98,11 +101,14 @@ describe('repo worktree detail session', () => {
     await session.syncRepo();
 
     expect(session.state.backingRepoId).toBe('repo-1');
+    expect(syncRepoMain).not.toHaveBeenCalled();
+    expect(syncWorktree).toHaveBeenCalledWith('wt-1');
     expect(invalidateTags).toHaveBeenCalledWith([
       'entity:repo-worktree:index',
       'entity:repo:repo-1',
       'entity:worktree:wt-1'
     ]);
+    expect(session.state.notice).toEqual({ tone: 'success', message: 'Synced worktree branch with upstream.' });
   });
 
   it('redirects legacy worktree paths when the parent repo can be resolved', async () => {
@@ -213,6 +219,7 @@ function createSession(
       loadRepoDetail: vi.fn(async () => ({ status: 'cold' as const, tags: [] })),
       loadWorktreeDetail: vi.fn(async () => ({ status: 'cold' as const, tags: [] })),
       syncRepoMain: vi.fn(async () => ({ ok: true as const })),
+      syncWorktree: vi.fn(async () => ({ ok: true as const })),
       invalidateTags: vi.fn(async () => undefined),
       retireWorktree: vi.fn(async () => null),
       retireState: vi.fn(async () => null),

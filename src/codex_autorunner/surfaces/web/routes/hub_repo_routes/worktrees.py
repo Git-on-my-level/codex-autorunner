@@ -14,6 +14,7 @@ if TYPE_CHECKING:
         HubCreateWorktreeRequest,
         HubRetireWorktreeRequest,
     )
+    from .cache_coordinator import HubCacheCoordinator
     from .mount_manager import HubMountManager
     from .services import HubRepoEnricher
 
@@ -25,11 +26,13 @@ class HubWorktreeService:
         mount_manager: HubMountManager,
         enricher: HubRepoEnricher,
         build_force_attestation_payload: Callable[..., Optional[dict[str, str]]],
+        cache_coordinator: Optional[HubCacheCoordinator] = None,
     ) -> None:
         self._context = context
         self._mount_manager = mount_manager
         self._enricher = enricher
         self._build_force_attestation_payload = build_force_attestation_payload
+        self._cache_coordinator = cache_coordinator
 
     async def create_worktree(
         self,
@@ -85,6 +88,28 @@ class HubWorktreeService:
             request_id=self._get_request_id(),
         )
         return job.to_dict()
+
+    async def sync_worktree(self, worktree_repo_id: str) -> dict[str, Any]:
+        from .....core.logging_utils import safe_log
+
+        safe_log(
+            self._context.logger,
+            logging.INFO,
+            "Hub sync worktree id=%s" % (worktree_repo_id,),
+        )
+        try:
+            snapshot = await asyncio.to_thread(
+                self._context.supervisor.sync_worktree,
+                worktree_repo_id=str(worktree_repo_id),
+            )
+        except (RuntimeError, OSError, ValueError, TypeError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if self._cache_coordinator is not None:
+            await self._cache_coordinator.invalidate_caches()
+        else:
+            self._enricher.invalidate_runtime_caches()
+        await self._mount_manager.refresh_mounts([snapshot], full_refresh=False)
+        return cast(dict[str, Any], self._enricher.enrich_repo(snapshot))
 
     def _get_request_id(self) -> Optional[str]:
         from .....core.request_context import get_request_id

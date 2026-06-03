@@ -7,6 +7,11 @@ import pytest
 from fastapi import HTTPException
 
 from codex_autorunner.core.orchestration.models import ThreadTarget
+from codex_autorunner.core.runtime_identity import (
+    RUNTIME_STAGE_EFFECTIVE,
+    RuntimeIdentityEnvelope,
+    RuntimeIdentityStage,
+)
 from codex_autorunner.surfaces.web.schemas import ManagedThreadStartMessageRequest
 from codex_autorunner.surfaces.web.services.pma.managed_thread_read_models import (
     _apply_chat_binding_fields,
@@ -321,6 +326,46 @@ class TestApplyChatBindingFields:
         assert result["binding_count"] == 1
         assert result["chat_display_names"] == ["CAR Workspace / #hermes"]
         assert result["cleanup_protected"] is True
+
+
+class TestSerializeThreadTargetRuntimeProjection:
+    def test_uses_latest_effective_runtime_for_hermes_model(self) -> None:
+        thread = ThreadTarget.from_mapping(
+            {
+                "managed_thread_id": "thread-1",
+                "agent": "hermes",
+                "agent_profile": "m4-pma",
+                "lifecycle_status": "active",
+                "normalized_status": "idle",
+                "backend_runtime_instance_id": "hermes-session-1",
+            }
+        )
+        latest_execution = SimpleNamespace(
+            metadata={
+                "runtime_identity": RuntimeIdentityEnvelope(
+                    effective=RuntimeIdentityStage(
+                        stage=RUNTIME_STAGE_EFFECTIVE,
+                        logical_agent="hermes",
+                        runtime_agent="hermes",
+                        canonical_model_label="claude-opus-4.1",
+                        provider_model_id="claude-opus-4.1",
+                        backend_runtime_id="hermes-session-1",
+                        source="hermes_session_models",
+                    )
+                ).to_dict()
+            }
+        )
+
+        payload = _serialize_thread_target(
+            thread,
+            latest_execution=latest_execution,
+        )
+
+        assert payload["model"] == "claude-opus-4.1"
+        assert payload["model_source"] == "effective.canonical_model_label"
+        assert payload["runtime_source"] == "effective:hermes_session_models"
+        assert payload["runtime"]["model_unknown"] is False
+        assert payload["runtime"]["backend_runtime_id"] == "hermes-session-1"
 
 
 class TestAttachLatestExecutionFields:

@@ -15,11 +15,13 @@
     cards,
     assistantLabel = 'Assistant',
     streamingMessageId = null,
+    runActive = false,
     sharedFiles = []
   }: {
     cards: ChatTranscriptCard[];
     assistantLabel?: string;
     streamingMessageId?: string | null;
+    runActive?: boolean;
     sharedFiles?: ArtifactDelivery[];
   } = $props();
 
@@ -79,11 +81,31 @@
     return trimmed.startsWith('{') || trimmed.startsWith('[');
   }
 
+  // Collapsed disclosure summaries should read as a calm one-line teaser, not a
+  // wall of raw markdown (`**bold**`, backticks, headings). Strip the syntax so
+  // the rendered body — not the summary — carries the formatting.
+  function plainTextPreview(value: string | null | undefined, max = 80): string {
+    if (!value) return '';
+    const stripped = value
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+      .replace(/[*_~]{1,3}([^*_~]+)[*_~]{1,3}/g, '$1')
+      .replace(/^#{1,6}\s+/gm, '')
+      .replace(/^\s*[-*+]\s+/gm, '')
+      .replace(/^\s*>\s?/gm, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!stripped) return '';
+    return stripped.length > max ? `${stripped.slice(0, max).trimEnd()}…` : stripped;
+  }
+
   function traceSummaryLabel(card: Extract<ChatTranscriptCard, { kind: 'intermediate' }>): string {
     const detail = card.detail?.split('·', 1)[0]?.trim();
     if (detail && !looksLikeJson(detail)) return detail;
-    const text = card.text.trim().replace(/\s+/g, ' ');
-    if (text) return text.length > 80 ? `${text.slice(0, 80).trimEnd()}…` : text;
+    const text = plainTextPreview(card.text);
+    if (text) return text;
     return traceKindLabel(card);
   }
 
@@ -118,11 +140,8 @@
     }
     const count = card.detail?.split('·', 1)[0]?.trim();
     if (count && !looksLikeJson(count)) return count;
-    const text = card.text?.trim();
-    if (text) {
-      const oneLine = text.replace(/\s+/g, ' ');
-      return oneLine.length > 80 ? `${oneLine.slice(0, 80).trimEnd()}…` : oneLine;
-    }
+    const text = plainTextPreview(card.text);
+    if (text) return text;
     return 'Reasoning trace';
   }
 
@@ -141,11 +160,57 @@
     userToggled[cardId] = el.open;
   }
 
-  function toolHeadlineText(tool: ChatToolCallCard | undefined): string {
+  function cleanToolLabel(value: string | null | undefined): string {
+    if (!value) return '';
+    // Backend labels frequently arrive as "tool: <command>"; the "tool:" prefix
+    // is noise once the row is already visually marked as a tool call.
+    return value.replace(/^\s*tool:\s*/i, '').trim();
+  }
+
+  function toolPrimaryLabel(tool: ChatToolCallCard | undefined): string {
     if (!tool) return 'Tool call';
-    const summary = tool.summary?.trim();
-    if (summary) return summary;
-    return tool.title;
+    const title = cleanToolLabel(tool.title);
+    if (title) return title;
+    return cleanToolLabel(tool.summary) || 'Tool call';
+  }
+
+  // Only surface the summary line when it carries information beyond the title;
+  // otherwise it is just "tool: <title>" duplicated under the title.
+  function toolSecondaryLabel(tool: ChatToolCallCard): string | null {
+    const summary = cleanToolLabel(tool.summary);
+    if (summary && summary !== toolPrimaryLabel(tool)) return summary;
+    return null;
+  }
+
+  function toolGroupHeadline(card: Extract<ChatTranscriptCard, { kind: 'tool_group' }>): string {
+    const tools = card.tools;
+    if (!tools.length) return 'Tool call';
+    const label = toolPrimaryLabel(tools[0]);
+    if (tools.length === 1) return label;
+    if (tools.every((tool) => toolPrimaryLabel(tool) === label)) return `${label} ×${tools.length}`;
+    return `${label} · +${tools.length - 1} more`;
+  }
+
+  // A tool stuck in `started` after the run has ended never received its
+  // terminal event; show it as indeterminate rather than spinning forever.
+  function effectiveToolState(state: ChatToolCallCard['state']): ChatToolCallCard['state'] {
+    if (state === 'started' && !runActive) return 'unknown';
+    return state;
+  }
+
+  function toolGroupState(card: Extract<ChatTranscriptCard, { kind: 'tool_group' }>): ChatToolCallCard['state'] {
+    const states = card.tools.map((tool) => effectiveToolState(tool.state));
+    if (states.some((state) => state === 'started')) return 'started';
+    if (states.some((state) => state === 'failed')) return 'failed';
+    if (states.length > 0 && states.every((state) => state === 'completed')) return 'completed';
+    return 'unknown';
+  }
+
+  function toolStateLabel(state: ChatToolCallCard['state']): string {
+    if (state === 'started') return 'Running';
+    if (state === 'completed') return 'Completed';
+    if (state === 'failed') return 'Failed';
+    return 'Finished';
   }
 
   function visibleToolGroupItems(card: Extract<ChatTranscriptCard, { kind: 'tool_group' }>): ChatToolCallCard[] {
@@ -203,6 +268,43 @@
 
   const displayCards = $derived(displayCardsFor(cards));
 </script>
+
+{#snippet toolGroupCard(card: Extract<ChatTranscriptCard, { kind: 'tool_group' }>, nested: boolean)}
+  {@const groupState = toolGroupState(card)}
+  <details
+    class={`tool-call-bar tool-group${nested ? ' nested-trace' : ''}`}
+    open={toolGroupOpen(card)}
+    ontoggle={(e) => handleToolToggle(card.id, e)}
+  >
+    <summary>
+      <span class={`tool-status tool-status-${groupState}`} aria-hidden="true"></span>
+      <strong>{toolGroupHeadline(card)}</strong>
+      <span class="sr-only">{toolStateLabel(groupState)}</span>
+    </summary>
+    <ol class="tool-row-list">
+      {#each visibleToolGroupItems(card) as tool (tool.id)}
+        {@const secondary = toolSecondaryLabel(tool)}
+        {@const rowState = effectiveToolState(tool.state)}
+        <li class={`tool-row ${rowState}`}>
+          <span class={`tool-status tool-status-${rowState}`} aria-hidden="true"></span>
+          <span class="tool-row-body">
+            <strong>{toolPrimaryLabel(tool)}</strong>
+            {#if secondary}
+              <small>{secondary}</small>
+            {/if}
+            {#if tool.detail}
+              <pre class="timeline-detail">{tool.detail}</pre>
+            {/if}
+          </span>
+          <span class="sr-only">{toolStateLabel(rowState)}</span>
+        </li>
+      {/each}
+    </ol>
+    {#if omittedToolGroupItemCount(card) > 0}
+      <p class="trace-omitted">{omittedToolGroupItemCount(card)} additional tool calls omitted</p>
+    {/if}
+  </details>
+{/snippet}
 
 {#each displayCards as card (card.id)}
   {#if card.kind === 'message'}
@@ -315,32 +417,7 @@
       </details>
     {/if}
   {:else if card.kind === 'tool_group'}
-    {@const headlineTool = card.tools[0]}
-    {@const isOpen = toolGroupOpen(card)}
-    <details class="tool-call-bar" open={isOpen} ontoggle={(e) => handleToolToggle(card.id, e)}>
-      <summary>
-        <strong>
-          {toolHeadlineText(headlineTool)}{card.tools.length > 1 ? ` · +${card.tools.length - 1} more` : ''}
-        </strong>
-      </summary>
-      <ol>
-        {#each visibleToolGroupItems(card) as tool (tool.id)}
-          <li class={tool.state}>
-            <span>{tool.state}</span>
-            <strong>{tool.title}</strong>
-            {#if tool.summary && tool.summary !== tool.title}
-              <small>{tool.summary}</small>
-            {/if}
-            {#if tool.detail}
-              <pre class="timeline-detail">{tool.detail}</pre>
-            {/if}
-          </li>
-        {/each}
-      </ol>
-      {#if omittedToolGroupItemCount(card) > 0}
-        <p class="trace-omitted">{omittedToolGroupItemCount(card)} additional tool calls omitted</p>
-      {/if}
-    </details>
+    {@render toolGroupCard(card, false)}
   {:else if card.kind === 'turn_summary'}
     <details class="tool-call-bar turn-summary-card">
       <summary>
@@ -378,32 +455,7 @@
               </details>
             {/if}
           {:else if traceCard.kind === 'tool_group'}
-            {@const traceHeadlineTool = traceCard.tools[0]}
-            {@const isNestedOpen = toolGroupOpen(traceCard)}
-            <details class="tool-call-bar nested-trace" open={isNestedOpen} ontoggle={(e) => handleToolToggle(traceCard.id, e)}>
-              <summary>
-                <strong>
-                  {toolHeadlineText(traceHeadlineTool)}{traceCard.tools.length > 1 ? ` · +${traceCard.tools.length - 1} more` : ''}
-                </strong>
-              </summary>
-              <ol>
-                {#each visibleToolGroupItems(traceCard) as tool (tool.id)}
-                  <li class={tool.state}>
-                    <span>{tool.state}</span>
-                    <strong>{tool.title}</strong>
-                    {#if tool.summary && tool.summary !== tool.title}
-                      <small>{tool.summary}</small>
-                    {/if}
-                    {#if tool.detail}
-                      <pre class="timeline-detail">{tool.detail}</pre>
-                    {/if}
-                  </li>
-                {/each}
-              </ol>
-              {#if omittedToolGroupItemCount(traceCard) > 0}
-                <p class="trace-omitted">{omittedToolGroupItemCount(traceCard)} additional tool calls omitted</p>
-              {/if}
-            </details>
+            {@render toolGroupCard(traceCard, true)}
           {:else if traceCard.kind === 'approval'}
             <details class="approval-card nested-trace">
               <summary>

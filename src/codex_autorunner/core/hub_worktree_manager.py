@@ -73,6 +73,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("codex_autorunner.hub_worktree_manager")
 
 _GIT_FETCH_TIMEOUT_SECONDS = 120
+_GIT_PULL_TIMEOUT_SECONDS = 120
 _GIT_WORKTREE_TIMEOUT_SECONDS = 120
 _GIT_PUSH_DELETE_TIMEOUT_SECONDS = 120
 _DOCKER_INSPECT_TIMEOUT_SECONDS = 15
@@ -242,6 +243,77 @@ class WorktreeManager:
             worktree_path, base.worktree_setup_commands, base_repo_id=base_repo_id
         )
         return self._ctx.snapshot_for_repo(repo_id)
+
+    def sync_worktree(self, worktree_repo_id: str) -> RepoSnapshot:
+        self._ctx.invalidate_cache()
+        resolved = self._resolve_worktree_entry(worktree_repo_id)
+        worktree_path = resolved.worktree_path
+        if not worktree_path.exists():
+            raise ValueError(f"Worktree {worktree_repo_id} missing on disk")
+        if not git_available(worktree_path):
+            raise ValueError(f"Worktree {worktree_repo_id} is not a git repository")
+        if not git_is_clean(worktree_path):
+            raise ValueError("Worktree has uncommitted changes; commit or stash first")
+
+        with git_mutation_lock(worktree_path):
+            try:
+                upstream_proc = run_git(
+                    [
+                        "rev-parse",
+                        "--abbrev-ref",
+                        "--symbolic-full-name",
+                        "@{u}",
+                    ],
+                    worktree_path,
+                    check=False,
+                )
+            except GitError as exc:
+                raise ValueError(f"git upstream lookup failed: {exc}") from exc
+            if upstream_proc.returncode != 0:
+                branch = git_branch(worktree_path) or resolved.entry.branch or "current"
+                raise ValueError(
+                    f"Worktree branch {branch} has no upstream; set upstream before syncing"
+                )
+            upstream_ref = (upstream_proc.stdout or "").strip()
+            if not upstream_ref:
+                raise ValueError("Unable to resolve worktree upstream")
+            remote = upstream_ref.split("/", 1)[0] if "/" in upstream_ref else "origin"
+
+            try:
+                fetch_proc = run_git(
+                    ["fetch", "--prune", remote],
+                    worktree_path,
+                    check=False,
+                    timeout_seconds=_GIT_FETCH_TIMEOUT_SECONDS,
+                )
+            except GitError as exc:
+                raise ValueError(f"git fetch failed: {exc}") from exc
+            if fetch_proc.returncode != 0:
+                raise ValueError(f"git fetch failed: {git_failure_detail(fetch_proc)}")
+
+            try:
+                pull_proc = run_git(
+                    ["pull", "--ff-only"],
+                    worktree_path,
+                    check=False,
+                    timeout_seconds=_GIT_PULL_TIMEOUT_SECONDS,
+                )
+            except GitError as exc:
+                raise ValueError(f"git pull failed: {exc}") from exc
+            if pull_proc.returncode != 0:
+                raise ValueError(f"git pull failed: {git_failure_detail(pull_proc)}")
+
+            local_sha = git_head_sha(worktree_path)
+            if not local_sha:
+                raise ValueError("Unable to resolve local HEAD after sync")
+            upstream_sha = resolve_ref_sha(worktree_path, upstream_ref)
+            if local_sha != upstream_sha:
+                raise ValueError(
+                    "Sync worktree did not land on %s: local=%s upstream=%s. "
+                    "Local branch may contain extra commits; resolve divergence first."
+                    % (upstream_ref, local_sha[:12], upstream_sha[:12])
+                )
+        return self._ctx.snapshot_for_repo(worktree_repo_id)
 
     def set_worktree_setup_commands(
         self, repo_id: str, commands: List[str]

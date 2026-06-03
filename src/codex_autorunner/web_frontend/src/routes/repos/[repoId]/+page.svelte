@@ -18,6 +18,7 @@
     loaderResult: untrack(() => data.result),
     dependencies: {
       syncRepoMain: webApi.hub.syncRepoMain,
+      syncWorktree: webApi.hub.syncWorktree,
       retireWorktree: confirmAndRetireWorktree,
       retireState: confirmAndRetireState
     }

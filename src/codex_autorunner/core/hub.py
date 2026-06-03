@@ -523,6 +523,9 @@ class HubSupervisor:
     def sync_main(self, repo_id: str) -> RepoSnapshot:
         return self._repo_manager.sync_main(repo_id)
 
+    def sync_worktree(self, worktree_repo_id: str) -> RepoSnapshot:
+        return self._worktree_manager.sync_worktree(worktree_repo_id)
+
     def create_repo(
         self,
         repo_id: str,
