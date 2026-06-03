@@ -108,8 +108,30 @@ export function buildChatDetailDisplayReadModel(
     ),
     composerWillQueue,
     queueDepthForCommands: input.queuedTurns.length || input.displayedProgress?.queueDepth || 0,
-    runActive: input.displayedProgress?.status === 'running' && !input.displayedProgress.terminal
+    runActive: isRunActiveForToolDisplay(input.displayedProgress, input.activeChat, activeCards)
   };
+}
+
+function isRunActiveForToolDisplay(
+  progress: ChatRunProgress | null,
+  chat: ChatSummary | null,
+  cards: ChatTranscriptCard[]
+): boolean {
+  if (progress?.status === 'running' && !progress.terminal) return true;
+  if (progress?.terminal || progress?.status === 'done' || progress?.status === 'failed') return false;
+  if (!transcriptHasStartedTool(cards)) return false;
+  const status = progress?.status ?? chat?.status;
+  if (status === 'done' || status === 'failed' || status === 'idle') return false;
+  if (status === 'running' || status === 'waiting' || status === 'blocked') return true;
+  return !progress && !chat;
+}
+
+function transcriptHasStartedTool(cards: ChatTranscriptCard[]): boolean {
+  for (const card of cards) {
+    if (card.kind === 'tool_group' && card.tools.some((tool) => tool.state === 'started')) return true;
+    if (card.kind === 'turn_summary' && transcriptHasStartedTool(card.cards)) return true;
+  }
+  return false;
 }
 
 function buildLiveProgressTranscriptCards(
