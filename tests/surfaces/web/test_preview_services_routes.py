@@ -7,7 +7,10 @@ import time
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
+from websockets.sync.server import Server, ServerConnection, serve
 
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.locks import process_is_active
@@ -210,6 +213,109 @@ def test_preview_loopback_http_service_proxies_method_path_query_and_body(
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_preview_loopback_http_streaming_response_stays_incremental(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    server, port = _start_loopback_streaming_server()
+    client = TestClient(create_hub_app(hub_root))
+    try:
+        created = client.post(
+            "/hub/services/loopback-url",
+            json={"url": f"http://127.0.0.1:{port}/", "name": "Stream"},
+        )
+        service_id = created.json()["service"]["service_id"]
+
+        with client.stream("GET", f"/preview/services/{service_id}/events") as response:
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith("text/event-stream")
+            assert list(response.iter_lines()) == ["data: one", "", "data: two", ""]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_preview_loopback_websocket_echo_preserves_path_and_query(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    upstream, port = _start_websocket_echo_server()
+    client = TestClient(create_hub_app(hub_root))
+    try:
+        created = client.post(
+            "/hub/services/loopback-url",
+            json={"url": f"http://127.0.0.1:{port}/base/", "name": "WS"},
+        )
+        assert created.status_code == 200
+        service_id = created.json()["service"]["service_id"]
+
+        with client.websocket_connect(
+            f"/preview/services/{service_id}/nested/socket?token=abc"
+        ) as websocket:
+            websocket.send_text("hello")
+            assert websocket.receive_text() == "path=/base/nested/socket?token=abc"
+            assert websocket.receive_text() == "echo:hello"
+            websocket.send_bytes(b"raw")
+            assert websocket.receive_bytes() == b"echo:raw"
+    finally:
+        upstream.shutdown()
+
+
+def test_preview_loopback_websocket_same_origin_hmr_path_connects(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    upstream, port = _start_websocket_echo_server()
+    client = TestClient(create_hub_app(hub_root))
+    try:
+        created = client.post(
+            "/hub/services/loopback-url",
+            json={"url": f"http://localhost:{port}/", "name": "HMR"},
+        )
+        service_id = created.json()["service"]["service_id"]
+
+        with client.websocket_connect(
+            f"/preview/services/{service_id}/@vite/client"
+        ) as websocket:
+            websocket.send_text("vite-hmr")
+            assert websocket.receive_text() == "path=/@vite/client"
+            assert websocket.receive_text() == "echo:vite-hmr"
+    finally:
+        upstream.shutdown()
+
+
+def test_preview_websocket_rejects_unregistered_and_non_loopback_targets(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    registry = PreviewServiceRegistry(hub_root)
+    record = registry.create_from_parts(
+        name="Remote",
+        kind="loopback_url",
+        target={
+            "host": "example.com",
+            "port": 80,
+            "scheme": "http",
+            "direct_url": "http://example.com/",
+        },
+    )
+    client = TestClient(create_hub_app(hub_root))
+
+    with pytest.raises(WebSocketDisconnect) as missing:
+        with client.websocket_connect("/preview/services/svc_missing000/"):
+            pass
+    assert missing.value.code == 1008
+
+    with pytest.raises(WebSocketDisconnect) as denied:
+        with client.websocket_connect(f"/preview/services/{record.service_id}/"):
+            pass
+    assert denied.value.code == 1008
 
 
 def test_preview_managed_command_proxies_after_start(tmp_path: Path) -> None:
@@ -426,6 +532,41 @@ def _start_loopback_capture_server() -> tuple[http.server.ThreadingHTTPServer, i
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, int(server.server_address[1])
+
+
+def _start_loopback_streaming_server() -> tuple[http.server.ThreadingHTTPServer, int]:
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            for chunk in (b"data: one\n\n", b"data: two\n\n"):
+                self.wfile.write(chunk)
+                self.wfile.flush()
+                time.sleep(0.01)
+
+        def log_message(self, *args: object) -> None:
+            return
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, int(server.server_address[1])
+
+
+def _start_websocket_echo_server() -> tuple[Server, int]:
+    def handler(connection: ServerConnection) -> None:
+        connection.send(f"path={connection.request.path}")
+        for message in connection:
+            if isinstance(message, bytes):
+                connection.send(b"echo:" + message)
+            else:
+                connection.send(f"echo:{message}")
+
+    server = serve(handler, "127.0.0.1", 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, int(server.socket.getsockname()[1])
 
 
 def _find_available_port(start: int = 42000) -> int:

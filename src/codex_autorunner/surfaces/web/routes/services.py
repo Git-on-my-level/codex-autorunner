@@ -6,10 +6,13 @@ from typing import Annotated, Any, Iterable, Optional
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import httpx
-from fastapi import APIRouter, Body, HTTPException, Query, Request
+import websockets
+from fastapi import APIRouter, Body, HTTPException, Query, Request, WebSocket
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from starlette.background import BackgroundTask
+from starlette.websockets import WebSocketDisconnect, WebSocketState
+from websockets.exceptions import ConnectionClosed, WebSocketException
 
 from ....core.config_validation import is_loopback_host
 from ....core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
@@ -366,6 +369,19 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             status_code=400, detail=f"Unsupported service kind: {record.kind}"
         )
 
+    @router.websocket("/preview/services/{service_id}/")
+    @router.websocket("/preview/services/{service_id}/{preview_path:path}")
+    async def preview_service_websocket(
+        websocket: WebSocket,
+        service_id: str,
+        preview_path: str = "",
+    ) -> None:
+        try:
+            record = await _require_record(manager, service_id)
+            await _proxy_websocket(context, record, websocket, preview_path)
+        except HTTPException as exc:
+            await _close_websocket_for_http_error(websocket, exc)
+
     return router
 
 
@@ -691,6 +707,91 @@ async def _proxy_http_request(
     )
 
 
+async def _proxy_websocket(
+    context: HubAppContext,
+    record: PreviewServiceRecord,
+    websocket: WebSocket,
+    preview_path: str,
+) -> None:
+    if not record.exposure.proxy_enabled:
+        raise HTTPException(status_code=404, detail="Preview proxy is disabled")
+    if record.kind not in {
+        PreviewServiceKind.LOOPBACK_URL.value,
+        PreviewServiceKind.MANAGED_COMMAND.value,
+    }:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Preview websocket proxy does not support service kind: {record.kind}",
+        )
+    target_url = _proxy_target_websocket_url(
+        context,
+        record,
+        preview_path,
+        websocket.url.query,
+    )
+    headers = _proxy_websocket_request_headers(websocket.headers.items())
+    try:
+        async with websockets.connect(
+            target_url,
+            additional_headers=headers or None,
+            proxy=None,
+        ) as upstream:
+            await websocket.accept()
+            await _relay_websocket_messages(websocket, upstream)
+    except (OSError, WebSocketException):
+        reason = "Preview websocket proxy failed"
+        if websocket.application_state != WebSocketState.DISCONNECTED:
+            await websocket.close(code=1011, reason=reason)
+        return
+
+
+async def _relay_websocket_messages(websocket: WebSocket, upstream: Any) -> None:
+    async def client_to_upstream() -> None:
+        try:
+            while True:
+                message = await websocket.receive()
+                message_type = message.get("type")
+                if message_type == "websocket.disconnect":
+                    await upstream.close()
+                    return
+                if "text" in message and message["text"] is not None:
+                    await upstream.send(message["text"])
+                elif "bytes" in message and message["bytes"] is not None:
+                    await upstream.send(message["bytes"])
+        except (WebSocketDisconnect, ConnectionClosed):
+            await upstream.close()
+
+    async def upstream_to_client() -> None:
+        try:
+            async for message in upstream:
+                if isinstance(message, bytes):
+                    await websocket.send_bytes(message)
+                else:
+                    await websocket.send_text(str(message))
+        except (WebSocketDisconnect, ConnectionClosed):
+            return
+
+    tasks = {
+        asyncio.create_task(client_to_upstream()),
+        asyncio.create_task(upstream_to_client()),
+    }
+    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    for task in done:
+        task.result()
+
+
+async def _close_websocket_for_http_error(
+    websocket: WebSocket,
+    exc: HTTPException,
+) -> None:
+    code = 1008 if exc.status_code in {400, 403, 404} else 1011
+    reason = str(exc.detail)
+    await websocket.close(code=code, reason=reason[:120])
+
+
 async def _close_proxy_response(
     upstream: httpx.Response,
     client: httpx.AsyncClient,
@@ -724,11 +825,23 @@ def _proxy_target_url(
         base_path = f"{base_path}/"
     full_path = base_path
     if clean_path:
-        full_path = f"{base_path}{quote(clean_path, safe='/')}"
+        full_path = f"{base_path}{quote(clean_path, safe='/@')}"
     base_query = parse_qsl(split.query, keep_blank_values=True)
     request_query = parse_qsl(query_string, keep_blank_values=True)
     query = urlencode(base_query + request_query, doseq=True)
     return urlunsplit((split.scheme, split.netloc, full_path, query, ""))
+
+
+def _proxy_target_websocket_url(
+    context: HubAppContext,
+    record: PreviewServiceRecord,
+    preview_path: str,
+    query_string: str,
+) -> str:
+    http_url = _proxy_target_url(context, record, preview_path, query_string)
+    split = urlsplit(http_url)
+    scheme = "wss" if split.scheme == "https" else "ws"
+    return urlunsplit((scheme, split.netloc, split.path, split.query, ""))
 
 
 def _proxy_host_allowed(context: HubAppContext, host: str) -> bool:
@@ -766,6 +879,20 @@ def _proxy_request_headers(headers: Iterable[tuple[str, str]]) -> dict[str, str]
     for key, value in headers:
         lowered = key.lower()
         if lowered in _HOP_BY_HOP_HEADERS or lowered == "host":
+            continue
+        forwarded[key] = value
+    return forwarded
+
+
+def _proxy_websocket_request_headers(
+    headers: Iterable[tuple[str, str]],
+) -> dict[str, str]:
+    forwarded: dict[str, str] = {}
+    for key, value in headers:
+        lowered = key.lower()
+        if lowered in _HOP_BY_HOP_HEADERS or lowered == "host":
+            continue
+        if lowered.startswith("sec-websocket-"):
             continue
         forwarded[key] = value
     return forwarded
