@@ -101,10 +101,17 @@
     actionId = `${action}:${service.serviceId}`;
     error = null;
     notice = null;
-    const result = await webApi.hub.serviceAction(service.serviceId, action, {
-      force: action !== 'unlink' || serviceActionEligibility(service).canUnlink === false,
-      forceAttestation: `${destructiveConfirmText(action)} requested from Services UI for ${service.serviceId}.`
-    });
+    const shouldForce = action === 'kill' || (action === 'unlink' && serviceActionEligibility(service).canUnlink === false);
+    const result = await webApi.hub.serviceAction(
+      service.serviceId,
+      action,
+      shouldForce
+        ? {
+            force: true,
+            forceAttestation: `${destructiveConfirmText(action)} requested from Services UI for ${service.serviceId}.`
+          }
+        : undefined
+    );
     actionId = null;
     if (!result.ok) {
       error = result.error;

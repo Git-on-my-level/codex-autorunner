@@ -4,6 +4,8 @@ import asyncio
 import logging
 import os
 import subprocess
+import threading
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Literal, cast
@@ -20,6 +22,7 @@ from ..process_termination import terminate_record
 from .health import PreviewServiceHealthResult, check_service_health
 from .logs import (
     DEFAULT_LOG_MAX_BYTES,
+    append_bounded_log_bytes,
     prepare_log_file,
     service_log_relative_path,
     service_log_tail_url,
@@ -49,6 +52,8 @@ logger = logging.getLogger("codex_autorunner.preview_services.supervisor")
 PROCESS_KIND = "preview_service"
 DEFAULT_STOP_GRACE_SECONDS = 1.0
 DEFAULT_KILL_SECONDS = 0.2
+DEFAULT_STARTUP_HEALTH_TIMEOUT_SECONDS = 2.0
+DEFAULT_STARTUP_HEALTH_INTERVAL_SECONDS = 0.05
 
 
 class PreviewServiceSupervisorError(ValueError):
@@ -214,6 +219,8 @@ class PreviewServiceSupervisor:
             raise PreviewServiceSupervisorError("Managed service has no command")
 
         self._registry.update(service_id, {"status": PreviewServiceStatus.STARTING})
+        process: subprocess.Popen[bytes] | None = None
+        pgid: int | None = None
         try:
             allocation = self._allocator.reserve(service_id, record.port_policy)
             current = self._registry.require(service_id)
@@ -239,15 +246,20 @@ class PreviewServiceSupervisor:
                 service_id=service_id,
                 car_url=current.exposure.car_url,
             )
-            with log_path.open("ab", buffering=0) as log_handle:
-                process = subprocess.Popen(
-                    argv,
-                    cwd=command.cwd,
-                    env=env,
-                    stdout=log_handle,
-                    stderr=subprocess.STDOUT,
-                    start_new_session=(os.name != "nt"),
-                )
+            process = subprocess.Popen(
+                argv,
+                cwd=command.cwd,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                start_new_session=(os.name != "nt"),
+            )
+            _start_log_pump(
+                process,
+                log_path,
+                max_bytes=self._log_max_bytes,
+                service_id=service_id,
+            )
             pgid = _process_group_id(process.pid)
             started_at = utc_now_iso()
             updated = self._registry.update(
@@ -276,8 +288,18 @@ class PreviewServiceSupervisor:
                 ),
                 durable=self._durable,
             )
-            return updated
+            return self._verify_startup_health(updated)
         except Exception as exc:
+            if process is not None:
+                terminate_record(
+                    process.pid,
+                    pgid,
+                    grace_seconds=0,
+                    kill_seconds=DEFAULT_KILL_SECONDS,
+                    logger=logger,
+                    event_prefix="preview_services.start_failed_cleanup",
+                )
+                delete_process_record(self._hub_root, PROCESS_KIND, service_id)
             self._registry.update(
                 service_id,
                 lambda latest: _record_failed_without_allocation(latest),
@@ -357,6 +379,44 @@ class PreviewServiceSupervisor:
         )
         self._registry.update(service_id, {"status": status})
         return result
+
+    def _verify_startup_health(
+        self,
+        record: PreviewServiceRecord,
+        *,
+        timeout_seconds: float = DEFAULT_STARTUP_HEALTH_TIMEOUT_SECONDS,
+        interval_seconds: float = DEFAULT_STARTUP_HEALTH_INTERVAL_SECONDS,
+    ) -> PreviewServiceRecord:
+        deadline = time.monotonic() + timeout_seconds
+        latest = record
+        while True:
+            result = check_service_health(latest)
+            if result.ok:
+                return self._registry.update(
+                    latest.service_id,
+                    {"status": PreviewServiceStatus.HEALTHY},
+                )
+            process = latest.process
+            if (
+                process is not None
+                and process.pid
+                and not process_is_active(process.pid)
+            ):
+                delete_process_record(self._hub_root, PROCESS_KIND, latest.service_id)
+                return self._registry.update(
+                    latest.service_id,
+                    lambda current: _record_stopped(
+                        current,
+                        PreviewServiceStatus.FAILED,
+                    ),
+                )
+            if time.monotonic() >= deadline:
+                return self._registry.update(
+                    latest.service_id,
+                    {"status": PreviewServiceStatus.UNHEALTHY},
+                )
+            time.sleep(interval_seconds)
+            latest = self._registry.require(latest.service_id)
 
     def logs(self, service_id: str, *, tail: int = 200) -> str:
         self._registry.require(service_id)
@@ -525,6 +585,44 @@ def _process_group_id(pid: int) -> int | None:
         return os.getpgid(pid)
     except OSError:
         return pid
+
+
+def _start_log_pump(
+    process: subprocess.Popen[bytes],
+    log_path: Path,
+    *,
+    max_bytes: int,
+    service_id: str,
+) -> None:
+    stream = process.stdout
+    if stream is None:
+        return
+
+    def pump() -> None:
+        try:
+            while True:
+                chunk = stream.readline()
+                if not chunk:
+                    return
+                append_bounded_log_bytes(log_path, chunk, max_bytes=max_bytes)
+        except Exception:
+            logger.debug(
+                "preview service log pump failed",
+                extra={"service_id": service_id},
+                exc_info=True,
+            )
+        finally:
+            try:
+                stream.close()
+            except OSError:
+                pass
+
+    thread = threading.Thread(
+        target=pump,
+        name=f"preview-service-log-{service_id}",
+        daemon=True,
+    )
+    thread.start()
 
 
 def _record_process_is_active(record: PreviewServiceRecord) -> bool:

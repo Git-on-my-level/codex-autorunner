@@ -183,6 +183,32 @@ def test_preview_static_target_must_be_under_allowed_root(tmp_path: Path) -> Non
     assert opened.status_code == 403
 
 
+def test_preview_static_workspace_scope_does_not_expand_allowed_roots(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    outside_root = tmp_path / "outside-root"
+    outside_root.mkdir()
+    outside = outside_root / "outside.html"
+    outside.write_text("outside", encoding="utf-8")
+    client = TestClient(create_hub_app(hub_root))
+    created = client.post(
+        "/hub/services/static",
+        json={
+            "path": str(outside),
+            "name": "Outside",
+            "scope_links": [{"kind": "workspace", "path": str(outside_root)}],
+        },
+    )
+    assert created.status_code == 200
+    service_id = created.json()["service"]["service_id"]
+
+    opened = client.get(f"/preview/services/{service_id}/")
+
+    assert opened.status_code == 403
+
+
 def test_preview_loopback_http_service_proxies_method_path_query_and_body(
     tmp_path: Path,
 ) -> None:
@@ -200,18 +226,25 @@ def test_preview_loopback_http_service_proxies_method_path_query_and_body(
 
         response = client.post(
             f"/preview/services/{service_id}/nested/path",
-            params={"q": "one"},
+            params={"q": "one", "token": "hub-secret"},
             content=b"payload",
-            headers={"X-Test-Header": "kept"},
+            headers={
+                "Authorization": "Bearer hub-secret",
+                "Cookie": "car_session=hub-secret",
+                "X-Test-Header": "kept",
+            },
         )
 
         assert response.status_code == 201
         assert response.headers["x-upstream"] == "seen"
+        assert "set-cookie" not in response.headers
         assert response.json() == {
             "method": "POST",
             "path": "/base/nested/path?q=one",
             "body": "payload",
             "header": "kept",
+            "authorization": None,
+            "cookie": None,
         }
     finally:
         server.shutdown()
@@ -257,10 +290,14 @@ def test_preview_loopback_websocket_echo_preserves_path_and_query(
         service_id = created.json()["service"]["service_id"]
 
         with client.websocket_connect(
-            f"/preview/services/{service_id}/nested/socket?token=abc"
+            f"/preview/services/{service_id}/nested/socket?client=abc&token=hub-secret",
+            headers={
+                "Authorization": "Bearer hub-secret",
+                "Cookie": "car_session=hub-secret",
+            },
         ) as websocket:
             websocket.send_text("hello")
-            assert websocket.receive_text() == "path=/base/nested/socket?token=abc"
+            assert websocket.receive_text() == "path=/base/nested/socket?client=abc"
             assert websocket.receive_text() == "echo:hello"
             websocket.send_bytes(b"raw")
             assert websocket.receive_bytes() == b"echo:raw"
@@ -427,7 +464,7 @@ def test_preview_services_managed_lifecycle_logs_and_force_semantics(
     started = client.post(f"/hub/services/{service_id}/start")
     assert started.status_code == 200
     started_service = started.json()["service"]
-    assert started_service["status"] == "running"
+    assert started_service["status"] == "healthy"
     assert started_service["target"]["port"] == port
     pid = started_service["process"]["pid"]
     try:
@@ -585,12 +622,15 @@ def _start_loopback_capture_server() -> tuple[http.server.ThreadingHTTPServer, i
                 "path": self.path,
                 "body": body.decode("utf-8"),
                 "header": self.headers.get("X-Test-Header"),
+                "authorization": self.headers.get("Authorization"),
+                "cookie": self.headers.get("Cookie"),
             }
             content = json.dumps(payload).encode("utf-8")
             self.send_response(201)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(content)))
             self.send_header("X-Upstream", "seen")
+            self.send_header("Set-Cookie", "car_session=upstream; Path=/")
             self.end_headers()
             self.wfile.write(content)
 

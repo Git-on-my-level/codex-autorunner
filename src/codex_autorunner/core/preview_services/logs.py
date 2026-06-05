@@ -66,6 +66,22 @@ def tail_log_file(
     return "".join(text.splitlines(keepends=True)[-line_count:])
 
 
+def append_bounded_log_bytes(path: Path, content: bytes, *, max_bytes: int) -> None:
+    if not content:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if max_bytes > 0:
+        existing = b""
+        if path.exists():
+            with path.open("rb") as handle:
+                handle.seek(max(0, path.stat().st_size - max_bytes))
+                existing = handle.read()
+        path.write_bytes((existing + content)[-max_bytes:])
+        return
+    with path.open("ab") as handle:
+        handle.write(content)
+
+
 def _keep_tail_bytes(path: Path, max_bytes: int) -> None:
     with path.open("rb") as handle:
         handle.seek(max(0, path.stat().st_size - max_bytes))

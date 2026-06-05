@@ -20,6 +20,7 @@ from codex_autorunner.core.preview_services import (
     PreviewServiceSupervisor,
     PreviewServiceSupervisorError,
 )
+from codex_autorunner.core.preview_services import supervisor as supervisor_module
 
 
 def test_register_static_and_loopback_services_do_not_start_processes(
@@ -57,7 +58,7 @@ def test_managed_service_start_creates_process_record_log_and_default_restart_po
         health_check={"type": "http", "path": "/health", "expected_status": [200]},
     )
     try:
-        assert record.status == PreviewServiceStatus.RUNNING.value
+        assert record.status == PreviewServiceStatus.HEALTHY.value
         assert record.process is not None
         assert record.process.pid is not None
         assert process_is_active(record.process.pid)
@@ -79,6 +80,55 @@ def test_managed_service_start_creates_process_record_log_and_default_restart_po
         assert "preview service ready" in log_text
     finally:
         supervisor.stop(record.service_id)
+
+
+def test_start_failure_after_process_launch_cleans_up_child(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    port = _find_available_port()
+    supervisor = PreviewServiceSupervisor(tmp_path, port_range=(port, port))
+    launched = []
+    real_popen = supervisor_module.subprocess.Popen
+
+    def tracking_popen(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        launched.append(process)
+        return process
+
+    def fail_process_record_write(*args, **kwargs):
+        raise OSError("simulated process record write failure")
+
+    monkeypatch.setattr(supervisor_module.subprocess, "Popen", tracking_popen)
+    monkeypatch.setattr(
+        supervisor_module,
+        "write_process_record",
+        fail_process_record_write,
+    )
+
+    with pytest.raises(
+        PreviewServiceSupervisorError,
+        match="simulated process record write failure",
+    ):
+        supervisor.start_managed_command(
+            name="Bookkeeping failure server",
+            argv=_server_command(),
+            cwd=tmp_path,
+            port_policy={"mode": "auto"},
+            health_check={"type": "tcp", "path": None},
+        )
+
+    assert launched
+    assert _wait_for_inactive(launched[0].pid)
+    records = supervisor.registry.list()
+    assert len(records) == 1
+    failed = records[0]
+    assert failed.status == PreviewServiceStatus.FAILED.value
+    assert failed.process is None
+    assert failed.target is None
+    assert failed.port_policy is not None
+    assert failed.port_policy.allocated_port is None
+    assert read_process_record(tmp_path, PROCESS_KIND, failed.service_id) is None
 
 
 def test_stop_restart_and_kill_lifecycle_clean_up_process_records(
@@ -108,7 +158,7 @@ def test_stop_restart_and_kill_lifecycle_clean_up_process_records(
 
     restarted = supervisor.restart(record.service_id)
     restarted_pid = restarted.process.pid if restarted.process else None
-    assert restarted.status == PreviewServiceStatus.RUNNING.value
+    assert restarted.status == PreviewServiceStatus.HEALTHY.value
     assert restarted_pid is not None
     assert restarted_pid != first_pid
 
@@ -128,6 +178,41 @@ def test_stop_restart_and_kill_lifecycle_clean_up_process_records(
     assert killed.process is None
     assert read_process_record(tmp_path, PROCESS_KIND, record.service_id) is None
     assert _wait_for_inactive(restarted_pid)
+
+
+def test_managed_service_logs_are_bounded_while_process_runs(tmp_path: Path) -> None:
+    supervisor = PreviewServiceSupervisor(tmp_path, log_max_bytes=256)
+    script = (
+        "import time\n"
+        "for index in range(200):\n"
+        "    print('line', index, 'x' * 80, flush=True)\n"
+        "time.sleep(30)\n"
+    )
+    record = supervisor.start_managed_command(
+        name="Noisy service",
+        argv=[sys.executable, "-u", "-c", script],
+        cwd=tmp_path,
+        health_check={"type": "none"},
+    )
+    pid = record.process.pid if record.process else None
+    assert pid is not None
+    try:
+        log_path = (
+            tmp_path
+            / ".codex-autorunner"
+            / "services"
+            / "logs"
+            / f"{record.service_id}.log"
+        )
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if log_path.exists() and log_path.stat().st_size > 0:
+                break
+            time.sleep(0.05)
+        assert log_path.exists()
+        assert log_path.stat().st_size <= 256
+    finally:
+        supervisor.stop(record.service_id)
 
 
 def test_close_all_stops_running_managed_services_without_autostarting_stopped(

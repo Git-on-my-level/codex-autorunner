@@ -628,9 +628,6 @@ def _allowed_static_roots(
             value = getattr(snapshot, attr, None)
             if value:
                 roots.append(Path(value))
-    for link in record.scope_links:
-        if str(link.kind) == "workspace" and link.path:
-            roots.append(Path(link.path))
     preview_config = _preview_config(context)
     configured = preview_config.get("static_allowed_roots")
     if isinstance(configured, list):
@@ -851,7 +848,7 @@ def _proxy_target_url(
     if clean_path:
         full_path = f"{base_path}{quote(clean_path, safe='/@')}"
     base_query = parse_qsl(split.query, keep_blank_values=True)
-    request_query = parse_qsl(query_string, keep_blank_values=True)
+    request_query = _proxy_request_query_params(query_string)
     query = urlencode(base_query + request_query, doseq=True)
     return urlunsplit((split.scheme, split.netloc, full_path, query, ""))
 
@@ -897,12 +894,38 @@ _HOP_BY_HOP_HEADERS = {
     "upgrade",
 }
 
+_SENSITIVE_REQUEST_HEADERS = {
+    "authorization",
+    "cookie",
+    "host",
+}
+
+_SENSITIVE_RESPONSE_HEADERS = {
+    "set-cookie",
+}
+
+_SENSITIVE_QUERY_PARAMS = {
+    "token",
+    "auth_token",
+    "access_token",
+    "car_token",
+    "car_auth_token",
+}
+
+
+def _proxy_request_query_params(query_string: str) -> list[tuple[str, str]]:
+    return [
+        (key, value)
+        for key, value in parse_qsl(query_string, keep_blank_values=True)
+        if key.lower() not in _SENSITIVE_QUERY_PARAMS
+    ]
+
 
 def _proxy_request_headers(headers: Iterable[tuple[str, str]]) -> dict[str, str]:
     forwarded: dict[str, str] = {}
     for key, value in headers:
         lowered = key.lower()
-        if lowered in _HOP_BY_HOP_HEADERS or lowered == "host":
+        if lowered in _HOP_BY_HOP_HEADERS or lowered in _SENSITIVE_REQUEST_HEADERS:
             continue
         forwarded[key] = value
     return forwarded
@@ -914,7 +937,7 @@ def _proxy_websocket_request_headers(
     forwarded: dict[str, str] = {}
     for key, value in headers:
         lowered = key.lower()
-        if lowered in _HOP_BY_HOP_HEADERS or lowered == "host":
+        if lowered in _HOP_BY_HOP_HEADERS or lowered in _SENSITIVE_REQUEST_HEADERS:
             continue
         if lowered.startswith("sec-websocket-"):
             continue
@@ -926,7 +949,7 @@ def _proxy_response_headers(headers: Iterable[tuple[str, str]]) -> dict[str, str
     forwarded: dict[str, str] = {}
     for key, value in headers:
         lowered = key.lower()
-        if lowered in _HOP_BY_HOP_HEADERS:
+        if lowered in _HOP_BY_HOP_HEADERS or lowered in _SENSITIVE_RESPONSE_HEADERS:
             continue
         forwarded[key] = value
     return forwarded
