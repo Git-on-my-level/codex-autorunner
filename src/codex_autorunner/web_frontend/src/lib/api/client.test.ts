@@ -185,6 +185,76 @@ describe('API client error handling', () => {
     }
   });
 
+  it('maps preview services read models and lifecycle requests', async () => {
+    const fetcher = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (String(url) === '/hub/read-models/services?scope=repo%3Acar') {
+        return Response.json({
+          services: [
+            {
+              service_id: 'svc_managed123',
+              name: 'Frontend',
+              kind: 'managed_command',
+              status: 'healthy',
+              created_by: 'pma',
+              created_at: '2026-06-05T00:00:00Z',
+              updated_at: '2026-06-05T00:01:00Z',
+              scope_links: [{ kind: 'repo', id: 'car' }],
+              scope: 'repo:car',
+              car_url: '/preview/services/svc_managed123/',
+              proxy_enabled: true,
+              direct_url: 'http://127.0.0.1:39001/',
+              host: '127.0.0.1',
+              port: 39001,
+              owner_pid: 123,
+              logs: { path: '.codex-autorunner/services/logs/svc_managed123.log' }
+            }
+          ],
+          counts: { total: 1, running: 1, attention: 0, managed: 1, static: 0, loopback: 0 }
+        });
+      }
+      if (String(url) === '/hub/services/svc_managed123/kill') {
+        expect(init?.method).toBe('POST');
+        expect(JSON.parse(String(init?.body))).toEqual({
+          force: true,
+          force_attestation: 'terminate preview'
+        });
+        return Response.json({
+          read_model: {
+            service_id: 'svc_managed123',
+            name: 'Frontend',
+            kind: 'managed_command',
+            status: 'stopped',
+            car_url: '/preview/services/svc_managed123/'
+          }
+        });
+      }
+      return new Response('missing', { status: 404 });
+    }) as unknown as typeof fetch;
+    const client = new WebApiClient(fetcher);
+
+    const listed = await client.hub.getServicesReadModel('repo:car');
+    expect(listed.ok).toBe(true);
+    if (listed.ok) {
+      expect(listed.data.counts.running).toBe(1);
+      expect(listed.data.services[0]).toMatchObject({
+        serviceId: 'svc_managed123',
+        kind: 'managed_command',
+        status: 'healthy',
+        scope: 'repo:car',
+        carUrl: '/preview/services/svc_managed123/',
+        port: 39001,
+        ownerPid: 123
+      });
+    }
+
+    const killed = await client.hub.serviceAction('svc_managed123', 'kill', {
+      force: true,
+      forceAttestation: 'terminate preview'
+    });
+    expect(killed.ok).toBe(true);
+    if (killed.ok) expect(killed.data.status).toBe('stopped');
+  });
+
   it('maps typed automation projections for schedule, message, managed, and diagnostic UI states', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({

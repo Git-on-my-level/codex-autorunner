@@ -1,5 +1,10 @@
 import {
   mapReadModelContract,
+  type PreviewServiceKind,
+  type PreviewServiceReadModel,
+  type PreviewServiceScopeLink,
+  type PreviewServiceStatus,
+  type PreviewServicesReadModel,
   type RepoWorktreeDetailSnapshot,
   type RepoWorktreeRuntimeSnapshot,
   type RepoWorktreeTopologySnapshot,
@@ -173,6 +178,19 @@ export type SystemUpdateStatus = {
   updateRunId: string | null;
   updateTarget: string | null;
   raw: JsonRecord;
+};
+
+export type PreviewServiceAction = 'start' | 'stop' | 'restart' | 'health' | 'kill' | 'teardown' | 'unlink';
+
+export type PreviewServiceDestructiveRequest = {
+  force?: boolean;
+  forceAttestation?: string | null;
+};
+
+export type PreviewServiceLogs = {
+  serviceId: string;
+  tail: number;
+  text: string;
 };
 
 export type AutomationScheduleSummary = {
@@ -776,6 +794,55 @@ export class WebApiClient {
       mapResult(await this.getJson<JsonRecord>('/hub/read-models/automations/target-options'), (payload) =>
         asArray(payload.target_options ?? payload.targetOptions).map(mapAutomationTargetOption)
       ),
+    getServicesReadModel: async (scope?: string | null): Promise<ApiResult<PreviewServicesReadModel>> => {
+      const params = new URLSearchParams();
+      if (scope?.trim()) params.set('scope', scope.trim());
+      const query = params.toString();
+      return mapResult(await this.getJson<JsonRecord>(`/hub/read-models/services${query ? `?${query}` : ''}`), mapPreviewServicesReadModel);
+    },
+    getService: async (serviceId: string): Promise<ApiResult<PreviewServiceReadModel>> =>
+      mapResult(await this.getJson<JsonRecord>(`/hub/services/${encodeURIComponent(serviceId)}`), (payload) =>
+        mapPreviewServiceReadModel(asRecord(payload.read_model ?? payload.service ?? payload))
+      ),
+    serviceAction: async (
+      serviceId: string,
+      action: PreviewServiceAction,
+      request: PreviewServiceDestructiveRequest = {}
+    ): Promise<ApiResult<PreviewServiceReadModel>> => {
+      const body =
+        action === 'kill' || action === 'teardown' || action === 'unlink'
+          ? {
+              force: request.force ?? false,
+              force_attestation: request.forceAttestation ?? null
+            }
+          : undefined;
+      return mapResult(
+        await this.requestJson<JsonRecord>(`/hub/services/${encodeURIComponent(serviceId)}/${action}`, {
+          method: 'POST',
+          body
+        }),
+        (payload) => mapPreviewServiceReadModel(asRecord(payload.read_model ?? payload.service ?? payload))
+      );
+    },
+    deleteService: async (
+      serviceId: string,
+      request: PreviewServiceDestructiveRequest = {}
+    ): Promise<ApiResult<PreviewServiceReadModel>> =>
+      mapResult(
+        await this.requestJson<JsonRecord>(`/hub/services/${encodeURIComponent(serviceId)}`, {
+          method: 'DELETE',
+          body: {
+            force: request.force ?? false,
+            force_attestation: request.forceAttestation ?? null
+          }
+        }),
+        (payload) => mapPreviewServiceReadModel(asRecord(payload.read_model ?? payload.service ?? payload))
+      ),
+    getServiceLogs: async (serviceId: string, tail = 200): Promise<ApiResult<PreviewServiceLogs>> =>
+      mapResult(
+        await this.getJson<JsonRecord>(`/hub/services/${encodeURIComponent(serviceId)}/logs?tail=${encodeURIComponent(String(tail))}`),
+        mapPreviewServiceLogs
+      ),
     listAutomations: async (): Promise<ApiResult<AutomationOverview>> =>
       mapResult(await this.getJson<JsonRecord>('/hub/automations'), mapAutomationOverview),
     getAutomation: async (ruleId: string): Promise<ApiResult<AutomationSummary>> =>
@@ -1167,6 +1234,85 @@ function mapSystemUpdateStatus(raw: JsonRecord): SystemUpdateStatus {
   };
 }
 
+function mapPreviewServicesReadModel(raw: JsonRecord): PreviewServicesReadModel {
+  const counts = asRecord(raw.counts);
+  return {
+    services: asArray(raw.services).map(mapPreviewServiceReadModel),
+    counts: {
+      total: numberValue(counts.total, 0),
+      running: numberValue(counts.running, 0),
+      attention: numberValue(counts.attention, 0),
+      managed: numberValue(counts.managed, 0),
+      static: numberValue(counts.static, 0),
+      loopback: numberValue(counts.loopback, 0)
+    }
+  };
+}
+
+function mapPreviewServiceReadModel(raw: JsonRecord): PreviewServiceReadModel {
+  return {
+    serviceId: stringValue(raw.service_id ?? raw.serviceId, ''),
+    name: stringValue(raw.name, 'Untitled service'),
+    kind: previewServiceKind(raw.kind),
+    status: previewServiceStatus(raw.status),
+    createdBy: nullableString(raw.created_by ?? raw.createdBy),
+    createdAt: nullableString(raw.created_at ?? raw.createdAt),
+    updatedAt: nullableString(raw.updated_at ?? raw.updatedAt),
+    scopeLinks: asArray(raw.scope_links ?? raw.scopeLinks).map(mapPreviewServiceScopeLink),
+    scope: nullableString(raw.scope),
+    carUrl: stringValue(raw.car_url ?? raw.carUrl, ''),
+    proxyEnabled: raw.proxy_enabled ?? raw.proxyEnabled ?? true ? true : false,
+    directUrl: nullableString(raw.direct_url ?? raw.directUrl),
+    host: nullableString(raw.host),
+    port: nullableNumber(raw.port),
+    ownerPid: nullableNumber(raw.owner_pid ?? raw.ownerPid),
+    healthCheck: recordOrNull(raw.health_check ?? raw.healthCheck),
+    restartPolicy: asRecord(raw.restart_policy ?? raw.restartPolicy),
+    logs: recordOrNull(raw.logs),
+    metadata: asRecord(raw.metadata),
+    raw
+  };
+}
+
+function mapPreviewServiceScopeLink(raw: JsonRecord): PreviewServiceScopeLink {
+  return {
+    kind: stringValue(raw.kind, 'hub'),
+    id: nullableString(raw.id),
+    path: nullableString(raw.path)
+  };
+}
+
+function mapPreviewServiceLogs(raw: JsonRecord): PreviewServiceLogs {
+  return {
+    serviceId: stringValue(raw.service_id ?? raw.serviceId, ''),
+    tail: numberValue(raw.tail, 0),
+    text: stringValue(raw.text, '')
+  };
+}
+
+function previewServiceKind(value: unknown): PreviewServiceKind {
+  const raw = stringValue(value, 'loopback_url');
+  if (raw === 'static_file' || raw === 'static_dir' || raw === 'loopback_url' || raw === 'managed_command') return raw;
+  return 'loopback_url';
+}
+
+function previewServiceStatus(value: unknown): PreviewServiceStatus {
+  const raw = stringValue(value, 'registered');
+  const allowed = new Set([
+    'registered',
+    'starting',
+    'running',
+    'healthy',
+    'unhealthy',
+    'stopped',
+    'exited',
+    'failed',
+    'orphaned',
+    'conflict'
+  ]);
+  return allowed.has(raw) ? (raw as PreviewServiceStatus) : 'registered';
+}
+
 export function mapResult<T, U>(result: ApiResult<T>, mapper: (data: T) => U): ApiResult<U> {
   if (!result.ok) return result;
   try {
@@ -1204,6 +1350,11 @@ export function partialPageIssue(
 
 function asRecord(value: unknown): JsonRecord {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as JsonRecord) : {};
+}
+
+function recordOrNull(value: unknown): JsonRecord | null {
+  const record = asRecord(value);
+  return Object.keys(record).length ? record : null;
 }
 
 function asArray(value: unknown): JsonRecord[] {

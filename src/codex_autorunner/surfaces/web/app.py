@@ -221,6 +221,8 @@ def create_hub_app(
     @app.get("/repos/{repo_id}/tickets/{ticket_id}/", include_in_schema=False)
     @app.get("/tickets", include_in_schema=False)
     @app.get("/tickets/{ticket_id}", include_in_schema=False)
+    @app.get("/services", include_in_schema=False)
+    @app.get("/services/{rest:path}", include_in_schema=False)
     @app.get("/automations", include_in_schema=False)
     @app.get("/automations/{rest:path}", include_in_schema=False)
     @app.get("/settings", include_in_schema=False)

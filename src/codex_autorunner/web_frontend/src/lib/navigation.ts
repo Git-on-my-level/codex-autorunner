@@ -7,6 +7,7 @@ export type NavItem = {
 export const primaryNav: NavItem[] = [
   { href: '/chats', label: 'Chats' },
   { href: '/repos', label: 'Repos' },
+  { href: '/services', label: 'Services' },
   { href: '/automations', label: 'Automations' },
   { href: '/settings', label: 'Settings' }
 ];

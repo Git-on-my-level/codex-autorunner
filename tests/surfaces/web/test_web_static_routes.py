@@ -29,6 +29,7 @@ PMA_MANUAL_SCREENSHOT_ROUTES = (
     "/contextspace/local",
     "/tickets",
     "/tickets/TICKET-350-smoke-fixture",
+    "/services",
     "/automations",
     "/settings",
     "/settings/general",
