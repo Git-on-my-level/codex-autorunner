@@ -29,6 +29,7 @@ from .commands.protocol import register_protocol_commands
 from .commands.render import register_render_commands
 from .commands.repos import register_repos_commands
 from .commands.root import register_root_commands
+from .commands.services import register_services_commands
 from .commands.telegram import register_telegram_commands
 from .commands.templates import (
     register_template_index_commands,
@@ -150,6 +151,9 @@ ticket_flow_app = typer.Typer(
 )
 telemetry_app = typer.Typer(
     add_completion=False, help="Flow telemetry export and cleanup commands."
+)
+services_app = typer.Typer(
+    add_completion=False, help="Discover and control Preview Services."
 )
 
 
@@ -298,6 +302,14 @@ protocol_app = typer.Typer(
 app.add_typer(protocol_app, name="protocol")
 register_protocol_commands(protocol_app)
 app.add_typer(flow_app, name="flow")
+app.add_typer(services_app, name="services")
+register_services_commands(
+    services_app,
+    require_hub_config=_require_hub_config,
+    build_server_url=_build_server_url,
+    request_json=_request_json,
+    raise_exit=_raise_exit,
+)
 app.add_typer(automation_cli_app, name="automation")
 app.add_typer(
     ticket_flow_app,
