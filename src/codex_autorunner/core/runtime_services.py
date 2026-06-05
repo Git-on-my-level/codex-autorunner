@@ -29,10 +29,12 @@ class RuntimeServices:
         *,
         app_server_supervisor: Optional[object] = None,
         opencode_supervisor: Optional[object] = None,
+        preview_service_manager: Optional[object] = None,
         flow_runtime_builder: Optional[FlowRuntimeBuilder] = None,
     ) -> None:
         self.app_server_supervisor = app_server_supervisor
         self.opencode_supervisor = opencode_supervisor
+        self.preview_service_manager = preview_service_manager
         self._flow_runtime_builder = flow_runtime_builder
         self._flow_runtimes: dict[Path, _FlowRuntimeResources] = {}
         self._owned_supervisors: list[object] = []

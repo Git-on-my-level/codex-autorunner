@@ -41,6 +41,7 @@ from .routes.interactions import build_interaction_routes
 from .routes.pma import build_pma_routes
 from .routes.pma_routes import PmaRuntimeState
 from .routes.scm_webhooks import build_scm_webhook_routes
+from .routes.services import build_services_routes
 from .routes.settings import build_settings_routes
 from .routes.system import build_system_routes
 from .routes.voice import build_voice_routes
@@ -128,6 +129,7 @@ def create_hub_app(
     app.include_router(build_hub_state_routes(context))
     app.include_router(build_chat_surface_event_routes(context))
     app.include_router(build_hub_chat_read_model_router(context))
+    app.include_router(build_services_routes(context))
 
     app.state.hub_started = False
     app.state.hub_deferred_startup_complete = False

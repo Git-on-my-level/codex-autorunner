@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import ast
+import os
 import re
 import sys
 import time
@@ -28,6 +29,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
 TESTS_ROOT = REPO_ROOT / "tests"
 DOCS_ROOT = REPO_ROOT / "docs"
+_SKIP_SCAN_DIRS = {
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".svelte-kit",
+    "__pycache__",
+    "node_modules",
+}
 
 # Copy-paste shapes: backticks, embedded single/double quotes, or a full line CLI.
 _INLINE_CODE = re.compile(
@@ -161,15 +170,26 @@ def _classify_hint_path(root: Any, path: tuple[str, ...]) -> str:
 
 
 def _iter_py_files() -> Iterable[Path]:
-    yield from SRC_ROOT.rglob("*.py")
+    yield from _iter_files(SRC_ROOT, ".py")
     if TESTS_ROOT.is_dir():
-        yield from TESTS_ROOT.rglob("*.py")
+        yield from _iter_files(TESTS_ROOT, ".py")
 
 
 def _iter_md_files() -> Iterable[Path]:
     if not DOCS_ROOT.is_dir():
         return
-    yield from DOCS_ROOT.rglob("*.md")
+    yield from _iter_files(DOCS_ROOT, ".md")
+
+
+def _iter_files(root: Path, suffix: str) -> Iterable[Path]:
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [
+            dirname for dirname in dirnames if dirname not in _SKIP_SCAN_DIRS
+        ]
+        base = Path(dirpath)
+        for filename in filenames:
+            if filename.endswith(suffix):
+                yield base / filename
 
 
 def _strings_from_ast(tree: ast.AST) -> list[tuple[int, str]]:
