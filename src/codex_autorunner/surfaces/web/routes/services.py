@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Iterable, Optional
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
@@ -15,7 +16,11 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
 from ....core.config_validation import is_loopback_host
-from ....core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
+from ....core.force_attestation import (
+    FORCE_ATTESTATION_REQUIRED_PHRASE,
+    enforce_force_attestation,
+)
+from ....core.logging_utils import log_event
 from ....core.preview_services import (
     PreviewPortAllocationError,
     PreviewServiceKind,
@@ -30,6 +35,8 @@ from ....core.preview_services import (
     services_read_model as build_services_read_model,
 )
 from ..app_state import HubAppContext
+
+logger = logging.getLogger("codex_autorunner.preview_services.routes")
 
 
 class ServiceScopeLinkPayload(BaseModel):
@@ -450,9 +457,26 @@ async def _unlink(
             detail="Cannot unlink a running managed preview service without force; use teardown to stop it first.",
         )
     if _is_running_managed(record):
-        _force_attestation(
-            payload,
-            target_scope=f"hub.preview_services.unlink_running:{service_id}",
+        force_attestation = _force_attestation(
+            payload, target_scope=f"hub.preview_services.unlink_running:{service_id}"
+        )
+        try:
+            enforce_force_attestation(
+                force=True,
+                force_attestation=force_attestation,
+                logger=logger,
+                action="hub.preview_services.unlink_running",
+            )
+        except ValueError as exc:
+            raise _bad_request(exc) from exc
+        process = record.process
+        log_event(
+            logger,
+            logging.WARNING,
+            "preview_services.unlink_running_orphans_process",
+            service_id=service_id,
+            pid=process.pid if process is not None else None,
+            pgid=process.pgid if process is not None else None,
         )
     deleted = await asyncio.to_thread(manager.registry.delete, service_id)
     if not deleted:

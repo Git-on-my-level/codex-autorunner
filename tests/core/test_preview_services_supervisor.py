@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 import time
 from pathlib import Path
@@ -129,6 +130,38 @@ def test_stop_restart_and_kill_lifecycle_clean_up_process_records(
     assert _wait_for_inactive(restarted_pid)
 
 
+def test_close_all_stops_running_managed_services_without_autostarting_stopped(
+    tmp_path: Path,
+) -> None:
+    port = _find_available_port()
+    supervisor = PreviewServiceSupervisor(tmp_path, port_range=(port, port))
+    stopped = supervisor.register_managed_command(
+        name="Stopped server",
+        argv=_server_command(),
+        cwd=tmp_path,
+        port_policy={"mode": "auto"},
+        auto_start_on_hub_start=True,
+    )
+    running = supervisor.start(stopped.service_id)
+    pid = running.process.pid if running.process else None
+    assert pid is not None
+    assert _wait_for_process(pid)
+
+    asyncio.run(supervisor.close_all())
+
+    closed = supervisor.registry.require(running.service_id)
+    assert closed.status == PreviewServiceStatus.STOPPED.value
+    assert closed.process is None
+    assert closed.restart_policy.auto_start_on_hub_start is True
+    assert read_process_record(tmp_path, PROCESS_KIND, running.service_id) is None
+    assert _wait_for_inactive(pid)
+
+    fresh_manager = PreviewServiceSupervisor(tmp_path, port_range=(port, port))
+    after_restart = fresh_manager.registry.require(stopped.service_id)
+    assert after_restart.status == PreviewServiceStatus.STOPPED.value
+    assert after_restart.process is None
+
+
 def _server_command() -> list[str]:
     script = (
         "import http.server, os\n"
@@ -188,6 +221,15 @@ def _wait_for_log(
             return text
         time.sleep(0.05)
     return text
+
+
+def _wait_for_process(pid: int, *, timeout: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process_is_active(pid):
+            return True
+        time.sleep(0.05)
+    return process_is_active(pid)
 
 
 def _wait_for_inactive(pid: int, *, timeout: float = 5.0) -> bool:

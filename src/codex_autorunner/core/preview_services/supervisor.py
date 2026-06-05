@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import subprocess
@@ -365,6 +366,22 @@ class PreviewServiceSupervisor:
             lines=tail,
             max_bytes=self._log_max_bytes,
         )
+
+    async def close_all(self) -> None:
+        records = await asyncio.to_thread(self._registry.list)
+        for record in records:
+            if record.kind != PreviewServiceKind.MANAGED_COMMAND.value:
+                continue
+            if record.process is None:
+                continue
+            try:
+                await asyncio.to_thread(self.stop, record.service_id)
+            except Exception:  # intentional: shutdown cleanup must continue
+                logger.debug(
+                    "error stopping preview service during close_all",
+                    extra={"service_id": record.service_id},
+                    exc_info=True,
+                )
 
 
 def _scope_links(

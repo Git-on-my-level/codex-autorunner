@@ -122,6 +122,20 @@ def test_runtime_services_close_deduplicates_supervisors() -> None:
     assert supervisor.closed == 1
 
 
+def test_runtime_services_close_closes_preview_service_manager() -> None:
+    app_server_supervisor = _FakeSupervisor()
+    preview_service_manager = _FakeSupervisor()
+    services = RuntimeServices(
+        app_server_supervisor=app_server_supervisor,
+        preview_service_manager=preview_service_manager,
+    )
+
+    asyncio.run(services.close())
+
+    assert app_server_supervisor.closed == 1
+    assert preview_service_manager.closed == 1
+
+
 @pytest.mark.asyncio
 async def test_repo_app_lifespan_closes_runtime_services(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

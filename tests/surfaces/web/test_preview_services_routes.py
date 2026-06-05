@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import http.server
+import logging
 import sys
 import threading
 import time
@@ -14,7 +15,9 @@ from websockets.sync.server import Server, ServerConnection, serve
 
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.locks import process_is_active
-from codex_autorunner.core.preview_services import PreviewServiceRegistry
+from codex_autorunner.core.managed_processes.registry import read_process_record
+from codex_autorunner.core.preview_services import PROCESS_KIND, PreviewServiceRegistry
+from codex_autorunner.core.process_termination import terminate_record
 from codex_autorunner.server import create_hub_app
 
 
@@ -450,6 +453,72 @@ def test_preview_services_managed_lifecycle_logs_and_force_semantics(
     teardown = client.post(f"/hub/services/{service_id}/teardown")
     assert teardown.status_code == 200
     assert teardown.json()["deleted"] is True
+
+
+def test_preview_services_forced_unlink_requires_attestation_and_logs_orphan(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    client = TestClient(create_hub_app(hub_root))
+    port = _find_available_port()
+    created = client.post(
+        "/hub/services/managed",
+        json={
+            "name": "Managed preview",
+            "argv": _server_command(),
+            "cwd": str(tmp_path),
+            "port_policy": {"mode": "exact", "port": port},
+            "health_check": {"type": "tcp", "path": None},
+            "start": True,
+        },
+    )
+    assert created.status_code == 200
+    service = created.json()["service"]
+    service_id = service["service_id"]
+    process = service["process"]
+    pid = process["pid"]
+    pgid = process["pgid"]
+    try:
+        assert _wait_for_process(pid)
+
+        force_without_attestation = client.post(
+            f"/hub/services/{service_id}/unlink",
+            json={"force": True},
+        )
+        assert force_without_attestation.status_code == 400
+        assert "--force requires --force-attestation" in force_without_attestation.text
+        assert client.get(f"/hub/services/{service_id}").status_code == 200
+        assert process_is_active(pid)
+
+        with caplog.at_level(
+            logging.WARNING,
+            logger="codex_autorunner.preview_services.routes",
+        ):
+            forced = client.post(
+                f"/hub/services/{service_id}/unlink",
+                json={
+                    "force": True,
+                    "force_attestation": "test intentionally leaves process running",
+                },
+            )
+        assert forced.status_code == 200
+        assert forced.json()["deleted"] is True
+        assert client.get(f"/hub/services/{service_id}").status_code == 404
+        assert process_is_active(pid)
+        assert read_process_record(hub_root, PROCESS_KIND, service_id) is not None
+        assert "preview_services.unlink_running_orphans_process" in caplog.text
+    finally:
+        if process_is_active(pid):
+            terminate_record(
+                pid,
+                pgid,
+                grace_seconds=0,
+                kill_seconds=0.2,
+                logger=logging.getLogger("test.preview_services.unlink"),
+                event_prefix="test.preview_services.unlink.cleanup",
+            )
 
 
 def test_preview_services_port_conflict_returns_409(tmp_path: Path) -> None:

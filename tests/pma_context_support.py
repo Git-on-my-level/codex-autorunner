@@ -1364,6 +1364,7 @@ def test_build_snapshot_freshness_summary_omits_empty_sections_and_adds_summary(
         inbox=[],
         action_queue=[],
         managed_threads=[],
+        services={"running_sample": [], "attention_sample": []},
         pma_files_detail={"inbox": [], "outbox": [], "consumed": [], "dismissed": []},
     )
 

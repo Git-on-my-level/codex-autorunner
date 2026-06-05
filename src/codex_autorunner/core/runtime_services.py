@@ -83,6 +83,7 @@ class RuntimeServices:
             for supervisor in (
                 self.app_server_supervisor,
                 self.opencode_supervisor,
+                self.preview_service_manager,
                 *self._owned_supervisors,
             ):
                 if supervisor is None:
