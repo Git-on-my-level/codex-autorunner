@@ -119,6 +119,51 @@ def pytest_configure(config: pytest.Config) -> None:
     )
 
 
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    _ = exitstatus
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        return
+    roots = _get_hermetic_roots()
+    configured_basetemp = getattr(session.config.option, "basetemp", None)
+    if not configured_basetemp:
+        return
+    if Path(configured_basetemp).resolve(strict=False) != (
+        roots.pytest_basetemp_root.resolve(strict=False)
+    ):
+        return
+
+    cleanup_module = roots.load_pytest_temp_cleanup_module()
+    basetemp_root = roots.pytest_basetemp_root
+    summary = cleanup_module.cleanup_temp_paths((basetemp_root,))
+    if basetemp_root.exists() and not summary.active_paths:
+        for _attempt in range(3):
+            try:
+                shutil.rmtree(basetemp_root)
+                break
+            except FileNotFoundError:
+                break
+            except OSError:
+                time.sleep(0.1)
+    failures: list[str] = []
+    if summary.active_paths:
+        failures.append(
+            "active processes remained under pytest basetemp root: "
+            + _format_temp_processes(summary.active_processes)
+        )
+    if summary.failed_paths:
+        failures.append("; ".join(summary.failed_paths))
+    if basetemp_root.exists():
+        failures.append(
+            f"pytest basetemp root still exists after cleanup: {basetemp_root}"
+        )
+    if failures:
+        raise AssertionError(" ; ".join(failures))
+    try:
+        roots.pytest_temp_run_root.rmdir()
+    except OSError:
+        pass
+
+
 def pytest_collection_modifyitems(
     session: pytest.Session, config: pytest.Config, items: list[pytest.Item]
 ) -> None:

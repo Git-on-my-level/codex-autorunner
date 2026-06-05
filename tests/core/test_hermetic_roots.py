@@ -26,6 +26,7 @@ def test_from_repo_root_builds_per_run_per_worker_paths(
     assert roots.process_token == "gw7"
     assert roots.temp_root_max_bytes == 2048
     assert roots.pytest_temp_run_root == roots.pytest_temp_root / "run-123"
+    assert roots.pytest_basetemp_root == roots.pytest_temp_run_root / "basetemp"
     assert roots.pytest_process_root == roots.pytest_temp_run_root / "gw7"
     assert roots.pytest_tmp_root == roots.pytest_process_root / "tmp"
     assert roots.pytest_home_root == roots.pytest_process_root / "home"
