@@ -14,6 +14,11 @@ export type SettingsAgentStatus = {
   id: string;
   name: string;
   capabilities: string[];
+  reachable: boolean | null;
+  usable: boolean;
+  status: string;
+  statusLabel: string;
+  statusDetail: string;
   modelStatus: 'available' | 'unsupported' | 'unavailable';
   modelCount: number;
   modelLabel: string;
@@ -54,12 +59,14 @@ export type SettingsVoiceStatus = {
 export type SettingsBuildInput = {
   session?: JsonRecord | null;
   agents?: JsonRecord[];
+  agentStatuses?: JsonRecord[];
   modelCatalogs?: Record<string, JsonRecord[] | null>;
   voiceConfig?: JsonRecord | null;
 };
 
 export function buildSettingsViewModel(input: SettingsBuildInput): SettingsViewModel {
-  const agents = input.agents ?? [];
+  const selectableAgents = input.agents ?? [];
+  const agents = input.agentStatuses?.length ? input.agentStatuses : selectableAgents;
   const modelCatalogs = input.modelCatalogs ?? {};
   const agentStatuses = agents.map((agent) => mapAgentStatus(agent, modelCatalogs));
   const session = mapSession(input.session ?? {});
@@ -83,8 +90,13 @@ export function buildSettingsViewModel(input: SettingsBuildInput): SettingsViewM
     integrations: [
       {
         label: 'Agent capability discovery',
-        value: agents.length > 0 ? `${agents.length} agents detected` : 'No agents detected',
-        tone: agents.length > 0 ? 'ok' : 'warning'
+        value:
+          selectableAgents.length > 0
+            ? `${selectableAgents.length} ready agents`
+            : agents.length > 0
+              ? 'No ready agents'
+              : 'No agents configured',
+        tone: selectableAgents.length > 0 ? 'ok' : 'warning'
       },
       {
         label: 'Chat setup',
@@ -223,23 +235,39 @@ function mapSession(raw: JsonRecord): SettingsSessionState {
 function mapAgentStatus(agent: JsonRecord, modelCatalogs: Record<string, JsonRecord[] | null>): SettingsAgentStatus {
   const id = (stringValue(agent.id) || 'agent').toLowerCase();
   const capabilities = stringArray(agent.capabilities);
+  const reachable = typeof agent.reachable === 'boolean' ? agent.reachable : null;
+  const usable = agent.usable !== false && reachable !== false;
+  const status = stringValue(agent.status) || (reachable === null ? 'configured' : usable ? 'ready' : 'offline');
+  const statusLabel = stringValue(agent.status_label ?? agent.statusLabel) || (reachable === null ? 'Configured' : usable ? 'Ready' : 'Offline');
+  const statusDetail =
+    stringValue(agent.status_detail ?? agent.statusDetail) ||
+    (reachable === null ? 'This agent is configured; CAR cannot verify live reachability yet.' : usable ? 'Runtime is reachable.' : 'This agent is not reachable right now.');
   const models = modelCatalogs[id] ?? modelCatalogs[stringValue(agent.id)] ?? null;
   const modelGate = capabilityGate(agent, 'list_models');
-  const modelStatus = modelGate.allowed ? (models ? 'available' : 'unavailable') : 'unsupported';
+  const modelStatus = !usable ? 'unavailable' : modelGate.allowed ? (models ? 'available' : 'unavailable') : 'unsupported';
   const modelCount = models?.length ?? 0;
   const modelOptions = modelCatalogOptions(models);
   return {
     id,
     name: stringValue(agent.name) || id,
     capabilities,
+    reachable,
+    usable,
+    status,
+    statusLabel,
+    statusDetail,
     modelStatus,
     modelCount,
     modelLabel:
       modelStatus === 'available'
         ? `${modelCount} models`
         : modelStatus === 'unsupported'
-          ? modelGate.reason || 'Model listing unsupported'
-          : 'Model listing unavailable',
+          ? modelGate.reason || 'Model selection not supported'
+          : reachable === null
+            ? 'Model selection not verified yet'
+            : !usable
+              ? 'Agent offline; models unavailable'
+            : 'Could not load models',
     modelOptions
   };
 }

@@ -133,6 +133,7 @@
     view = buildSettingsViewModel({
       session: currentSession,
       agents: catalog.agents,
+      agentStatuses: catalog.agentStatuses,
       modelCatalogs: catalog.modelCatalogs,
       voiceConfig: settingsVoiceRaw
     });

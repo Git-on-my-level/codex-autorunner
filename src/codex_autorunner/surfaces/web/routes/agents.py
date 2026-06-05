@@ -5,12 +5,16 @@ Agent harness support routes (models + event streaming).
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any, AsyncIterator, Iterable, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from ....agents.registry import get_agent_descriptor, get_available_agents
+from ....agents.registry import (
+    get_agent_descriptor,
+    get_registered_agents,
+)
 from ....core.agent_capability_projection import project_agent_capabilities
 from ....core.orchestration.catalog import map_agent_capabilities
 from ....core.sse import format_sse
@@ -28,66 +32,126 @@ _logger = logging.getLogger(__name__)
 _serialize_model_catalog = serialize_model_catalog
 
 
-def _available_agents(request: Request) -> tuple[list[dict[str, Any]], str]:
-    agents: list[dict[str, Any]] = []
-    default_agent: Optional[str] = None
+@dataclass(frozen=True)
+class AgentCatalogSnapshot:
+    agents: list[dict[str, Any]]
+    statuses: list[dict[str, Any]]
+    default_agent: str
 
-    available = get_available_agents(request.app.state)
 
-    for agent_id, descriptor in available.items():
-        agent_data: dict[str, Any] = {
-            "id": agent_id,
-            "name": descriptor.name,
-            "capabilities": sorted(map_agent_capabilities(descriptor.capabilities)),
-        }
-        projection = project_agent_capabilities(
-            agent_id,
-            agent_data["capabilities"],
+def _serialize_agent_payload(
+    request: Request,
+    agent_id: str,
+    descriptor: Any,
+) -> dict[str, Any]:
+    agent_data: dict[str, Any] = {
+        "id": agent_id,
+        "name": descriptor.name,
+        "capabilities": sorted(map_agent_capabilities(descriptor.capabilities)),
+    }
+    projection = project_agent_capabilities(
+        agent_id,
+        agent_data["capabilities"],
+    )
+    agent_data["capability_projection"] = projection.to_dict()
+    agent_profiles = _serialize_agent_profiles(request, agent_id)
+    if agent_profiles["profiles"]:
+        agent_data.update(agent_profiles)
+    if agent_id == "codex":
+        agent_data["protocol_version"] = "2.0"
+    if agent_id == "opencode":
+        supervisor = getattr(request.app.state, "opencode_supervisor", None)
+        if supervisor and hasattr(supervisor, "_handles"):
+            handles = supervisor._handles
+            if handles:
+                first_handle = next(iter(handles.values()), None)
+                if first_handle:
+                    version = getattr(first_handle, "version", None)
+                    if version:
+                        agent_data["version"] = str(version)
+    return agent_data
+
+
+def _agent_health_status(
+    agent_id: str, descriptor: Any, context: Any
+) -> dict[str, Any]:
+    capabilities = sorted(map_agent_capabilities(descriptor.capabilities))
+    if descriptor.healthcheck is None:
+        status = "configured"
+        label = "Configured"
+        detail = "This agent is configured; CAR cannot verify live reachability yet."
+        reachable: bool | None = None
+        usable = True
+    else:
+        try:
+            reachable = bool(descriptor.healthcheck(context))
+        except (
+            Exception
+        ):  # intentional: status endpoint must not expose raw backend faults
+            reachable = False
+        usable = reachable
+        status = "ready" if reachable else "offline"
+        label = "Ready" if reachable else "Offline"
+        detail = (
+            "Runtime is reachable."
+            if reachable
+            else "This agent is not reachable right now."
         )
-        agent_data["capability_projection"] = projection.to_dict()
-        agent_profiles = _serialize_agent_profiles(request, agent_id)
-        if agent_profiles["profiles"]:
-            agent_data.update(agent_profiles)
-        if agent_id == "codex":
-            agent_data["protocol_version"] = "2.0"
-        if agent_id == "opencode":
-            supervisor = getattr(request.app.state, "opencode_supervisor", None)
-            if supervisor and hasattr(supervisor, "_handles"):
-                handles = supervisor._handles
-                if handles:
-                    first_handle = next(iter(handles.values()), None)
-                    if first_handle:
-                        version = getattr(first_handle, "version", None)
-                        if version:
-                            agent_data["version"] = str(version)
+    payload: dict[str, Any] = {
+        "id": agent_id,
+        "name": descriptor.name,
+        "capabilities": capabilities,
+        "reachable": reachable,
+        "usable": usable,
+        "status": status,
+        "status_label": label,
+        "status_detail": detail,
+    }
+    payload["capability_projection"] = project_agent_capabilities(
+        agent_id,
+        capabilities,
+    ).to_dict()
+    return payload
+
+
+def _agent_is_usable(agent_id: str, descriptor: Any, context: Any) -> bool:
+    return bool(_agent_health_status(agent_id, descriptor, context)["usable"])
+
+
+def build_agent_catalog_snapshot(request: Request) -> AgentCatalogSnapshot:
+    agents: list[dict[str, Any]] = []
+    statuses: list[dict[str, Any]] = []
+    default_agent: Optional[str] = None
+    context = request.app.state
+
+    registered = get_registered_agents(context)
+    for agent_id, descriptor in registered.items():
+        status = _agent_health_status(agent_id, descriptor, context)
+        statuses.append(status)
+        if not status["usable"]:
+            continue
+        agent_data = _serialize_agent_payload(request, agent_id, descriptor)
         agents.append(agent_data)
         if default_agent is None:
             default_agent = agent_id
 
-    if not agents:
-        fallback_descriptor = get_agent_descriptor("codex", request.app.state)
-        if fallback_descriptor is not None:
-            agents = [
-                {
-                    "id": fallback_descriptor.id,
-                    "name": fallback_descriptor.name,
-                    "protocol_version": "2.0",
-                    "capabilities": [],
-                }
-            ]
-            default_agent = fallback_descriptor.id
-        else:
-            agents = [
-                {
-                    "id": "codex",
-                    "name": "Codex",
-                    "protocol_version": "2.0",
-                    "capabilities": [],
-                }
-            ]
-            default_agent = "codex"
+    return AgentCatalogSnapshot(
+        agents=agents,
+        statuses=statuses,
+        default_agent=default_agent or "",
+    )
 
-    return agents, default_agent or "codex"
+
+def _available_agents(request: Request) -> tuple[list[dict[str, Any]], str]:
+    snapshot = build_agent_catalog_snapshot(request)
+    return snapshot.agents, snapshot.default_agent
+
+
+def serialize_agent_statuses(context: Any) -> list[dict[str, Any]]:
+    statuses: list[dict[str, Any]] = []
+    for agent_id, descriptor in get_registered_agents(context).items():
+        statuses.append(_agent_health_status(agent_id, descriptor, context))
+    return statuses
 
 
 def _serialize_agent_profiles(request: Request, agent_id: str) -> dict[str, Any]:
@@ -126,8 +190,12 @@ def build_agents_routes() -> APIRouter:
 
     @router.get("/api/agents")
     def list_agents(request: Request) -> dict[str, Any]:
-        agents, default_agent = _available_agents(request)
-        return {"agents": agents, "default": default_agent}
+        snapshot = build_agent_catalog_snapshot(request)
+        return {
+            "agents": snapshot.agents,
+            "agent_statuses": snapshot.statuses,
+            "default": snapshot.default_agent,
+        }
 
     @router.get("/api/agents/{agent}/models")
     async def list_agent_models(agent: str, request: Request):
@@ -139,6 +207,11 @@ def build_agents_routes() -> APIRouter:
         descriptor = get_agent_descriptor(agent_id, request.app.state)
         if descriptor is None:
             raise HTTPException(status_code=404, detail="Unknown agent")
+        if not _agent_is_usable(agent_id, descriptor, request.app.state):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Agent '{agent_id}' is not reachable",
+            )
         if "model_listing" not in descriptor.capabilities:
             gate = project_agent_capabilities(
                 agent_id,
@@ -222,4 +295,8 @@ def build_agents_routes() -> APIRouter:
     return router
 
 
-__all__ = ["build_agents_routes"]
+__all__ = [
+    "build_agent_catalog_snapshot",
+    "build_agents_routes",
+    "serialize_agent_statuses",
+]

@@ -76,11 +76,7 @@
     return fallbackAgentIds.map((id) => ({ id, label: id }));
   });
   const agentOptions = $derived.by<DropdownSelectOption[]>(() => {
-    const entries = agentPickerEntries.map((entry) => ({ value: entry.id, label: entry.label }));
-    if (agentValue && !agentPickerEntries.some((entry) => entry.id === agentValue)) {
-      return [{ value: agentValue, label: agentValue }, ...entries];
-    }
-    return entries;
+    return agentPickerEntries.map((entry) => ({ value: entry.id, label: entry.label }));
   });
 
   const resolvedShowAgent = $derived(showAgent ?? agentPickerEntries.length > 0);

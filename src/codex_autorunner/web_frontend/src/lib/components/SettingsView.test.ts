@@ -118,7 +118,7 @@ describe('settings page shell', () => {
     expect(body).toContain('Codex');
     expect(body).toContain('Default model');
     expect(body).toContain('Use built-in default');
-    expect(body).toContain('Model selection unavailable');
+    expect(body).toContain('Model listing unsupported');
     expect(body).toContain('Saved');
     expect(body).not.toContain('6 models');
     expect(body).not.toContain('Sensitive CAR approval');

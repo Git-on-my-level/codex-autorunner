@@ -160,7 +160,7 @@ function createHarness(options: {
       updateTicket: vi.fn().mockResolvedValue(ok({}))
     },
     pma: {
-      listAgents: vi.fn().mockResolvedValue(ok({ agents: options.agents ?? [], default: 'codex', defaults: {} })),
+      listAgents: vi.fn().mockResolvedValue(ok({ agents: options.agents ?? [], agentStatuses: options.agents ?? [], default: 'codex', defaults: {}, setupPrompt: '' })),
       listAgentModels: vi.fn().mockResolvedValue(ok([{ id: 'gpt-5.5' }])),
       createChat: vi.fn().mockResolvedValue(ok({ id: 'chat-1' })),
       sendMessage: vi.fn().mockResolvedValue(ok({ id: 'turn-1' }))

@@ -54,7 +54,7 @@ describe('ChatDetailPageController', () => {
       onCreateInitialDraft: createInitialDraft,
       supportApi: {
         ...supportApi(),
-        listAgents: async (): Promise<ApiResult<{ agents: JsonRecord[]; defaults: JsonRecord; default: string }>> =>
+        listAgents: async (): Promise<ApiResult<{ agents: JsonRecord[]; agentStatuses: JsonRecord[]; defaults: JsonRecord; default: string; setupPrompt: string }>> =>
           ({ ok: false, error: { kind: 'http', status: 500, code: 'agents_failed', message: 'agents failed' } })
       }
     });
@@ -280,8 +280,8 @@ function route(chatId?: string) {
 function supportApi() {
   return {
     listFiles: async (): Promise<ApiResult<SurfaceArtifact[]>> => ok([]),
-    listAgents: async (): Promise<ApiResult<{ agents: JsonRecord[]; defaults: JsonRecord; default: string }>> =>
-      ok({ agents: [{ id: 'codex' }], defaults: { agent: 'codex', profile: '' }, default: 'codex' }),
+    listAgents: async (): Promise<ApiResult<{ agents: JsonRecord[]; agentStatuses: JsonRecord[]; defaults: JsonRecord; default: string; setupPrompt: string }>> =>
+      ok({ agents: [{ id: 'codex' }], agentStatuses: [{ id: 'codex' }], defaults: { agent: 'codex', profile: '' }, default: 'codex', setupPrompt: '' }),
     repoWorktreeTopology: async (): Promise<ApiResult<RepoWorktreeTopologySnapshot>> => ok({
       contractVersion: READ_MODEL_CONTRACT_VERSION,
       kind: 'repo_worktree.topology.snapshot',

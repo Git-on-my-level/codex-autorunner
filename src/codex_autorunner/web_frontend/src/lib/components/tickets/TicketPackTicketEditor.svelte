@@ -52,7 +52,7 @@
   let lastTicketKey = $state<string | null>(null);
 
   const numberLabel = $derived(ticketPackNumberLabel(ticket.path, index));
-  const agentOptions = $derived(agents.length > 0 ? agentIdsFromPmaAgentsPayload(agents) : ['codex']);
+  const agentOptions = $derived(agentIdsFromPmaAgentsPayload(agents));
   const selectedAgentRecord = $derived(agentRecordForId(agents, editAgent));
   const selectedAgentCanListModels = $derived(agentCanListModels(selectedAgentRecord));
   const bodyHtml = $derived(renderMarkdownToHtml(editBody));

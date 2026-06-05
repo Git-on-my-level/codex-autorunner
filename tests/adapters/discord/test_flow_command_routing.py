@@ -128,6 +128,7 @@ async def test_service_flow_run_autocomplete_filters_for_action_and_query(
 
 
 @pytest.mark.anyio
+@pytest.mark.slow
 async def test_car_flow_resume_with_partial_run_id_prompts_filtered_picker(
     tmp_path: Path,
 ) -> None:

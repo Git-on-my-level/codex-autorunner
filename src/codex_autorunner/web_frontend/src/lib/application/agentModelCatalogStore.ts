@@ -14,8 +14,10 @@ export type AgentModelCatalogAgentState = {
 export type AgentModelCatalogState = {
   status: AgentModelCatalogStatus;
   agents: JsonRecord[];
+  agentStatuses: JsonRecord[];
   defaultAgent: string;
   defaults: JsonRecord;
+  setupPrompt: string;
   error: ApiError | null;
   modelCatalogs: Record<string, JsonRecord[] | null>;
   modelStates: Record<string, AgentModelCatalogAgentState>;
@@ -81,8 +83,10 @@ export class AgentModelCatalogStore implements Readable<AgentModelCatalogState> 
     this.commit({
       status: 'ready',
       agents,
+      agentStatuses: agentsResult.data.agentStatuses,
       defaultAgent: agentsResult.data.default,
       defaults: agentsResult.data.defaults,
+      setupPrompt: agentsResult.data.setupPrompt,
       error: null,
       modelCatalogs,
       modelStates
@@ -136,8 +140,10 @@ function initialAgentModelCatalogState(): AgentModelCatalogState {
   return {
     status: 'idle',
     agents: [],
+    agentStatuses: [],
     defaultAgent: '',
     defaults: {},
+    setupPrompt: '',
     error: null,
     modelCatalogs: {},
     modelStates: {}

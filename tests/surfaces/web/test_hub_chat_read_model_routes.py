@@ -1550,6 +1550,7 @@ def test_hub_read_models_chats_patch_stream_does_not_replay_historical_events(
     assert repairs[0]["envelope"]["cursor"]["sequence"] > 0
 
 
+@pytest.mark.slow
 def test_hub_read_models_chats_patch_stream_bulk_archive_is_bounded(
     hub_env,
 ) -> None:

@@ -73,4 +73,45 @@ describe('settings view model', () => {
       runner_stop_after_runs: 3
     });
   });
+
+  it('uses configured copy for agents whose reachability is unknown', () => {
+    const view = buildSettingsViewModel({
+      agents: [
+        {
+          id: 'plugin',
+          name: 'Plugin Agent',
+          capabilities: ['model_listing'],
+          reachable: null,
+          usable: true,
+          capability_projection: projection('plugin', true)
+        },
+        {
+          id: 'legacy',
+          name: 'Legacy Agent',
+          capabilities: ['model_listing'],
+          reachable: null,
+          usable: false,
+          capability_projection: projection('legacy', true)
+        }
+      ],
+      modelCatalogs: {}
+    });
+
+    expect(view.agents).toMatchObject([
+      {
+        id: 'plugin',
+        usable: true,
+        statusLabel: 'Configured',
+        modelStatus: 'unavailable',
+        modelLabel: 'Model selection not verified yet'
+      },
+      {
+        id: 'legacy',
+        usable: false,
+        statusLabel: 'Configured',
+        modelStatus: 'unavailable',
+        modelLabel: 'Model selection not verified yet'
+      }
+    ]);
+  });
 });

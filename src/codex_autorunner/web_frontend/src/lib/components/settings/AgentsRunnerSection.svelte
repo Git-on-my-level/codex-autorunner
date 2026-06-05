@@ -142,8 +142,8 @@
   <h2 class="settings-section-title">Agents</h2>
   {#if agents.length === 0}
     <div class="state-panel empty-state compact-empty">
-      <strong>No agents visible</strong>
-      <p>No agents are visible from the server.</p>
+      <strong>No agents configured</strong>
+      <p>This Web Hub has not found any agent backends yet.</p>
     </div>
   {:else}
     <div class="agent-status-list">
@@ -151,6 +151,8 @@
         <article class="agent-status-row">
           <div class="agent-status-id">
             <strong>{agent.name}</strong>
+            <span class:ok={agent.usable} class:warning={!agent.usable}>{agent.statusLabel}</span>
+            <small>{agent.statusDetail}</small>
           </div>
           {#if agent.modelStatus === 'available'}
             <div class="agent-model-control">
@@ -165,9 +167,9 @@
               />
             </div>
           {:else if agent.modelStatus === 'unavailable'}
-            <span class="agent-model-muted">Models unavailable</span>
+            <span class="agent-model-muted">{agent.modelLabel}</span>
           {:else}
-            <span class="agent-model-muted">Model selection unavailable</span>
+            <span class="agent-model-muted">{agent.modelLabel}</span>
           {/if}
         </article>
       {/each}
@@ -179,6 +181,39 @@
   .agent-status-id strong {
     font-size: var(--font-size-1);
     font-weight: 600;
+  }
+
+  .agent-status-id {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .agent-status-id span {
+    width: fit-content;
+    padding: 1px 6px;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 999px;
+    color: var(--color-ink-muted);
+    font-size: var(--font-size--1);
+    line-height: 1.4;
+  }
+
+  .agent-status-id span.ok {
+    border-color: var(--color-accent-soft);
+    color: var(--color-accent);
+    background: var(--color-accent-soft);
+  }
+
+  .agent-status-id span.warning {
+    color: var(--color-warning);
+  }
+
+  .agent-status-id small {
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-0);
+    line-height: 1.35;
   }
 
   .checkbox-field {
