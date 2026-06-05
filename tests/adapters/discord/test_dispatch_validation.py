@@ -299,6 +299,7 @@ async def test_service_attempts_fallback_reply_when_initial_response_fails(
 
 
 @pytest.mark.anyio
+@pytest.mark.slow
 async def test_service_routes_slash_command_timeout_followup_through_runner(
     tmp_path: Path,
 ) -> None:

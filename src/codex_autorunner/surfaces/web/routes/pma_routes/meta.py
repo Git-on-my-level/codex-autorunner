@@ -4,16 +4,16 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
-from .....agents.registry import get_agent_descriptor, get_available_agents
+from .....agents.registry import get_agent_descriptor
 from .....agents.runtime_options import resolve_agent_runtime_options
 from .....core.agent_capability_projection import project_agent_capabilities
 from .....core.orchestration.catalog import map_agent_capabilities
 from .....core.state import load_state
 from ...services.pma import get_pma_request_context
 from ..agents import (
-    _available_agents,
     _serialize_agent_profiles,
     _serialize_model_catalog,
+    build_agent_catalog_snapshot,
 )
 from .hermes_supervisors import resolve_cached_hermes_supervisor
 
@@ -121,27 +121,28 @@ def build_pma_meta_routes(
 
     @router.get("/agents")
     async def list_pma_agents(request: Request) -> dict[str, Any]:
-        context = get_pma_request_context(request)
-        available_descriptors = get_available_agents(context.agent_context)
-        if not available_descriptors:
-            raise HTTPException(status_code=404, detail="PMA unavailable")
+        catalog_snapshot = build_agent_catalog_snapshot(request)
+        agents = catalog_snapshot.agents
+        if not agents:
+            return {
+                "agents": [],
+                "agent_statuses": catalog_snapshot.statuses,
+                "default": "",
+                "defaults": {},
+                "setup_prompt": _agent_setup_prompt(),
+            }
         default_eligible_agent_ids = [
-            str(agent_id or "").strip().lower()
-            for agent_id in available_descriptors.keys()
-            if str(agent_id or "").strip().lower()
+            str(agent.get("id") or "").strip().lower()
+            for agent in agents
+            if isinstance(agent, dict) and str(agent.get("id") or "").strip().lower()
         ]
         default_eligible_agent_id_set = set(default_eligible_agent_ids)
-        agents, default_agent = _available_agents(request)
+        default_agent = catalog_snapshot.default_agent
         defaults = _get_pma_config(request)
         configured_default_agent = (
             str(defaults.get("default_agent") or "").strip().lower() or None
         )
         default_profile = str(defaults.get("profile") or "").strip().lower() or None
-        available_agent_ids = {
-            str(agent.get("id") or "").strip().lower()
-            for agent in agents
-            if isinstance(agent, dict)
-        }
         enriched_agents: list[dict[str, Any]] = []
         for agent in agents:
             if not isinstance(agent, dict):
@@ -156,18 +157,6 @@ def build_pma_meta_routes(
                     include_supervisor_metadata=True,
                 )
             enriched_agents.append(agent_payload)
-        if "hermes" not in available_agent_ids:
-            hermes_payload = _build_registered_hermes_payload(request)
-            if hermes_payload is not None:
-                enriched_agents.append(
-                    await _enrich_hermes_payload(
-                        request,
-                        hermes_payload,
-                        default_agent=default_agent,
-                        default_profile=default_profile,
-                        include_supervisor_metadata=False,
-                    )
-                )
         fallback_default_agent = next(
             (
                 str(agent.get("id") or "").strip().lower()
@@ -202,6 +191,7 @@ def build_pma_meta_routes(
         default_model = runtime_options.model
         payload: dict[str, Any] = {
             "agents": enriched_agents,
+            "agent_statuses": catalog_snapshot.statuses,
             "default": effective_default_agent,
         }
         if (
@@ -256,6 +246,17 @@ def build_pma_meta_routes(
         descriptor = get_agent_descriptor(agent_id, context.agent_context)
         if descriptor is None:
             raise HTTPException(status_code=404, detail="Unknown agent")
+        catalog_snapshot = build_agent_catalog_snapshot(request)
+        usable_agent_ids = {
+            str(row.get("id") or "").strip().lower()
+            for row in catalog_snapshot.agents
+            if isinstance(row, dict)
+        }
+        if agent_id not in usable_agent_ids:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Agent '{agent_id}' is not reachable",
+            )
         model_gate = project_agent_capabilities(
             agent_id,
             descriptor.capabilities,
@@ -277,3 +278,13 @@ def build_pma_meta_routes(
             Exception
         ) as exc:  # intentional: agent harness/model_catalog errors are unpredictable
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+def _agent_setup_prompt() -> str:
+    return (
+        "Help me finish setting up CAR agents for this Web Hub. Inspect the hub "
+        "configuration and runtime state, identify which Codex, OpenCode, or "
+        "Hermes backend should be enabled, check required binaries, servers, "
+        "auth, and agent profiles, then make the smallest safe config changes. "
+        "Do not start or restart services without asking me first."
+    )

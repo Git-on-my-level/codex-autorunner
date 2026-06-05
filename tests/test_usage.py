@@ -748,6 +748,7 @@ def test_opencode_summary_prefers_persisted_turn_usage(tmp_path):
 def test_usage_aggregation_read_model_reports_confidence_and_session_totals(tmp_path):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
+    codex_home = tmp_path / "codex"
     usage_path = repo_root / ".codex-autorunner" / "usage"
     usage_path.mkdir(parents=True)
     (usage_path / "opencode_turn_usage.jsonl").write_text(
@@ -773,7 +774,7 @@ def test_usage_aggregation_read_model_reports_confidence_and_session_totals(tmp_
         usage={"inputTokens": 9, "outputTokens": 3, "totalTokens": 12},
     )
 
-    read_model = get_repo_usage_aggregation_read_model(repo_root)
+    read_model = get_repo_usage_aggregation_read_model(repo_root, codex_home=codex_home)
     payload = read_model.to_dict()
 
     assert payload["totals"]["total_tokens"] == 12

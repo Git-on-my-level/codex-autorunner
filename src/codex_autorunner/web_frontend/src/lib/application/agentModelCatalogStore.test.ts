@@ -45,18 +45,18 @@ describe('agent model catalog store', () => {
   });
 
   it('ignores stale agent and model responses after a newer refresh starts', async () => {
-    const firstAgents = deferred<ApiResult<{ agents: JsonRecord[]; default: string; defaults: JsonRecord }>>();
+    const firstAgents = deferred<ApiResult<{ agents: JsonRecord[]; agentStatuses: JsonRecord[]; default: string; defaults: JsonRecord; setupPrompt: string }>>();
     const api = createApi({ agents: [listCapableAgent('fresh')] });
     api.listAgents
       .mockReturnValueOnce(firstAgents.promise)
-      .mockResolvedValueOnce(ok({ agents: [listCapableAgent('fresh')], default: 'fresh', defaults: {} }));
+      .mockResolvedValueOnce(agentResult([listCapableAgent('fresh')], 'fresh'));
     api.listAgentModels.mockResolvedValue(ok([{ id: 'fresh-model' }]));
     const store = createAgentModelCatalogStore(api);
 
     const staleLoad = store.ensureLoaded();
     const freshLoad = store.refresh();
     await freshLoad;
-    firstAgents.resolve(ok({ agents: [listCapableAgent('stale')], default: 'stale', defaults: {} }));
+    firstAgents.resolve(agentResult([listCapableAgent('stale')], 'stale'));
     await staleLoad;
 
     expect(store.snapshot().agents.map((agent) => agent.id)).toEqual(['fresh']);
@@ -73,7 +73,7 @@ function createApi(options: {
   listAgentModels: ReturnType<typeof vi.fn>;
 } {
   return {
-    listAgents: vi.fn().mockResolvedValue(ok({ agents: options.agents, default: 'codex', defaults: {} })),
+    listAgents: vi.fn().mockResolvedValue(agentResult(options.agents, 'codex')),
     listAgentModels: vi.fn((agentId: string) =>
       Promise.resolve(options.modelsByAgent?.[agentId] ?? ok([{ id: `${agentId}-model` }]))
     )
@@ -82,6 +82,10 @@ function createApi(options: {
 
 function listCapableAgent(id: string): JsonRecord {
   return { id, capability_projection: { actions: { list_models: { allowed: true } } } };
+}
+
+function agentResult(agents: JsonRecord[], defaultAgent: string): ApiResult<{ agents: JsonRecord[]; agentStatuses: JsonRecord[]; default: string; defaults: JsonRecord; setupPrompt: string }> {
+  return ok({ agents, agentStatuses: agents, default: defaultAgent, defaults: {}, setupPrompt: '' });
 }
 
 function ok<T>(data: T): ApiResult<T> {

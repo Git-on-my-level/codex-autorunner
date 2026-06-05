@@ -693,11 +693,13 @@ export class WebApiClient {
       this.filebox.deleteFile({ kind: 'hub' }, box, filename),
     deleteFileBox: async (box: FileBoxName): Promise<ApiResult<JsonRecord>> =>
       this.filebox.deleteBox({ kind: 'hub' }, box),
-    listAgents: async (): Promise<ApiResult<{ agents: JsonRecord[]; default: string; defaults: JsonRecord }>> =>
+    listAgents: async (): Promise<ApiResult<{ agents: JsonRecord[]; agentStatuses: JsonRecord[]; default: string; defaults: JsonRecord; setupPrompt: string }>> =>
       mapResult(await this.getJson<JsonRecord>('/hub/pma/agents'), (payload) => ({
         agents: asArray(payload.agents),
+        agentStatuses: asArray(payload.agent_statuses ?? payload.agentStatuses),
         default: typeof payload.default === 'string' ? payload.default : '',
-        defaults: asRecord(payload.defaults)
+        defaults: asRecord(payload.defaults),
+        setupPrompt: typeof payload.setup_prompt === 'string' ? payload.setup_prompt : ''
       })),
     listAgentModels: async (agentId: string): Promise<ApiResult<JsonRecord[]>> =>
       mapResult(await this.getJson<JsonRecord>(`/hub/pma/agents/${encodeURIComponent(agentId)}/models`), (payload) =>

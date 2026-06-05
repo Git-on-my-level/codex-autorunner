@@ -344,6 +344,10 @@
   let archiving = $state(false);
   let bulkRetireRequestedCount = $state<number | null>(null);
   let bulkRetireModal: HTMLDivElement | null = $state(null);
+  let showAgentSetupModal = $state(false);
+  let agentSetupPrompt = $state('');
+  let agentSetupCopyState = $state('Copy prompt');
+  let agentCatalogNotice = $state<string | null>(null);
   let loadingModels = $state(false);
   /** Invalidates in-flight `listAgentModels` results when the user switches agents quickly. */
   let loadModelsSeq = 0;
@@ -1218,6 +1222,13 @@
     }
     if (!canStartCodingAgentChat) newChatKind = 'pma';
     agents = data.agents;
+    agentSetupPrompt = data.setupPrompt || defaultAgentSetupPrompt();
+    agentCatalogNotice =
+      data.agentCatalogStatus === 'error'
+        ? 'Could not check agent availability. Refresh the page, or check hub logs if this keeps happening.'
+        : null;
+    if (data.agentCatalogStatus === 'empty' && !agentSetupDismissed()) showAgentSetupModal = true;
+    if (data.agentCatalogStatus === 'ready') showAgentSetupModal = false;
     const defaults = data.defaults;
     const defaultAgent =
       typeof defaults.agent === 'string' && defaults.agent.trim()
@@ -1312,6 +1323,37 @@
         });
       }
     });
+  }
+
+  function defaultAgentSetupPrompt(): string {
+    return [
+      'Help me finish setting up CAR agents for this Web Hub.',
+      'Inspect the hub configuration and runtime state, identify which Codex, OpenCode, or Hermes backend should be enabled, check required binaries, servers, auth, and agent profiles, then make the smallest safe config changes.',
+      'Do not start or restart services without asking me first.'
+    ].join(' ');
+  }
+
+  function agentSetupDismissed(): boolean {
+    if (typeof sessionStorage === 'undefined') return false;
+    return sessionStorage.getItem('car.agentSetup.dismissed') === '1';
+  }
+
+  function closeAgentSetupModal(): void {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem('car.agentSetup.dismissed', '1');
+    }
+    showAgentSetupModal = false;
+  }
+
+  async function copyAgentSetupPrompt(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(agentSetupPrompt || defaultAgentSetupPrompt());
+      agentSetupCopyState = 'Copied';
+      window.setTimeout(() => (agentSetupCopyState = 'Copy prompt'), 1600);
+    } catch {
+      agentSetupCopyState = 'Copy failed';
+      window.setTimeout(() => (agentSetupCopyState = 'Copy prompt'), 1800);
+    }
   }
 
   function applyLastNewChatPreference(): boolean {
@@ -3475,6 +3517,31 @@
         {sending ? (composerWillQueue ? 'Queueing' : 'Sending') : composerWillQueue ? 'Queue' : 'Send'}
       </button>
     </form>
+    {#if showAgentSetupModal}
+      <div class="modal-backdrop" role="presentation" onclick={closeAgentSetupModal}>
+        <div
+          class="approval-modal agent-setup-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="agent-setup-title"
+          tabindex="-1"
+          onclick={(event) => event.stopPropagation()}
+          onkeydown={(event) => {
+            if (event.key === 'Escape') closeAgentSetupModal();
+            event.stopPropagation();
+          }}
+        >
+          <span class="artifact-type">Setup</span>
+          <h2 id="agent-setup-title">Set up your first agent</h2>
+          <p>This Web Hub cannot find a working agent yet. Open Codex or OpenCode on the computer running this Web Hub, paste the prompt below, and let it inspect the setup.</p>
+          <pre>{agentSetupPrompt || defaultAgentSetupPrompt()}</pre>
+          <div class="modal-actions">
+            <button type="button" class="ghost-button" onclick={closeAgentSetupModal}>Dismiss</button>
+            <button type="button" class="send-button" onclick={copyAgentSetupPrompt}>{agentSetupCopyState}</button>
+          </div>
+        </div>
+      </div>
+    {/if}
     {#if linkDialogOpen}
       <div class="modal-backdrop" role="presentation" onclick={cancelLinkDialog}>
         <div
@@ -3538,6 +3605,7 @@
       </div>
     {/if}
     <AutoDismissNotice message={composeError?.message ?? null} tone="danger" />
+    <AutoDismissNotice message={agentCatalogNotice} tone="warning" />
     <AutoDismissNotice message={voiceNotice} tone="warning" />
     <AutoDismissNotice message={commandNotice} tone="success" />
   </div>

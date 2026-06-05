@@ -70,7 +70,7 @@ export type ChatDetailPageRoute = {
 
 export type ChatDetailPageSupportApi = {
   listFiles: () => Promise<ApiResult<SurfaceArtifact[]>>;
-  listAgents: () => Promise<ApiResult<{ agents: JsonRecord[]; defaults: JsonRecord; default: string }>>;
+  listAgents: () => Promise<ApiResult<{ agents: JsonRecord[]; agentStatuses: JsonRecord[]; defaults: JsonRecord; default: string; setupPrompt: string }>>;
   repoWorktreeTopology: (filter?: 'repo' | 'worktree' | 'all', limit?: number) => Promise<ApiResult<unknown>>;
   repoWorktreeRuntime: (filter?: 'repo' | 'worktree' | 'all', limit?: number) => Promise<ApiResult<unknown>>;
   repoDetail: (repoId: string) => Promise<ApiResult<RepoWorktreeDetailSnapshot>>;
@@ -79,8 +79,12 @@ export type ChatDetailPageSupportApi = {
 
 export type ChatDetailPageSupportData = {
   agents: JsonRecord[];
+  agentStatuses: JsonRecord[];
+  agentCatalogStatus: 'ready' | 'empty' | 'error';
+  agentCatalogError: string | null;
   defaults: JsonRecord;
   defaultAgent: string;
+  setupPrompt: string;
   scopeOptions: ChatScopeOption[];
 };
 
@@ -304,8 +308,16 @@ export class ChatDetailPageController {
     }
     this.deps.onSupportDataLoaded({
       agents: agentResult.ok ? agentResult.data.agents : [],
+      agentStatuses: agentResult.ok ? agentResult.data.agentStatuses : [],
+      agentCatalogStatus: agentResult.ok
+        ? agentResult.data.agents.length > 0
+          ? 'ready'
+          : 'empty'
+        : 'error',
+      agentCatalogError: agentResult.ok ? null : agentResult.error.message,
       defaults: agentResult.ok ? agentResult.data.defaults : {},
       defaultAgent: agentResult.ok ? agentResult.data.default : 'codex',
+      setupPrompt: agentResult.ok ? agentResult.data.setupPrompt : '',
       scopeOptions: buildChatScopeOptions(
         topologyResult.ok || exactRouteScope ? repoSummaries : [],
         topologyResult.ok || exactRouteScope ? worktreeSummaries : []

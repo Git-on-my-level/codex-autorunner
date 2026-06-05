@@ -158,7 +158,7 @@
     return scopedNewTicketRoute(owner.kind, owner.id, owner.parentRepoId ?? null);
   });
 
-  const agentOptions = $derived(agents.length > 0 ? agentIdsFromPmaAgentsPayload(agents) : supportedAgentIds);
+  const agentOptions = $derived(agentIdsFromPmaAgentsPayload(agents));
   const selectedAgentRecord = $derived(agentRecordForId(agents, editAgent));
   const selectedAgentCanListModels = $derived(agentCanListModels(selectedAgentRecord));
   const catalogRaw = $derived(selectedAgentCanListModels ? modelCatalogs[editAgent] : undefined);
@@ -184,7 +184,7 @@
     lastSettingsSignature = sig;
     editTicketId = detail.id;
     editTitle = detail.title;
-    const fallbackAgent = agentOptions[0] ?? 'codex';
+    const fallbackAgent = agentOptions[0] ?? '';
     const rawAgent = detail.agentRaw.trim();
     editAgent = rawAgent || fallbackAgent;
     editModel = detail.modelRaw;

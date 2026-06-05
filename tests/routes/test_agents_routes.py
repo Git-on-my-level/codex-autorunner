@@ -220,16 +220,20 @@ def test_list_agents_includes_expected_capabilities() -> None:
         assert "review" in opencode_caps
 
 
-def test_list_agents_fallback_does_not_advertise_unavailable_capabilities(
+def test_list_agents_does_not_advertise_unavailable_fallback(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(agents_routes, "get_available_agents", lambda _state: {})
     monkeypatch.setattr(
         agents_routes,
-        "get_agent_descriptor",
-        lambda agent_id, _state=None: (
-            SimpleNamespace(id="codex", name="Codex") if agent_id == "codex" else None
-        ),
+        "get_registered_agents",
+        lambda _state: {
+            "codex": SimpleNamespace(
+                id="codex",
+                name="Codex",
+                capabilities=frozenset(),
+                healthcheck=lambda _state: False,
+            )
+        },
     )
     client = _build_client(with_supervisors=True)
 
@@ -237,14 +241,19 @@ def test_list_agents_fallback_does_not_advertise_unavailable_capabilities(
 
     assert response.status_code == 200
     data = response.json()
-    assert data["agents"] == [
-        {
-            "id": "codex",
-            "name": "Codex",
-            "protocol_version": "2.0",
-            "capabilities": [],
-        }
-    ]
+    assert data["agents"] == []
+    assert data["default"] == ""
+    assert data["agent_statuses"][0] | {"capability_projection": {}} == {
+        "id": "codex",
+        "name": "Codex",
+        "capabilities": [],
+        "reachable": False,
+        "usable": False,
+        "status": "offline",
+        "status_label": "Offline",
+        "status_detail": "This agent is not reachable right now.",
+        "capability_projection": {},
+    }
 
 
 def test_list_agents_includes_hermes_when_available(monkeypatch) -> None:
@@ -382,9 +391,14 @@ def test_list_agents_merges_alias_only_hermes_profiles(monkeypatch) -> None:
         _fake_options,
     )
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.routes.agents.get_available_agents",
+        "codex_autorunner.surfaces.web.routes.agents.get_registered_agents",
         lambda _state: {
-            "hermes": SimpleNamespace(name="Hermes", capabilities=set()),
+            "hermes": SimpleNamespace(
+                id="hermes",
+                name="Hermes",
+                capabilities=set(),
+                healthcheck=lambda _state: True,
+            ),
         },
     )
 
