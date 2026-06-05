@@ -8,7 +8,7 @@ SERVICE_ID_PATTERN = re.compile(r"^svc_[A-Za-z0-9][A-Za-z0-9_-]{2,63}$")
 
 
 def generate_service_id() -> str:
-    return f"{SERVICE_ID_PREFIX}{secrets.token_urlsafe(9).rstrip('=')}"
+    return f"{SERVICE_ID_PREFIX}{secrets.token_hex(8)}"
 
 
 def validate_service_id(value: str) -> str:

@@ -51,6 +51,7 @@ class PortPolicyMode(str, Enum):
 
 class HealthCheckType(str, Enum):
     HTTP = "http"
+    TCP = "tcp"
     NONE = "none"
 
 
@@ -175,11 +176,15 @@ class HealthCheck(StrictModel):
 
     @model_validator(mode="after")
     def _validate_health_check(self) -> "HealthCheck":
-        if self.type == HealthCheckType.HTTP:
+        if self.type in {HealthCheckType.HTTP, HealthCheckType.HTTP.value}:
             if not self.path or not self.path.startswith("/"):
                 raise ValueError("http health_check requires an absolute path")
             if not self.expected_status:
                 raise ValueError("http health_check requires expected_status")
+        if self.type in {HealthCheckType.TCP, HealthCheckType.TCP.value}:
+            if self.path not in {None, "", "/"}:
+                raise ValueError("tcp health_check must not include path")
+            self.path = None
         return self
 
 

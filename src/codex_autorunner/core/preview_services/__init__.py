@@ -1,4 +1,19 @@
+from .health import (
+    PreviewServiceHealthError,
+    PreviewServiceHealthResult,
+    check_service_health,
+)
 from .ids import generate_service_id, validate_service_id
+from .logs import (
+    DEFAULT_LOG_MAX_BYTES,
+    DEFAULT_LOG_TAIL_LINES,
+    PreviewServiceLogError,
+    prepare_log_file,
+    service_log_path,
+    service_log_relative_path,
+    service_log_tail_url,
+    tail_log_file,
+)
 from .models import (
     CommandDefinition,
     HealthCheck,
@@ -14,6 +29,15 @@ from .models import (
     ServiceLogs,
     ServiceTarget,
 )
+from .port_allocator import (
+    DEFAULT_PORT_RANGE_END,
+    DEFAULT_PORT_RANGE_START,
+    PreviewPortAllocationError,
+    PreviewPortAllocationResult,
+    PreviewPortAllocator,
+    allocate_preview_port,
+    reserve_preview_port,
+)
 from .registry import (
     PreviewServiceNotFoundError,
     PreviewServiceRegistry,
@@ -23,11 +47,27 @@ from .registry import (
     service_read_model,
     services_read_model,
 )
+from .supervisor import (
+    PROCESS_KIND,
+    PreviewServiceSupervisor,
+    PreviewServiceSupervisorError,
+)
 
 __all__ = [
     "CommandDefinition",
+    "DEFAULT_PORT_RANGE_END",
+    "DEFAULT_PORT_RANGE_START",
+    "DEFAULT_LOG_MAX_BYTES",
+    "DEFAULT_LOG_TAIL_LINES",
     "HealthCheck",
+    "PROCESS_KIND",
     "PortPolicy",
+    "PreviewServiceHealthError",
+    "PreviewServiceHealthResult",
+    "PreviewServiceLogError",
+    "PreviewPortAllocationError",
+    "PreviewPortAllocationResult",
+    "PreviewPortAllocator",
     "PreviewScopeKind",
     "PreviewServiceKind",
     "PreviewServiceNotFoundError",
@@ -36,15 +76,25 @@ __all__ = [
     "PreviewServiceRegistryEntry",
     "PreviewServiceRegistryError",
     "PreviewServiceStatus",
+    "PreviewServiceSupervisor",
+    "PreviewServiceSupervisorError",
     "ProcessMetadata",
     "RestartPolicy",
     "ScopeLink",
     "ServiceExposure",
     "ServiceLogs",
     "ServiceTarget",
+    "allocate_preview_port",
+    "check_service_health",
     "generate_service_id",
+    "prepare_log_file",
     "read_preview_services_model",
+    "reserve_preview_port",
     "service_read_model",
+    "service_log_path",
+    "service_log_relative_path",
+    "service_log_tail_url",
     "services_read_model",
+    "tail_log_file",
     "validate_service_id",
 ]
