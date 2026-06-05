@@ -46,6 +46,7 @@ from ...core.preview_services import (
     DEFAULT_LOG_MAX_BYTES,
     DEFAULT_PORT_RANGE_END,
     DEFAULT_PORT_RANGE_START,
+    DEFAULT_PREVIEW_HOST,
     PreviewServiceSupervisor,
 )
 from ...core.runtime import RuntimeContext
@@ -800,7 +801,7 @@ def _build_preview_service_manager(
         range_config.get("end"),
         default=DEFAULT_PORT_RANGE_END,
     )
-    host = str(preview_config.get("default_host") or "127.0.0.1")
+    host = str(preview_config.get("default_host") or DEFAULT_PREVIEW_HOST)
     log_max_bytes = _coerce_int(
         preview_config.get("log_max_bytes"),
         default=DEFAULT_LOG_MAX_BYTES,

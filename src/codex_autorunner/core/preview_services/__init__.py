@@ -32,6 +32,7 @@ from .models import (
 from .port_allocator import (
     DEFAULT_PORT_RANGE_END,
     DEFAULT_PORT_RANGE_START,
+    DEFAULT_PREVIEW_HOST,
     PreviewPortAllocationError,
     PreviewPortAllocationResult,
     PreviewPortAllocator,
@@ -59,6 +60,7 @@ __all__ = [
     "DEFAULT_PORT_RANGE_START",
     "DEFAULT_LOG_MAX_BYTES",
     "DEFAULT_LOG_TAIL_LINES",
+    "DEFAULT_PREVIEW_HOST",
     "HealthCheck",
     "PROCESS_KIND",
     "PortPolicy",

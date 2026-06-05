@@ -14,6 +14,27 @@ PMA_DEFAULT_TURN_IDLE_TIMEOUT_SECONDS = 1800
 BLESSED_APP_REPO_ID = "blessed"
 BLESSED_APP_REPO_URL = "https://github.com/Git-on-my-level/blessed-car-apps"
 BLESSED_APP_REPO_REF = "main"
+DEFAULT_PREVIEW_SERVICE_PORT_RANGE_START = 39000
+DEFAULT_PREVIEW_SERVICE_PORT_RANGE_END = 39999
+DEFAULT_PREVIEW_SERVICE_HOST = "127.0.0.1"
+DEFAULT_PREVIEW_SERVICE_LOG_MAX_BYTES = 1024 * 1024
+DEFAULT_PREVIEW_SERVICE_LOG_TAIL_LINES = 200
+
+
+def _default_preview_services_section() -> Dict[str, Any]:
+    return {
+        "enabled": True,
+        "port_range": {
+            "start": DEFAULT_PREVIEW_SERVICE_PORT_RANGE_START,
+            "end": DEFAULT_PREVIEW_SERVICE_PORT_RANGE_END,
+        },
+        "default_host": DEFAULT_PREVIEW_SERVICE_HOST,
+        "proxy_allowed_hosts": ["127.0.0.1", "::1", "localhost"],
+        "static_allowed_roots": [],
+        "log_max_bytes": DEFAULT_PREVIEW_SERVICE_LOG_MAX_BYTES,
+        "log_tail_default_lines": DEFAULT_PREVIEW_SERVICE_LOG_TAIL_LINES,
+        "auto_start_on_hub_start_default": False,
+    }
 
 
 def _default_agents_section() -> Dict[str, Any]:
@@ -792,6 +813,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
     "opencode": _default_opencode_section(),
     "usage": _default_usage_section(),
     "server": _default_server_section(),
+    "preview_services": _default_preview_services_section(),
     "browser_auth": _default_browser_auth_section(),
     "server_log": None,
     "static_assets": _default_static_assets_section(),

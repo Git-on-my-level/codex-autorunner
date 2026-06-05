@@ -17,7 +17,7 @@ surface for the host account running CAR:
 
 - Authenticated users can access terminal WebSockets, run controls, system
   update routes, filebox uploads, contextspace and ticket mutation routes, and
-  repo/worktree management routes.
+  repo/worktree management routes, and Preview Services proxy routes.
 - CAR does not provide read-only users, least-privilege roles, or per-repo
   browser authorization. A valid browser session or bearer token is equivalent
   to administrative access to the exposed hub.
@@ -106,6 +106,20 @@ Config:
 - `server.allowed_origins`: extra allowed origins (scheme + host + port).
   Configure this for normal browser API/WebSocket use when CAR is exposed
   through a public reverse proxy.
+
+## Preview Services
+
+Preview routes under `/preview/services/<service_id>/` require the same hub
+authentication as the rest of the protected web surface. CAR proxies only
+registered service records, defaults proxy targets to loopback hosts, and does
+not proxy arbitrary internet URLs.
+
+Keep `preview_services.proxy_allowed_hosts` loopback-only for hosted
+deployments. Add `preview_services.static_allowed_roots` only for directories
+you intentionally want CAR to serve as previews; static previews reject
+traversal, symlink escape, hidden files, `.env`, `.git`, and common private-key
+filenames. See [Preview Services](../ops/preview-services.md) for operator
+recipes and HMR caveats.
 
 ## Recommendations
 

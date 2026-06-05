@@ -141,6 +141,119 @@ def _validate_server_security(server: Dict[str, Any]) -> None:
             )
 
 
+def _validate_preview_services_config(cfg: Dict[str, Any], *, root: Path) -> None:
+    preview_cfg = cfg.get("preview_services")
+    if preview_cfg is None:
+        return
+    if not isinstance(preview_cfg, dict):
+        raise ConfigError("preview_services section must be a mapping if provided")
+    if "enabled" in preview_cfg and not isinstance(preview_cfg.get("enabled"), bool):
+        raise ConfigError("preview_services.enabled must be boolean")
+    if "default_host" in preview_cfg:
+        default_host = preview_cfg.get("default_host")
+        if not isinstance(default_host, str) or not default_host.strip():
+            raise ConfigError(
+                "preview_services.default_host must be a non-empty string"
+            )
+        if not is_loopback_host(default_host.strip()):
+            raise ConfigError("preview_services.default_host must be a loopback host")
+
+    port_range = _require_optional_mapping(
+        preview_cfg, "port_range", path="preview_services.port_range"
+    )
+    if port_range is not None:
+        start = port_range.get("start")
+        end = port_range.get("end")
+        for key, value in (("start", start), ("end", end)):
+            if not _is_strict_int(value):
+                raise ConfigError(
+                    f"preview_services.port_range.{key} must be an integer"
+                )
+            if cast(int, value) < 1 or cast(int, value) > 65535:
+                raise ConfigError(
+                    f"preview_services.port_range.{key} must be between 1 and 65535"
+                )
+        if cast(int, start) > cast(int, end):
+            raise ConfigError(
+                "preview_services.port_range.start must be <= preview_services.port_range.end"
+            )
+
+    _validate_loopback_host_list(
+        preview_cfg,
+        "proxy_allowed_hosts",
+        path="preview_services.proxy_allowed_hosts",
+    )
+    _validate_static_allowed_roots(
+        preview_cfg,
+        "static_allowed_roots",
+        path="preview_services.static_allowed_roots",
+        root=root,
+    )
+    for key in ("log_max_bytes", "log_tail_default_lines"):
+        value = preview_cfg.get(key)
+        if value is None:
+            continue
+        if not _is_strict_int(value):
+            raise ConfigError(f"preview_services.{key} must be an integer")
+        if cast(int, value) <= 0:
+            raise ConfigError(f"preview_services.{key} must be > 0")
+    if "auto_start_on_hub_start_default" in preview_cfg and not isinstance(
+        preview_cfg.get("auto_start_on_hub_start_default"), bool
+    ):
+        raise ConfigError(
+            "preview_services.auto_start_on_hub_start_default must be boolean"
+        )
+
+
+def _validate_loopback_host_list(cfg: Dict[str, Any], key: str, *, path: str) -> None:
+    values = cfg.get(key)
+    if values is None:
+        return
+    if not isinstance(values, list):
+        raise ConfigError(f"{path} must be a list of loopback host strings")
+    for entry in values:
+        if not isinstance(entry, str) or not entry.strip():
+            raise ConfigError(f"{path} must be a list of loopback host strings")
+        host = entry.strip()
+        if host == "*":
+            raise ConfigError(f"{path} must not include '*'")
+        if not is_loopback_host(host):
+            raise ConfigError(f"{path} entries must be loopback hosts")
+
+
+def _validate_static_allowed_roots(
+    cfg: Dict[str, Any],
+    key: str,
+    *,
+    path: str,
+    root: Path,
+) -> None:
+    values = cfg.get(key)
+    if values is None:
+        return
+    if not isinstance(values, list):
+        raise ConfigError(f"{path} must be a list of safe directory paths")
+    for index, entry in enumerate(values):
+        item_path = f"{path}[{index}]"
+        if not isinstance(entry, str) or not entry.strip():
+            raise ConfigError(f"{item_path} must be a non-empty string path")
+        raw_path = Path(entry).expanduser()
+        if any(part == ".." for part in raw_path.parts):
+            raise ConfigError(f"{item_path} must not contain '..' segments")
+        try:
+            resolved = resolve_config_path(
+                entry,
+                root,
+                scope=item_path,
+                allow_absolute=True,
+                allow_home=True,
+            )
+        except ConfigPathError as exc:
+            raise ConfigError(str(exc)) from exc
+        if resolved == resolved.parent:
+            raise ConfigError(f"{item_path} must not be a filesystem root")
+
+
 def _validate_browser_auth_config(cfg: Dict[str, Any]) -> None:
     browser_auth = cfg.get("browser_auth")
     if browser_auth is None:
@@ -817,6 +930,7 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
     _validate_opencode_config(cfg)
     _validate_update_config(cfg)
     _validate_usage_config(cfg, root=root)
+    _validate_preview_services_config(cfg, root=root)
     notifications_cfg = cfg.get("notifications")
     if notifications_cfg is not None:
         if not isinstance(notifications_cfg, dict):
@@ -1049,6 +1163,7 @@ def _validate_hub_config(cfg: Dict[str, Any], *, root: Path) -> None:
     _validate_opencode_config(cfg)
     _validate_update_config(cfg)
     _validate_usage_config(cfg, root=root)
+    _validate_preview_services_config(cfg, root=root)
     server_log_cfg = _require_optional_mapping(cfg, "server_log", path="server_log")
     if server_log_cfg is None:
         server_log_cfg = {}

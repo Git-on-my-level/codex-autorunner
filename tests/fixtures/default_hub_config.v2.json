@@ -260,6 +260,23 @@
     "worktree_archive_max_total_bytes": 1000000000,
     "worktree_archive_profile": "portable"
   },
+  "preview_services": {
+    "auto_start_on_hub_start_default": false,
+    "default_host": "127.0.0.1",
+    "enabled": true,
+    "log_max_bytes": 1048576,
+    "log_tail_default_lines": 200,
+    "port_range": {
+      "end": 39999,
+      "start": 39000
+    },
+    "proxy_allowed_hosts": [
+      "127.0.0.1",
+      "::1",
+      "localhost"
+    ],
+    "static_allowed_roots": []
+  },
   "repo_defaults": {
     "apps": {
       "enabled": true,
