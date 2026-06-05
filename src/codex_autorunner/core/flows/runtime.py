@@ -294,6 +294,8 @@ class FlowRuntime:
                     record = latest
 
                 if record.stop_requested:
+                    if record.status.is_terminal():
+                        break
                     now = now_iso()
                     trigger = FlowTrigger(kind=TriggerKind.STOP_REQUESTED)
                     result = reduce_flow_lifecycle(
