@@ -96,6 +96,8 @@ FAST_TEST_IGNORES='--ignore=tests/chat_surface_integration'
 FAST_TEST_ENFORCE_BUDGET="${CODEX_FAST_TEST_ENFORCE_BUDGET:-0}"
 _AUTO_WORKERS="$("$PYTHON_BIN" -c 'import os;print(os.cpu_count() or 4)' 2>/dev/null || echo 4)"
 FAST_TEST_WORKERS="${CODEX_FAST_TEST_WORKERS:-$_AUTO_WORKERS}"
+export CAR_PYTEST_RUN_TOKEN="${CAR_PYTEST_RUN_TOKEN:-check-$("$PYTHON_BIN" -c 'import uuid; print(uuid.uuid4().hex[:8])')}"
+FAST_TEST_BASETEMP="$("$PYTHON_BIN" scripts/pytest_basetemp.py --repo-root "$REPO_ROOT")"
 STAGED_FILES="$(git diff --cached --name-only --diff-filter=ACMRD 2>/dev/null || true)"
 
 # --- Lane detection (if not explicitly set) ----------------------------------
@@ -236,7 +238,7 @@ _run_pytest() {
         rm -f "$FAST_TEST_JUNIT" "${FAST_TEST_SELECTED:-}"
       }
       trap cleanup_fast_test_artifacts EXIT
-      "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" --dist loadfile $FAST_TEST_IGNORES -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
+      "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" --dist loadfile --basetemp "$FAST_TEST_BASETEMP" $FAST_TEST_IGNORES -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
       FAST_TEST_REPORT_ARGS=(
         "$FAST_TEST_JUNIT"
         --repo-root "$REPO_ROOT"
@@ -245,7 +247,7 @@ _run_pytest() {
       )
       if [[ "${CODEX_FAST_TEST_VERIFY_NODEIDS:-0}" == "1" ]]; then
         FAST_TEST_SELECTED="$(mktemp)"
-        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" --collect-only -q $FAST_TEST_IGNORES > "$FAST_TEST_SELECTED"
+        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" --collect-only -q --basetemp "$FAST_TEST_BASETEMP" $FAST_TEST_IGNORES > "$FAST_TEST_SELECTED"
         FAST_TEST_REPORT_ARGS+=(
           --selected-nodeids "$FAST_TEST_SELECTED"
           --verify-nodeids
@@ -265,7 +267,7 @@ _run_pytest() {
           rm -f "$FAST_TEST_JUNIT" "${FAST_TEST_SELECTED:-}"
         }
         trap cleanup_fast_test_artifacts EXIT
-        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" --dist loadfile $FAST_TEST_IGNORES -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
+        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" --dist loadfile --basetemp "$FAST_TEST_BASETEMP" $FAST_TEST_IGNORES -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
         FAST_TEST_REPORT_ARGS=(
           "$FAST_TEST_JUNIT"
           --repo-root "$REPO_ROOT"
@@ -275,7 +277,7 @@ _run_pytest() {
         )
         if [[ "${CODEX_FAST_TEST_VERIFY_NODEIDS:-0}" == "1" ]]; then
           FAST_TEST_SELECTED="$(mktemp)"
-          "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" --collect-only -q $FAST_TEST_IGNORES > "$FAST_TEST_SELECTED"
+          "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" --collect-only -q --basetemp "$FAST_TEST_BASETEMP" $FAST_TEST_IGNORES > "$FAST_TEST_SELECTED"
           FAST_TEST_REPORT_ARGS+=(
             --selected-nodeids "$FAST_TEST_SELECTED"
             --verify-nodeids
@@ -284,7 +286,7 @@ _run_pytest() {
         echo "Enforcing fast-test budget (CODEX_FAST_TEST_ENFORCE_BUDGET=1)."
         "$PYTHON_BIN" scripts/report_fast_test_budget.py "${FAST_TEST_REPORT_ARGS[@]}"
       else
-        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" --dist loadfile $FAST_TEST_IGNORES
+        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" --dist loadfile --basetemp "$FAST_TEST_BASETEMP" $FAST_TEST_IGNORES
       fi
   fi
 }

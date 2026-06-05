@@ -52,6 +52,7 @@ class HermeticTestRoots:
     pytest_runtime_root: Path
     pytest_temp_root: Path
     pytest_temp_run_root: Path
+    pytest_basetemp_root: Path
     pytest_process_root: Path
     pytest_tmp_root: Path
     pytest_home_root: Path
@@ -79,6 +80,7 @@ class HermeticTestRoots:
         )
         pytest_temp_root = pytest_runtime_root / "t"
         pytest_temp_run_root = pytest_temp_root / run_token
+        pytest_basetemp_root = pytest_temp_run_root / "basetemp"
         pytest_process_root = pytest_temp_run_root / process_token
         pytest_tmp_root = pytest_process_root / "tmp"
         pytest_home_root = pytest_process_root / "home"
@@ -98,6 +100,7 @@ class HermeticTestRoots:
             pytest_runtime_root=pytest_runtime_root,
             pytest_temp_root=pytest_temp_root,
             pytest_temp_run_root=pytest_temp_run_root,
+            pytest_basetemp_root=pytest_basetemp_root,
             pytest_process_root=pytest_process_root,
             pytest_tmp_root=pytest_tmp_root,
             pytest_home_root=pytest_home_root,

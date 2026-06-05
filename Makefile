@@ -13,6 +13,9 @@ done)
 PYTHON := $(shell if [ -x $(VENV_PYTHON) ] && $(VENV_PYTHON) -c 'import sys; raise SystemExit(0 if sys.version_info >= $(MIN_PYTHON) else 1)' >/dev/null 2>&1; then echo $(VENV_PYTHON); elif [ -n "$(BOOTSTRAP_PYTHON)" ]; then echo $(BOOTSTRAP_PYTHON); else echo python3; fi)
 PYTHON_ABS := $(abspath $(PYTHON))
 PYTEST_FAST_WORKERS ?= $(shell $(PYTHON) -c "import os;print(os.cpu_count() or 4)")
+CAR_PYTEST_RUN_TOKEN ?= $(shell $(PYTHON) -c 'import uuid; print("make-" + uuid.uuid4().hex[:8])')
+export CAR_PYTEST_RUN_TOKEN
+PYTEST_BASETEMP ?= $(shell CAR_PYTEST_RUN_TOKEN="$(CAR_PYTEST_RUN_TOKEN)" $(PYTHON) scripts/pytest_basetemp.py)
 
 export PATH := $(CURDIR)/$(VENV)/bin:$(PATH)
 HOST ?= 127.0.0.1
@@ -116,15 +119,15 @@ hooks:
 test: test-fast
 
 test-fast:
-	$(PYTHON) -m pytest -m "not integration and not slow" -n $(PYTEST_FAST_WORKERS) --dist loadfile --ignore=tests/chat_surface_integration
+	$(PYTHON) -m pytest -m "not integration and not slow" -n $(PYTEST_FAST_WORKERS) --dist loadfile --basetemp "$(PYTEST_BASETEMP)" --ignore=tests/chat_surface_integration
 
 test-full:
-	$(PYTHON) -m pytest -m "not integration"
+	$(PYTHON) -m pytest -m "not integration" --basetemp "$(PYTEST_BASETEMP)"
 
 # Cross-platform chat contract/shape guardrails.
 # Add additional platform suites here as new chat adapters land.
 test-chat-platform-contract:
-	$(PYTHON) -m pytest -q \
+	$(PYTHON) -m pytest -q --basetemp "$(PYTEST_BASETEMP)" \
 		tests/adapters/chat/test_command_contract.py \
 		tests/adapters/chat/test_command_ingress_parity.py \
 		tests/adapters/discord/test_service_routing.py \
@@ -135,7 +138,7 @@ test-chat-platform-contract:
 		tests/test_doctor_checks.py::test_chat_doctor_checks_failures_are_actionable
 
 test-chat-surface-lab:
-	$(PYTHON) -m pytest -q \
+	$(PYTHON) -m pytest -q --basetemp "$(PYTEST_BASETEMP)" \
 		tests/chat_surface_lab/test_scenario_corpus.py \
 		tests/chat_surface_lab/test_artifact_manifest.py \
 		tests/chat_surface_lab/test_latency_budgets.py \
@@ -144,7 +147,7 @@ test-chat-surface-lab:
 	$(PYTHON) scripts/chat_surface_latency_budgets.py --profile check-chat-surface-lab
 
 test-managed-thread-cutover:
-	$(PYTHON) -m pytest -q \
+	$(PYTHON) -m pytest -q --basetemp "$(PYTEST_BASETEMP)" \
 		tests/test_backend_run_event_contract.py \
 		tests/test_hub_supervisor.py \
 		tests/test_pma_managed_threads_lifecycle.py \
@@ -160,7 +163,7 @@ test-managed-thread-cutover:
 		tests/test_redaction.py
 
 test-integration:
-	$(PYTHON) -m pytest -m integration
+	$(PYTHON) -m pytest -m integration --basetemp "$(PYTEST_BASETEMP)"
 
 typecheck-strict:
 	$(PYTHON) -m mypy src/codex_autorunner
@@ -178,13 +181,13 @@ check-extended: check-full
 	$(MAKE) test-chat-platform-contract PYTHON="$(PYTHON)"
 
 preflight-hub-startup:
-	$(PYTHON) -m pytest -q tests/test_hub_app_context.py::test_hub_lifespan_reaper_uses_config_root
+	$(PYTHON) -m pytest -q --basetemp "$(PYTEST_BASETEMP)" tests/test_hub_app_context.py::test_hub_lifespan_reaper_uses_config_root
 
 protocol-schemas-check:
 	$(MAKE) agent-compatibility-check PYTHON="$(PYTHON)"
 
 agent-compatibility-check:
-	$(PYTHON) -m pytest tests/test_protocol_schemas.py -q
+	$(PYTHON) -m pytest tests/test_protocol_schemas.py -q --basetemp "$(PYTEST_BASETEMP)"
 	$(PYTHON) scripts/check_protocol_drift.py
 
 protocol-schemas-refresh:
