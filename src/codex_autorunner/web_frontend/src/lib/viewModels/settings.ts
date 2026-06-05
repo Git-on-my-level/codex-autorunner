@@ -264,7 +264,9 @@ function mapAgentStatus(agent: JsonRecord, modelCatalogs: Record<string, JsonRec
         : modelStatus === 'unsupported'
           ? modelGate.reason || 'Model selection not supported'
           : !usable
-            ? 'Agent offline; models unavailable'
+            ? reachable === null
+              ? 'Runtime not verified; models unavailable'
+              : 'Agent offline; models unavailable'
             : 'Could not load models',
     modelOptions
   };
