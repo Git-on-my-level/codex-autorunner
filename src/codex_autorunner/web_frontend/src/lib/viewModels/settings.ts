@@ -237,11 +237,11 @@ function mapAgentStatus(agent: JsonRecord, modelCatalogs: Record<string, JsonRec
   const capabilities = stringArray(agent.capabilities);
   const reachable = typeof agent.reachable === 'boolean' ? agent.reachable : null;
   const usable = agent.usable !== false && reachable !== false;
-  const status = stringValue(agent.status) || (usable ? 'ready' : reachable === null ? 'configured' : 'offline');
-  const statusLabel = stringValue(agent.status_label ?? agent.statusLabel) || (usable ? 'Ready' : reachable === null ? 'Configured' : 'Offline');
+  const status = stringValue(agent.status) || (reachable === null ? 'configured' : usable ? 'ready' : 'offline');
+  const statusLabel = stringValue(agent.status_label ?? agent.statusLabel) || (reachable === null ? 'Configured' : usable ? 'Ready' : 'Offline');
   const statusDetail =
     stringValue(agent.status_detail ?? agent.statusDetail) ||
-    (usable ? 'Runtime is reachable.' : reachable === null ? 'This agent is configured, but CAR cannot verify it yet.' : 'This agent is not reachable right now.');
+    (reachable === null ? 'This agent is configured; CAR cannot verify live reachability yet.' : usable ? 'Runtime is reachable.' : 'This agent is not reachable right now.');
   const models = modelCatalogs[id] ?? modelCatalogs[stringValue(agent.id)] ?? null;
   const modelGate = capabilityGate(agent, 'list_models');
   const modelStatus = !usable ? 'unavailable' : modelGate.allowed ? (models ? 'available' : 'unavailable') : 'unsupported';
@@ -263,10 +263,10 @@ function mapAgentStatus(agent: JsonRecord, modelCatalogs: Record<string, JsonRec
         ? `${modelCount} models`
         : modelStatus === 'unsupported'
           ? modelGate.reason || 'Model selection not supported'
-          : !usable
-            ? reachable === null
-              ? 'Runtime not verified; models unavailable'
-              : 'Agent offline; models unavailable'
+          : reachable === null
+            ? 'Model selection not verified yet'
+            : !usable
+              ? 'Agent offline; models unavailable'
             : 'Could not load models',
     modelOptions
   };

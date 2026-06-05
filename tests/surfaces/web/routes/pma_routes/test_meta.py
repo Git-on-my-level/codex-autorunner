@@ -77,6 +77,31 @@ def test_pma_agents_includes_hermes_when_available(monkeypatch) -> None:
         ] == ["model_listing"]
 
 
+def test_pma_agents_keeps_healthcheckless_agents_selectable(monkeypatch) -> None:
+    descriptor = AgentDescriptor(
+        id="plugin",
+        name="Plugin Agent",
+        capabilities=frozenset(),
+        make_harness=lambda _ctx: object(),
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.agents.get_registered_agents",
+        lambda _state: {"plugin": descriptor},
+    )
+    client = _build_client(with_supervisors=True)
+
+    response = client.get("/agents")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [agent["id"] for agent in payload["agents"]] == ["plugin"]
+    assert payload["default"] == "plugin"
+    assert payload["agent_statuses"][0]["status"] == "configured"
+    assert payload["agent_statuses"][0]["reachable"] is None
+    assert payload["agent_statuses"][0]["usable"] is True
+    assert "setup_prompt" not in payload
+
+
 def test_pma_models_endpoint_returns_capability_error_for_hermes(monkeypatch) -> None:
     monkeypatch.setattr(
         "codex_autorunner.agents.registry.hermes_runtime_preflight",

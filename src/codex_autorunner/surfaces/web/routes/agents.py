@@ -79,9 +79,9 @@ def _agent_health_status(
     if descriptor.healthcheck is None:
         status = "configured"
         label = "Configured"
-        detail = "This agent is configured, but CAR cannot verify it yet."
+        detail = "This agent is configured; CAR cannot verify live reachability yet."
         reachable: bool | None = None
-        usable = False
+        usable = True
     else:
         try:
             reachable = bool(descriptor.healthcheck(context))

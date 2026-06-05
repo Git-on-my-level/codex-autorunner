@@ -256,6 +256,84 @@ def test_list_agents_does_not_advertise_unavailable_fallback(
     }
 
 
+def test_list_agents_keeps_healthcheckless_agents_selectable(monkeypatch) -> None:
+    descriptor = SimpleNamespace(
+        id="plugin",
+        name="Plugin Agent",
+        capabilities=frozenset({"model_listing"}),
+        healthcheck=None,
+    )
+    monkeypatch.setattr(
+        agents_routes,
+        "get_registered_agents",
+        lambda _state: {"plugin": descriptor},
+    )
+    client = _build_client(with_supervisors=True)
+
+    response = client.get("/api/agents")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert [agent["id"] for agent in data["agents"]] == ["plugin"]
+    assert data["default"] == "plugin"
+    assert data["agent_statuses"][0] | {"capability_projection": {}} == {
+        "id": "plugin",
+        "name": "Plugin Agent",
+        "capabilities": ["model_listing"],
+        "reachable": None,
+        "usable": True,
+        "status": "configured",
+        "status_label": "Configured",
+        "status_detail": "This agent is configured; CAR cannot verify live reachability yet.",
+        "capability_projection": {},
+    }
+
+
+def test_agent_models_route_allows_healthcheckless_agents(monkeypatch) -> None:
+    class _Harness:
+        async def model_catalog(self, _repo_root):
+            return ModelCatalog(
+                default_model="plugin-default",
+                models=[
+                    ModelSpec(
+                        id="plugin-default",
+                        display_name="Plugin Default",
+                        supports_reasoning=False,
+                        reasoning_options=[],
+                    )
+                ],
+            )
+
+    descriptor = SimpleNamespace(
+        id="plugin",
+        name="Plugin Agent",
+        capabilities=frozenset({"model_listing"}),
+        healthcheck=None,
+        make_harness=lambda _state: _Harness(),
+    )
+    monkeypatch.setattr(
+        agents_routes,
+        "get_agent_descriptor",
+        lambda agent_id, _state: descriptor if agent_id == "plugin" else None,
+    )
+    client = _build_client(with_supervisors=True)
+
+    response = client.get("/api/agents/plugin/models")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "default_model": "plugin-default",
+        "models": [
+            {
+                "id": "plugin-default",
+                "display_name": "Plugin Default",
+                "supports_reasoning": False,
+                "reasoning_options": [],
+            }
+        ],
+    }
+
+
 def test_list_agents_includes_hermes_when_available(monkeypatch) -> None:
     monkeypatch.setattr(
         "codex_autorunner.agents.registry.hermes_runtime_preflight",
