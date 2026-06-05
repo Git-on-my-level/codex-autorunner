@@ -644,7 +644,7 @@ def register_services_commands(
         service = _service(data)
         typer.echo(
             f"{service.get('service_id', service_id)} {service.get('status', '')} "
-            f"healthy={result.get('healthy')} detail={result.get('detail', '')}".strip()
+            f"ok={result.get('ok')} error={result.get('error', '')}".strip()
         )
 
     @services_app.command("set-autostart")

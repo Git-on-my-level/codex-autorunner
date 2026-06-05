@@ -8,7 +8,7 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import httpx
 import websockets
-from fastapi import APIRouter, Body, HTTPException, Query, Request, WebSocket
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, WebSocket
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from starlette.background import BackgroundTask
@@ -21,6 +21,7 @@ from ....core.force_attestation import (
     enforce_force_attestation,
 )
 from ....core.logging_utils import log_event
+from ....core.path_utils import ConfigPathError, resolve_config_path
 from ....core.preview_services import (
     PreviewPortAllocationError,
     PreviewServiceKind,
@@ -151,7 +152,20 @@ OptionalDestructiveBody = Annotated[
 
 
 def build_services_routes(context: HubAppContext) -> APIRouter:
-    router = APIRouter(tags=["hub-services"])
+    def _require_preview_services_enabled() -> None:
+        if not _preview_services_enabled(context):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Preview services are disabled. "
+                    "Set preview_services.enabled=true in the hub config to enable."
+                ),
+            )
+
+    router = APIRouter(
+        tags=["hub-services"],
+        dependencies=[Depends(_require_preview_services_enabled)],
+    )
     manager = context.preview_service_manager
 
     @router.get("/hub/read-models/services")
@@ -631,7 +645,21 @@ def _allowed_static_roots(
     preview_config = _preview_config(context)
     configured = preview_config.get("static_allowed_roots")
     if isinstance(configured, list):
-        roots.extend(Path(str(item)) for item in configured if str(item).strip())
+        for item in configured:
+            raw_item = str(item).strip()
+            if not raw_item:
+                continue
+            try:
+                roots.append(
+                    resolve_config_path(
+                        raw_item,
+                        context.config.root,
+                        allow_absolute=True,
+                        allow_home=True,
+                    )
+                )
+            except ConfigPathError:
+                continue
     resolved: list[Path] = []
     for root in roots:
         try:
@@ -881,6 +909,11 @@ def _preview_config(context: HubAppContext) -> dict[str, Any]:
         return {}
     preview_config = raw_config.get("preview_services")
     return preview_config if isinstance(preview_config, dict) else {}
+
+
+def _preview_services_enabled(context: HubAppContext) -> bool:
+    enabled = _preview_config(context).get("enabled")
+    return True if enabled is None else bool(enabled)
 
 
 _HOP_BY_HOP_HEADERS = {
