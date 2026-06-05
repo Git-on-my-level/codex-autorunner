@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
-from typing import Annotated, Any, Optional
+from pathlib import Path, PurePosixPath
+from typing import Annotated, Any, Iterable, Optional
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
-from fastapi import APIRouter, Body, HTTPException, Query
+import httpx
+from fastapi import APIRouter, Body, HTTPException, Query, Request
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from starlette.background import BackgroundTask
 
+from ....core.config_validation import is_loopback_host
 from ....core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from ....core.preview_services import (
     PreviewPortAllocationError,
@@ -330,6 +335,37 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             raise _bad_request(exc) from exc
         return {"service_id": service_id, "tail": tail, "text": text}
 
+    @router.api_route(
+        "/preview/services/{service_id}/",
+        methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        include_in_schema=False,
+    )
+    @router.api_route(
+        "/preview/services/{service_id}/{preview_path:path}",
+        methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        include_in_schema=False,
+    )
+    async def preview_service(
+        service_id: str,
+        request: Request,
+        preview_path: str = "",
+    ) -> Response:
+        record = await _require_record(manager, service_id)
+        if not record.exposure.proxy_enabled:
+            raise HTTPException(status_code=404, detail="Preview proxy is disabled")
+        if record.kind == PreviewServiceKind.STATIC_FILE.value:
+            return _static_file_response(context, record, preview_path, request.method)
+        if record.kind == PreviewServiceKind.STATIC_DIR.value:
+            return _static_dir_response(context, record, preview_path, request.method)
+        if record.kind in {
+            PreviewServiceKind.LOOPBACK_URL.value,
+            PreviewServiceKind.MANAGED_COMMAND.value,
+        }:
+            return await _proxy_http_request(context, record, request, preview_path)
+        raise HTTPException(
+            status_code=400, detail=f"Unsupported service kind: {record.kind}"
+        )
+
     return router
 
 
@@ -468,6 +504,281 @@ def _is_running_managed(record: PreviewServiceRecord) -> bool:
             PreviewServiceStatus.UNHEALTHY.value,
         }
     )
+
+
+def _static_file_response(
+    context: HubAppContext,
+    record: PreviewServiceRecord,
+    preview_path: str,
+    method: str,
+) -> Response:
+    target = _require_static_target_path(context, record)
+    safe_path = _validate_preview_path(preview_path)
+    if safe_path not in {"", target.name}:
+        raise HTTPException(status_code=404, detail="Static preview file not found")
+    _reject_sensitive_static_path(target, relative_parts=(target.name,))
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="Static preview file not found")
+    if method == "HEAD":
+        return Response(headers={"content-length": str(target.stat().st_size)})
+    return FileResponse(target)
+
+
+def _static_dir_response(
+    context: HubAppContext,
+    record: PreviewServiceRecord,
+    preview_path: str,
+    method: str,
+) -> Response:
+    root = _require_static_target_path(context, record)
+    if not root.is_dir():
+        raise HTTPException(
+            status_code=404, detail="Static preview directory not found"
+        )
+    relative = _validate_preview_path(preview_path)
+    if not relative:
+        relative = "index.html"
+    relative_parts = PurePosixPath(relative).parts
+    _reject_sensitive_static_path(root, relative_parts=relative_parts)
+    target = (root / Path(*relative_parts)).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=403, detail="Static preview path escapes root"
+        ) from exc
+    if target.is_dir():
+        target = (target / "index.html").resolve()
+        try:
+            target.relative_to(root)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=403, detail="Static preview path escapes root"
+            ) from exc
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="Static preview file not found")
+    if method == "HEAD":
+        return Response(headers={"content-length": str(target.stat().st_size)})
+    return FileResponse(target)
+
+
+def _require_static_target_path(
+    context: HubAppContext,
+    record: PreviewServiceRecord,
+) -> Path:
+    target_path = record.target.path if record.target is not None else None
+    if not target_path:
+        raise HTTPException(status_code=400, detail="Static service has no target path")
+    path = Path(target_path).expanduser().resolve()
+    if not _path_is_under_any(path, _allowed_static_roots(context, record)):
+        raise HTTPException(
+            status_code=403,
+            detail="Static preview target is outside allowed roots",
+        )
+    return path
+
+
+def _allowed_static_roots(
+    context: HubAppContext,
+    record: PreviewServiceRecord,
+) -> list[Path]:
+    roots: list[Path] = [context.config.root]
+    for snapshot in context.supervisor.list_repos(use_cache=True):
+        for attr in ("absolute_path", "path"):
+            value = getattr(snapshot, attr, None)
+            if value:
+                roots.append(Path(value))
+    for link in record.scope_links:
+        if str(link.kind) == "workspace" and link.path:
+            roots.append(Path(link.path))
+    preview_config = _preview_config(context)
+    configured = preview_config.get("static_allowed_roots")
+    if isinstance(configured, list):
+        roots.extend(Path(str(item)) for item in configured if str(item).strip())
+    resolved: list[Path] = []
+    for root in roots:
+        try:
+            resolved.append(root.expanduser().resolve())
+        except OSError:
+            continue
+    return resolved
+
+
+def _path_is_under_any(path: Path, roots: Iterable[Path]) -> bool:
+    for root in roots:
+        try:
+            path.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def _validate_preview_path(preview_path: str) -> str:
+    clean = preview_path.strip("/")
+    if not clean:
+        return ""
+    pure = PurePosixPath(clean)
+    if pure.is_absolute() or any(part in {"", ".", ".."} for part in pure.parts):
+        raise HTTPException(status_code=403, detail="Invalid preview path")
+    return pure.as_posix()
+
+
+def _reject_sensitive_static_path(
+    root: Path, *, relative_parts: tuple[str, ...]
+) -> None:
+    sensitive_names = {
+        ".git",
+        ".env",
+        ".env.local",
+        ".env.development",
+        ".env.production",
+        "id_rsa",
+        "id_dsa",
+        "id_ecdsa",
+        "id_ed25519",
+    }
+    for part in relative_parts:
+        lowered = part.lower()
+        if part.startswith(".") or lowered in sensitive_names:
+            raise HTTPException(
+                status_code=403, detail="Static preview file is hidden or sensitive"
+            )
+        if lowered.endswith((".pem", ".key", ".p12", ".pfx")):
+            raise HTTPException(
+                status_code=403, detail="Static preview file is hidden or sensitive"
+            )
+    target = (root / Path(*relative_parts)).resolve() if relative_parts else root
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=403, detail="Static preview path escapes root"
+        ) from exc
+
+
+async def _proxy_http_request(
+    context: HubAppContext,
+    record: PreviewServiceRecord,
+    request: Request,
+    preview_path: str,
+) -> Response:
+    target_url = _proxy_target_url(context, record, preview_path, request.url.query)
+    headers = _proxy_request_headers(request.headers.items())
+    body = await request.body()
+    client = httpx.AsyncClient(timeout=None, follow_redirects=False)
+    try:
+        upstream = await client.send(
+            client.build_request(
+                request.method,
+                target_url,
+                headers=headers,
+                content=body,
+            ),
+            stream=True,
+        )
+    except httpx.HTTPError as exc:
+        await client.aclose()
+        raise HTTPException(
+            status_code=502, detail=f"Preview proxy failed: {exc}"
+        ) from exc
+    response_headers = _proxy_response_headers(upstream.headers.items())
+    return StreamingResponse(
+        upstream.aiter_bytes(),
+        status_code=upstream.status_code,
+        headers=response_headers,
+        background=BackgroundTask(_close_proxy_response, upstream, client),
+    )
+
+
+async def _close_proxy_response(
+    upstream: httpx.Response,
+    client: httpx.AsyncClient,
+) -> None:
+    await upstream.aclose()
+    await client.aclose()
+
+
+def _proxy_target_url(
+    context: HubAppContext,
+    record: PreviewServiceRecord,
+    preview_path: str,
+    query_string: str,
+) -> str:
+    target = record.target
+    direct_url = target.direct_url if target is not None else None
+    if not direct_url:
+        raise HTTPException(status_code=400, detail="Preview service has no target URL")
+    split = urlsplit(direct_url)
+    if split.scheme not in {"http", "https"}:
+        raise HTTPException(
+            status_code=400, detail="Preview target must be http or https"
+        )
+    if not _proxy_host_allowed(context, split.hostname or ""):
+        raise HTTPException(
+            status_code=403, detail="Preview target host is not allowed"
+        )
+    clean_path = _validate_preview_path(preview_path)
+    base_path = split.path or "/"
+    if not base_path.endswith("/"):
+        base_path = f"{base_path}/"
+    full_path = base_path
+    if clean_path:
+        full_path = f"{base_path}{quote(clean_path, safe='/')}"
+    base_query = parse_qsl(split.query, keep_blank_values=True)
+    request_query = parse_qsl(query_string, keep_blank_values=True)
+    query = urlencode(base_query + request_query, doseq=True)
+    return urlunsplit((split.scheme, split.netloc, full_path, query, ""))
+
+
+def _proxy_host_allowed(context: HubAppContext, host: str) -> bool:
+    if is_loopback_host(host):
+        return True
+    preview_config = _preview_config(context)
+    allowed = preview_config.get("proxy_allowed_hosts")
+    if not isinstance(allowed, list):
+        return False
+    return host in {str(item).strip() for item in allowed if str(item).strip()}
+
+
+def _preview_config(context: HubAppContext) -> dict[str, Any]:
+    raw_config = getattr(context.config, "raw", {})
+    if not isinstance(raw_config, dict):
+        return {}
+    preview_config = raw_config.get("preview_services")
+    return preview_config if isinstance(preview_config, dict) else {}
+
+
+_HOP_BY_HOP_HEADERS = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+}
+
+
+def _proxy_request_headers(headers: Iterable[tuple[str, str]]) -> dict[str, str]:
+    forwarded: dict[str, str] = {}
+    for key, value in headers:
+        lowered = key.lower()
+        if lowered in _HOP_BY_HOP_HEADERS or lowered == "host":
+            continue
+        forwarded[key] = value
+    return forwarded
+
+
+def _proxy_response_headers(headers: Iterable[tuple[str, str]]) -> dict[str, str]:
+    forwarded: dict[str, str] = {}
+    for key, value in headers:
+        lowered = key.lower()
+        if lowered in _HOP_BY_HOP_HEADERS:
+            continue
+        forwarded[key] = value
+    return forwarded
 
 
 def _not_found(exc: Exception) -> HTTPException:

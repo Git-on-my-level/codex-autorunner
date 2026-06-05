@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import http.server
 import sys
+import threading
 import time
 from pathlib import Path
+from typing import Any
 
 from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.locks import process_is_active
+from codex_autorunner.core.preview_services import PreviewServiceRegistry
 from codex_autorunner.server import create_hub_app
 
 
@@ -68,6 +72,194 @@ def test_preview_services_static_crud_and_read_model(tmp_path: Path) -> None:
     assert deleted.status_code == 200
     assert deleted.json()["deleted"] is True
     assert client.get(f"/hub/services/{service_id}").status_code == 404
+
+
+def test_preview_static_file_opens_through_car_url(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    html = hub_root / "index.html"
+    html.write_text("<h1>Preview</h1>", encoding="utf-8")
+    client = TestClient(create_hub_app(hub_root))
+
+    created = client.post(
+        "/hub/services/static",
+        json={"path": str(html), "name": "Static preview"},
+    )
+
+    assert created.status_code == 200
+    service_id = created.json()["service"]["service_id"]
+    opened = client.get(f"/preview/services/{service_id}/")
+    assert opened.status_code == 200
+    assert "<h1>Preview</h1>" in opened.text
+    by_name = client.get(f"/preview/services/{service_id}/index.html")
+    assert by_name.status_code == 200
+    assert by_name.text == opened.text
+
+
+def test_preview_static_dir_opens_index_and_nested_files(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    static_dir = hub_root / "site"
+    nested = static_dir / "assets"
+    nested.mkdir(parents=True)
+    (static_dir / "index.html").write_text("home", encoding="utf-8")
+    (nested / "app.txt").write_text("asset", encoding="utf-8")
+    client = TestClient(create_hub_app(hub_root))
+
+    created = client.post(
+        "/hub/services/static",
+        json={"path": str(static_dir), "kind": "static_dir", "name": "Site"},
+    )
+
+    assert created.status_code == 200
+    service_id = created.json()["service"]["service_id"]
+    assert client.get(f"/preview/services/{service_id}/").text == "home"
+    asset = client.get(f"/preview/services/{service_id}/assets/app.txt")
+    assert asset.status_code == 200
+    assert asset.text == "asset"
+
+
+def test_preview_static_security_rejects_unsafe_paths(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    static_dir = hub_root / "site"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("home", encoding="utf-8")
+    (static_dir / ".env").write_text("SECRET=1", encoding="utf-8")
+    (static_dir / ".hidden").write_text("hidden", encoding="utf-8")
+    (static_dir / "id_rsa").write_text("key", encoding="utf-8")
+    (static_dir / "private.pem").write_text("key", encoding="utf-8")
+    git_dir = static_dir / ".git"
+    git_dir.mkdir()
+    (git_dir / "config").write_text("config", encoding="utf-8")
+    outside = hub_root / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    symlink = static_dir / "outside-link"
+    symlink.symlink_to(outside)
+    client = TestClient(create_hub_app(hub_root))
+    created = client.post(
+        "/hub/services/static",
+        json={"path": str(static_dir), "kind": "static_dir", "name": "Site"},
+    )
+    service_id = created.json()["service"]["service_id"]
+
+    forbidden_paths = [
+        "../outside.txt",
+        ".env",
+        ".hidden",
+        ".git/config",
+        "id_rsa",
+        "private.pem",
+        "outside-link",
+    ]
+    for path in forbidden_paths:
+        response = client.get(f"/preview/services/{service_id}/{path}")
+        if path.startswith("../"):
+            assert response.status_code in {403, 404}, path
+        else:
+            assert response.status_code == 403, path
+
+
+def test_preview_static_target_must_be_under_allowed_root(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    outside = tmp_path / "outside.html"
+    outside.write_text("outside", encoding="utf-8")
+    client = TestClient(create_hub_app(hub_root))
+    created = client.post(
+        "/hub/services/static",
+        json={"path": str(outside), "name": "Outside"},
+    )
+    service_id = created.json()["service"]["service_id"]
+
+    opened = client.get(f"/preview/services/{service_id}/")
+
+    assert opened.status_code == 403
+
+
+def test_preview_loopback_http_service_proxies_method_path_query_and_body(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    server, port = _start_loopback_capture_server()
+    client = TestClient(create_hub_app(hub_root))
+    try:
+        created = client.post(
+            "/hub/services/loopback-url",
+            json={"url": f"http://127.0.0.1:{port}/base/", "name": "Loopback"},
+        )
+        assert created.status_code == 200
+        service_id = created.json()["service"]["service_id"]
+
+        response = client.post(
+            f"/preview/services/{service_id}/nested/path",
+            params={"q": "one"},
+            content=b"payload",
+            headers={"X-Test-Header": "kept"},
+        )
+
+        assert response.status_code == 201
+        assert response.headers["x-upstream"] == "seen"
+        assert response.json() == {
+            "method": "POST",
+            "path": "/base/nested/path?q=one",
+            "body": "payload",
+            "header": "kept",
+        }
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_preview_managed_command_proxies_after_start(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    client = TestClient(create_hub_app(hub_root))
+    port = _find_available_port()
+    created = client.post(
+        "/hub/services/managed",
+        json={
+            "name": "Managed preview",
+            "argv": _server_command(),
+            "cwd": str(tmp_path),
+            "port_policy": {"mode": "exact", "port": port},
+            "health_check": {"type": "tcp", "path": None},
+            "start": True,
+        },
+    )
+    assert created.status_code == 200
+    service_id = created.json()["service"]["service_id"]
+    pid = created.json()["service"]["process"]["pid"]
+    try:
+        assert _wait_for_route_health(client, service_id)
+        opened = client.get(f"/preview/services/{service_id}/")
+        assert opened.status_code == 200
+        assert opened.text == "ok"
+    finally:
+        if process_is_active(pid):
+            client.post(f"/hub/services/{service_id}/teardown")
+
+
+def test_preview_proxy_rejects_non_loopback_targets_by_default(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    registry = PreviewServiceRegistry(hub_root)
+    record = registry.create_from_parts(
+        name="Remote",
+        kind="loopback_url",
+        target={
+            "host": "example.com",
+            "port": 80,
+            "scheme": "http",
+            "direct_url": "http://example.com/",
+        },
+    )
+    client = TestClient(create_hub_app(hub_root))
+
+    opened = client.get(f"/preview/services/{record.service_id}/")
+
+    assert opened.status_code == 403
 
 
 def test_preview_services_reject_invalid_and_missing_resources(
@@ -205,6 +397,35 @@ def _server_command() -> list[str]:
         "http.server.ThreadingHTTPServer(('127.0.0.1', port), H).serve_forever()\n"
     )
     return [sys.executable, "-u", "-c", script]
+
+
+def _start_loopback_capture_server() -> tuple[http.server.ThreadingHTTPServer, int]:
+    import json
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            body = self.rfile.read(int(self.headers.get("Content-Length") or "0"))
+            payload: dict[str, Any] = {
+                "method": self.command,
+                "path": self.path,
+                "body": body.decode("utf-8"),
+                "header": self.headers.get("X-Test-Header"),
+            }
+            content = json.dumps(payload).encode("utf-8")
+            self.send_response(201)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("X-Upstream", "seen")
+            self.end_headers()
+            self.wfile.write(content)
+
+        def log_message(self, *args: object) -> None:
+            return
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, int(server.server_address[1])
 
 
 def _find_available_port(start: int = 42000) -> int:
