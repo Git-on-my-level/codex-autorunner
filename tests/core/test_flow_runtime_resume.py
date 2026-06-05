@@ -112,7 +112,8 @@ async def test_stop_requested_mid_run_halts_flow(tmp_path: Path) -> None:
     finished = await controller.run_flow(record.id)
 
     assert finished.status == FlowRunStatus.STOPPED
-    assert finished.current_step == "second"
+    assert finished.current_step is None
+    assert finished.stop_requested is False
     assert calls == ["first"]  # second step never ran
 
 

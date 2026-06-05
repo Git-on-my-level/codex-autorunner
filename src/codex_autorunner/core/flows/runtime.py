@@ -172,6 +172,8 @@ class FlowRuntime:
             kwargs["state"] = state
         if result.current_step is not NO_CHANGE:
             kwargs["current_step"] = result.current_step
+        if result.stop_requested is not NO_CHANGE:
+            kwargs["stop_requested"] = result.stop_requested
         if result.started_at is not NO_CHANGE:
             kwargs["started_at"] = result.started_at
         if result.finished_at is not NO_CHANGE:
@@ -292,6 +294,9 @@ class FlowRuntime:
                 latest = self.store.get_flow_run(run_id)
                 if latest:
                     record = latest
+
+                if record.status.is_terminal():
+                    break
 
                 if record.stop_requested:
                     if record.status.is_terminal():

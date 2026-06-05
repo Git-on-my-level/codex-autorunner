@@ -152,6 +152,7 @@ class TestStopRequested:
         assert result.status == FlowRunStatus.STOPPED
         assert result.finished_at == _NOW
         assert result.current_step is None
+        assert result.stop_requested is False
         assert result.state.get("reason_summary") == "Stopped by user"
         assert result.state.get("reason_code") == "user_stop"
         assert "flow_stopped" in _effect_event_names(result)
@@ -160,10 +161,12 @@ class TestStopRequested:
         result = _reduce(
             FlowRunStatus.RUNNING,
             FlowTrigger(kind=TriggerKind.STOP_REQUESTED),
+            current_step="ticket_turn",
         )
         assert result.status == FlowRunStatus.STOPPED
         assert result.finished_at == _NOW
-        assert result.current_step is NO_CHANGE
+        assert result.current_step is None
+        assert result.stop_requested is False
         assert result.state.get("reason_summary") == "Stopped by user"
         assert "flow_stopped" in _effect_event_names(result)
 
@@ -173,6 +176,8 @@ class TestStopRequested:
             FlowTrigger(kind=TriggerKind.STOP_REQUESTED),
         )
         assert result.status == FlowRunStatus.STOPPED
+        assert result.current_step is None
+        assert result.stop_requested is False
 
     def test_rejects_non_running(self):
         with pytest.raises(InvalidTransition):

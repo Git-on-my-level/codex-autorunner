@@ -1127,6 +1127,8 @@ def reconcile_flow_run(
             }
             if result.current_step is not NO_CHANGE:
                 update_kwargs["current_step"] = result.current_step
+            if result.stop_requested is not NO_CHANGE:
+                update_kwargs["stop_requested"] = result.stop_requested
             if result.error_message is not NO_CHANGE:
                 update_kwargs["error_message"] = result.error_message
             if result.finished_at is not NO_CHANGE:

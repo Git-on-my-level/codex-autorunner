@@ -131,18 +131,25 @@ async def test_flow_controller_stop_running_flow_finishes_immediately(temp_dir):
 
         assert stopped_record.status == FlowRunStatus.STOPPED
         assert stopped_record.finished_at is not None
+        assert stopped_record.current_step is None
+        assert stopped_record.stop_requested is False
         assert stopped_record.state.get("reason_code") == "user_stop"
         persisted = controller.store.get_flow_run(record.id)
         assert persisted is not None
         assert persisted.status == FlowRunStatus.STOPPED
+        assert persisted.current_step is None
+        assert persisted.stop_requested is False
 
         step_can_finish.set()
         final_record = await asyncio.wait_for(runner, timeout=1)
 
         assert final_record.status == FlowRunStatus.STOPPED
+        assert final_record.stop_requested is False
         persisted = controller.store.get_flow_run(record.id)
         assert persisted is not None
         assert persisted.status == FlowRunStatus.STOPPED
+        assert persisted.current_step is None
+        assert persisted.stop_requested is False
         assert persisted.state.get("late_step") is None
         event_types = [
             event.event_type.value for event in controller.store.get_events(record.id)
