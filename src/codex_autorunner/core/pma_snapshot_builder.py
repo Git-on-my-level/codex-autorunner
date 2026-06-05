@@ -34,6 +34,7 @@ from .pma_file_inbox import (
     enrich_pma_file_inbox_entry,
 )
 from .pma_ticket_flow_state import get_latest_ticket_flow_run_state_with_record
+from .preview_services import PreviewServiceRegistryError, read_preview_services_model
 from .state_roots import resolve_hub_templates_root
 from .ticket_flow_projection import build_canonical_state_v1
 from .ticket_flow_summary import build_ticket_flow_summary
@@ -178,6 +179,85 @@ def _build_templates_snapshot(
     return payload
 
 
+def _empty_services_snapshot() -> dict[str, Any]:
+    return {
+        "counts": {
+            "total": 0,
+            "running": 0,
+            "attention": 0,
+            "managed": 0,
+            "static": 0,
+            "loopback": 0,
+        },
+        "running_sample": [],
+        "attention_sample": [],
+        "drilldown_commands": [
+            "car services list --json",
+            "car services get SERVICE_ID --json",
+            "car services logs SERVICE_ID --tail 200",
+        ],
+    }
+
+
+def _compact_service_entry(service: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "service_id": _truncate(str(service.get("service_id") or ""), 80),
+        "name": _truncate(str(service.get("name") or ""), 120),
+        "kind": _truncate(str(service.get("kind") or ""), 80),
+        "status": _truncate(str(service.get("status") or ""), 80),
+        "car_url": _truncate(str(service.get("car_url") or ""), 200),
+        "scope": _truncate(str(service.get("scope") or ""), 160),
+        "port": service.get("port"),
+        "updated_at": _truncate(str(service.get("updated_at") or ""), 80),
+    }
+
+
+def _build_services_snapshot(hub_root: Optional[Path]) -> dict[str, Any]:
+    if hub_root is None:
+        return _empty_services_snapshot()
+    try:
+        read_model = read_preview_services_model(hub_root)
+    except (OSError, ValueError, PreviewServiceRegistryError) as exc:
+        _logger.warning("Could not load preview services snapshot: %s", exc)
+        snapshot = _empty_services_snapshot()
+        snapshot["status"] = "unavailable"
+        snapshot["detail"] = _truncate(str(exc), PMA_MAX_TEXT)
+        return snapshot
+
+    services = [
+        item for item in read_model.get("services") or [] if isinstance(item, Mapping)
+    ]
+    running_statuses = {"running", "healthy", "unhealthy"}
+    attention_statuses = {"conflict", "unhealthy", "failed", "exited", "orphaned"}
+    running_sample = [
+        _compact_service_entry(service)
+        for service in services
+        if str(service.get("status") or "") in running_statuses
+        and str(service.get("car_url") or "")
+    ][:5]
+    attention_sample = [
+        _compact_service_entry(service)
+        for service in services
+        if str(service.get("status") or "") in attention_statuses
+    ][:5]
+    counts = dict(read_model.get("counts") or _empty_services_snapshot()["counts"])
+    counts["attention"] = sum(
+        1
+        for service in services
+        if str(service.get("status") or "") in attention_statuses
+    )
+    return {
+        "counts": counts,
+        "running_sample": running_sample,
+        "attention_sample": attention_sample,
+        "drilldown_commands": [
+            "car services list --json",
+            "car services get SERVICE_ID --json",
+            "car services logs SERVICE_ID --tail 200",
+        ],
+    }
+
+
 def _resolve_pma_freshness_threshold_seconds(
     supervisor: Optional[HubSupervisor],
 ) -> int:
@@ -195,6 +275,7 @@ def _build_snapshot_freshness_summary(
     inbox: list[dict[str, Any]],
     action_queue: list[dict[str, Any]],
     managed_threads: list[dict[str, Any]],
+    services: Mapping[str, Any],
     pma_files_detail: Mapping[str, list[dict[str, Any]]],
 ) -> dict[str, Any]:
     sections = {
@@ -218,6 +299,16 @@ def _build_snapshot_freshness_summary(
         ),
         "managed_threads": summarize_section_freshness(
             managed_threads,
+            generated_at=generated_at,
+            stale_threshold_seconds=stale_threshold_seconds,
+        ),
+        "services": summarize_section_freshness(
+            [
+                item
+                for key in ("running_sample", "attention_sample")
+                for item in services.get(key, [])
+                if isinstance(item, Mapping)
+            ],
             generated_at=generated_at,
             stale_threshold_seconds=stale_threshold_seconds,
         ),
@@ -404,6 +495,7 @@ async def build_hub_snapshot_payload(
             "lifecycle_events": [],
             "pma_files_detail": empty_files,
             "managed_threads": [],
+            "services": _empty_services_snapshot(),
             "process_monitor": None,
             "automation": {
                 "subscriptions": {"active_count": 0, "sample": []},
@@ -421,6 +513,7 @@ async def build_hub_snapshot_payload(
                 inbox=[],
                 action_queue=[],
                 managed_threads=[],
+                services=_empty_services_snapshot(),
                 pma_files_detail=empty_files,
             ),
         }
@@ -457,11 +550,13 @@ async def build_hub_snapshot_payload(
         stale_threshold_seconds=stale_threshold_seconds,
         supervisor=supervisor,
     )
+    services = await asyncio.to_thread(_build_services_snapshot, hub_root)
     action_queue = build_pma_action_queue(
         inbox=inbox,
         managed_threads=managed_threads,
         pma_files_detail=pma_files_detail,
         automation=automation,
+        services=services,
         generated_at=generated_at,
         stale_threshold_seconds=stale_threshold_seconds,
     )
@@ -472,6 +567,7 @@ async def build_hub_snapshot_payload(
         inbox=inbox,
         action_queue=action_queue,
         managed_threads=managed_threads,
+        services=services,
         pma_files_detail=pma_files_detail,
     )
 
@@ -484,6 +580,7 @@ async def build_hub_snapshot_payload(
         "pma_files": pma_files,
         "pma_files_detail": pma_files_detail,
         "managed_threads": managed_threads,
+        "services": services,
         "process_monitor": process_monitor,
         "automation": automation,
         "lifecycle_events": lifecycle_events,

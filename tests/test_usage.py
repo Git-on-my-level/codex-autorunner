@@ -747,6 +747,7 @@ def test_opencode_summary_prefers_persisted_turn_usage(tmp_path):
 
 def test_usage_aggregation_read_model_reports_confidence_and_session_totals(tmp_path):
     repo_root = tmp_path / "repo"
+    codex_home = tmp_path / "codex"
     repo_root.mkdir()
     codex_home = tmp_path / "codex"
     usage_path = repo_root / ".codex-autorunner" / "usage"

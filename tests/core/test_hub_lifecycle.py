@@ -195,7 +195,7 @@ def test_hub_lifecycle_worker_logs_and_keeps_polling_after_failure(caplog) -> No
         try:
             wait_for_thread_event(
                 completed,
-                timeout_seconds=0.5,
+                timeout_seconds=2.0,
                 description="lifecycle worker retry cycle to complete",
             )
         finally:

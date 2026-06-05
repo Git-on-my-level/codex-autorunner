@@ -260,6 +260,8 @@ def _render_action_queue_item(
         str(item.get("managed_thread_id") or item.get("thread_id") or ""),
         max_field_chars,
     )
+    service_id = _field(item, "service_id", max_field_chars)
+    car_url = _field(item, "car_url", max_field_chars)
     file_name = (
         _field(item, "name", max_field_chars)
         if item.get("item_type") == "pma_file"
@@ -282,6 +284,8 @@ def _render_action_queue_item(
         + (f" repo_id={repo_id}" if repo_id else "")
         + (f" run_id={run_id}" if run_id else "")
         + (f" managed_thread_id={managed_thread_id}" if managed_thread_id else "")
+        + (f" service_id={service_id}" if service_id else "")
+        + (f" car_url={car_url}" if car_url else "")
         + (f" name={item_name}" if item_name and item_name != file_name else "")
         + (f" file={file_name}" if file_name else "")
         + (f" followup_state={followup_state}" if followup_state else "")
@@ -673,6 +677,85 @@ def _render_managed_threads_section(
     lines.append("")
 
 
+def _render_preview_services_section(
+    snapshot: dict[str, Any],
+    lines: list[str],
+    *,
+    max_field_chars: int,
+) -> None:
+    services = snapshot.get("services") or {}
+    if not isinstance(services, Mapping):
+        return
+    counts = services.get("counts") or {}
+    if not isinstance(counts, Mapping):
+        counts = {}
+    total = int(counts.get("total") or 0)
+    running_sample = [
+        item
+        for item in services.get("running_sample") or []
+        if isinstance(item, Mapping)
+    ]
+    attention_sample = [
+        item
+        for item in services.get("attention_sample") or []
+        if isinstance(item, Mapping)
+    ]
+    if total <= 0 and not running_sample and not attention_sample:
+        return
+    lines.append("Preview Services:")
+    lines.append(
+        "- "
+        + " ".join(
+            [
+                f"total={int(counts.get('total') or 0)}",
+                f"running={int(counts.get('running') or 0)}",
+                f"attention={int(counts.get('attention') or 0)}",
+                f"managed={int(counts.get('managed') or 0)}",
+                f"static={int(counts.get('static') or 0)}",
+                f"loopback={int(counts.get('loopback') or 0)}",
+            ]
+        )
+    )
+    if attention_sample:
+        lines.append("- attention_sample:")
+        for service in attention_sample[:5]:
+            lines.append(
+                "  - "
+                f"service_id={_field(service, 'service_id', max_field_chars)} "
+                f"name={_field(service, 'name', max_field_chars)} "
+                f"kind={_field(service, 'kind', max_field_chars)} "
+                f"status={_field(service, 'status', max_field_chars)} "
+                f"scope={_field(service, 'scope', max_field_chars)}"
+            )
+    if running_sample:
+        lines.append("- running_sample:")
+        for service in running_sample[:5]:
+            port = service.get("port")
+            port_text = (
+                f" port={_truncate(str(port), max_field_chars)}"
+                if port is not None
+                else ""
+            )
+            lines.append(
+                "  - "
+                f"service_id={_field(service, 'service_id', max_field_chars)} "
+                f"name={_field(service, 'name', max_field_chars)} "
+                f"kind={_field(service, 'kind', max_field_chars)} "
+                f"status={_field(service, 'status', max_field_chars)} "
+                f"car_url={_field(service, 'car_url', max_field_chars)} "
+                f"scope={_field(service, 'scope', max_field_chars)}" + port_text
+            )
+    commands = [
+        _truncate(str(command), max_field_chars * 2)
+        for command in services.get("drilldown_commands") or []
+        if str(command).strip()
+    ]
+    if commands:
+        lines.append(f"- drilldown: {', '.join(commands)}")
+    lines.append("- logs and command env are omitted from PMA default context")
+    lines.append("")
+
+
 def _render_subscription_sample(
     subscriptions: Mapping[str, Any],
     lines: list[str],
@@ -905,6 +988,7 @@ def _render_hub_snapshot(
     _render_managed_threads_section(
         snapshot, lines, max_managed_threads=max_managed_threads, max_field_chars=fc
     )
+    _render_preview_services_section(snapshot, lines, max_field_chars=fc)
     _render_automation_section(
         snapshot, lines, max_automation_items=max_automation_items, max_field_chars=fc
     )

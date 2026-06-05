@@ -26,6 +26,7 @@ PMA_ACTION_QUEUE_PRECEDENCE: dict[str, tuple[int, str]] = {
     "ticket_flow_inbox": (10, "ticket_flow_inbox"),
     "automation_wakeup": (15, "automation_wakeup"),
     "managed_thread_followup": (20, "managed_thread_followup"),
+    "preview_services": (25, "preview_services"),
     "pma_file_inbox": (30, "pma_file_inbox"),
 }
 
@@ -278,6 +279,20 @@ class AutomationWakeupActionSource:
         )
 
 
+@dataclass(frozen=True)
+class PreviewServicesActionSource:
+    services: Mapping[str, Any]
+    generated_at: str
+    stale_threshold_seconds: int
+
+    def project(self) -> list[ActionQueueItem]:
+        return _build_preview_service_queue_items(
+            self.services,
+            generated_at=self.generated_at,
+            stale_threshold_seconds=self.stale_threshold_seconds,
+        )
+
+
 def _build_ticket_flow_queue_items(
     inbox: Sequence[Mapping[str, Any]],
 ) -> list[ActionQueueItem]:
@@ -503,6 +518,102 @@ def _build_file_queue_items(
     return items
 
 
+def _build_preview_service_queue_items(
+    services: Mapping[str, Any],
+    *,
+    generated_at: str,
+    stale_threshold_seconds: int,
+) -> list[ActionQueueItem]:
+    items: list[ActionQueueItem] = []
+    rank, label = _queue_precedence("preview_services")
+    attention_services = services.get("attention_sample") or []
+    for entry in attention_services:
+        if not isinstance(entry, Mapping):
+            continue
+        service_id = str(entry.get("service_id") or "").strip()
+        status = str(entry.get("status") or "").strip().lower()
+        updated_at = str(entry.get("updated_at") or "").strip() or None
+        freshness = build_freshness_payload(
+            generated_at=generated_at,
+            stale_threshold_seconds=stale_threshold_seconds,
+            candidates=[("preview_service_updated_at", updated_at)],
+        )
+        service_name = str(entry.get("name") or service_id or "Preview service")
+        if status == "conflict":
+            recommended_action = "resolve_preview_service_conflict"
+            recommended_detail = (
+                f"Inspect {service_id} and resolve the port or target conflict before "
+                "opening the preview link."
+            )
+            operator_need_rank = 5
+        elif status == "unhealthy":
+            recommended_action = "check_preview_service_health"
+            recommended_detail = (
+                f"Run `car services health {service_id}` or inspect service details."
+            )
+            operator_need_rank = 10
+        elif status == "failed":
+            recommended_action = "diagnose_preview_service_failure"
+            recommended_detail = (
+                f"Run `car services get {service_id} --json` and "
+                f"`car services logs {service_id} --tail 200`."
+            )
+            operator_need_rank = 10
+        elif status == "exited":
+            recommended_action = "inspect_exited_preview_service"
+            recommended_detail = (
+                f"Run `car services logs {service_id} --tail 200`; restart only if "
+                "the preview is still needed."
+            )
+            operator_need_rank = 15
+        else:
+            recommended_action = "inspect_preview_service"
+            recommended_detail = f"Run `car services get {service_id} --json`."
+            operator_need_rank = 20
+        items.append(
+            {
+                "item_type": "preview_service",
+                "queue_source": "preview_services",
+                "action_queue_id": f"preview_service:{service_id or '-'}",
+                "precedence": {"rank": rank, "label": label},
+                "service_id": service_id or None,
+                "name": service_name,
+                "kind": entry.get("kind"),
+                "status": status or None,
+                "car_url": entry.get("car_url"),
+                "scope_label": entry.get("scope"),
+                "port": entry.get("port"),
+                "why_selected": (
+                    f"Preview service status={status or 'unknown'} requires attention"
+                ),
+                "recommended_action": recommended_action,
+                "recommended_detail": recommended_detail,
+                "drilldown_commands": [
+                    "car services list --json",
+                    (
+                        f"car services get {service_id} --json"
+                        if service_id
+                        else "car services get SERVICE_ID --json"
+                    ),
+                    (
+                        f"car services logs {service_id} --tail 200"
+                        if service_id
+                        else "car services logs SERVICE_ID --tail 200"
+                    ),
+                ],
+                "operator_need": "attention",
+                "operator_need_rank": operator_need_rank,
+                "freshness": freshness,
+                "scope": {
+                    "kind": "preview_service",
+                    "key": f"preview_service:{service_id or '-'}",
+                },
+                "sort_timestamp": _timestamp_sort_value(updated_at),
+            }
+        )
+    return items
+
+
 def _build_automation_queue_items(
     automation: Mapping[str, Any],
     *,
@@ -591,6 +702,8 @@ def _is_strong_action_queue_item(item: Mapping[str, Any]) -> bool:
     if item_type == "pma_file":
         return True
     if item_type == "automation_wakeup":
+        return True
+    if item_type == "preview_service":
         return True
     if item.get("queue_source") == "ticket_flow_inbox":
         return True
@@ -695,6 +808,7 @@ def build_pma_action_queue(
     managed_threads: list[dict[str, Any]],
     pma_files_detail: Mapping[str, list[dict[str, Any]]],
     automation: Mapping[str, Any],
+    services: Mapping[str, Any] | None = None,
     generated_at: Optional[str] = None,
     stale_threshold_seconds: Optional[int] = None,
 ) -> list[dict[str, Any]]:
@@ -706,6 +820,11 @@ def build_pma_action_queue(
         PmaFileInboxActionSource(pma_files_detail=pma_files_detail),
         AutomationWakeupActionSource(
             automation=automation,
+            generated_at=resolved_generated_at,
+            stale_threshold_seconds=resolved_stale_threshold,
+        ),
+        PreviewServicesActionSource(
+            services=services or {},
             generated_at=resolved_generated_at,
             stale_threshold_seconds=resolved_stale_threshold,
         ),

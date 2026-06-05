@@ -45,6 +45,7 @@ from codex_autorunner.core.pma_context import (
     format_pma_prompt_variants,
     get_active_context_auto_prune_meta,
 )
+from codex_autorunner.core.preview_services import PreviewServiceRegistry
 from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.manifest import load_manifest, save_manifest
 
@@ -91,6 +92,57 @@ def _write_hub_config(hub_root: Path, data: dict) -> None:
     config_path = hub_root / ".codex-autorunner" / "config.yml"
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+
+def _preview_service_payload(
+    service_id: str,
+    *,
+    name: str,
+    kind: str,
+    status: str,
+    repo_id: str = "repo-1",
+    port: int | None = None,
+) -> dict:
+    payload: dict = {
+        "service_id": service_id,
+        "name": name,
+        "kind": kind,
+        "status": status,
+        "created_by": "test",
+        "created_at": "2026-06-05T00:00:00Z",
+        "updated_at": "2026-06-05T00:00:01Z",
+        "scope_links": [{"kind": "repo", "id": repo_id}],
+        "exposure": {
+            "car_url": f"/preview/services/{service_id}/",
+            "proxy_enabled": True,
+        },
+        "restart_policy": {
+            "auto_start_on_hub_start": False,
+            "restart_on_exit": "never",
+        },
+    }
+    if kind == "static_file":
+        payload["target"] = {"path": "/tmp/index.html"}
+    else:
+        resolved_port = port or 39001
+        payload["target"] = {
+            "host": "127.0.0.1",
+            "port": resolved_port,
+            "scheme": "http",
+            "direct_url": f"http://127.0.0.1:{resolved_port}/",
+        }
+    if kind == "managed_command":
+        payload["command"] = {
+            "argv": ["python", "-m", "http.server", "$PORT"],
+            "cwd": "/tmp/repo",
+            "env": {"PORT": "$PORT", "SECRET_TOKEN": "must-not-render"},
+        }
+        payload["port_policy"] = {"mode": "auto", "allocated_port": port or 39001}
+        payload["logs"] = {
+            "path": f".codex-autorunner/services/logs/{service_id}.log",
+            "tail_url": f"/hub/services/{service_id}/logs",
+        }
+    return payload
 
 
 def _format_seeded_pma_prompt(
@@ -1066,6 +1118,124 @@ def test_build_hub_snapshot_includes_action_queue_with_supersession(hub_env) -> 
     assert file_item["supersession"]["status"] == "non_primary"
 
 
+def test_build_hub_snapshot_includes_empty_preview_services(hub_env) -> None:
+    supervisor = _build_supervisor(hub_env.hub_root)
+    try:
+        snapshot = asyncio.run(
+            build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
+        )
+    finally:
+        supervisor.shutdown()
+
+    services = snapshot.get("services")
+    assert isinstance(services, dict)
+    assert services["counts"] == {
+        "total": 0,
+        "running": 0,
+        "attention": 0,
+        "managed": 0,
+        "static": 0,
+        "loopback": 0,
+    }
+    assert services["running_sample"] == []
+    assert services["attention_sample"] == []
+
+
+def test_build_hub_snapshot_includes_preview_services_running_sample(
+    hub_env,
+) -> None:
+    registry = PreviewServiceRegistry(hub_env.hub_root)
+    registry.create(
+        _preview_service_payload(
+            "svc_running123",
+            name="Frontend dev server",
+            kind="managed_command",
+            status="healthy",
+            repo_id=hub_env.repo_id,
+            port=39044,
+        )
+    )
+
+    supervisor = _build_supervisor(hub_env.hub_root)
+    try:
+        snapshot = asyncio.run(
+            build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
+        )
+    finally:
+        supervisor.shutdown()
+
+    services = snapshot["services"]
+    assert services["counts"]["total"] == 1
+    assert services["counts"]["running"] == 1
+    sample = services["running_sample"]
+    assert len(sample) == 1
+    assert sample[0] == {
+        "service_id": "svc_running123",
+        "name": "Frontend dev server",
+        "kind": "managed_command",
+        "status": "healthy",
+        "car_url": "/preview/services/svc_running123/",
+        "scope": f"repo:{hub_env.repo_id}",
+        "port": 39044,
+        "updated_at": "2026-06-05T00:00:01Z",
+    }
+    assert "logs" not in sample[0]
+    assert "command" not in sample[0]
+    assert "env" not in sample[0]
+
+
+def test_build_hub_snapshot_includes_preview_service_attention_items(
+    hub_env,
+) -> None:
+    registry = PreviewServiceRegistry(hub_env.hub_root)
+    registry.create(
+        _preview_service_payload(
+            "svc_failed123",
+            name="Failed dev server",
+            kind="managed_command",
+            status="failed",
+            repo_id=hub_env.repo_id,
+            port=39045,
+        )
+    )
+    registry.create(
+        _preview_service_payload(
+            "svc_conflict123",
+            name="Conflicted loopback",
+            kind="loopback_url",
+            status="conflict",
+            repo_id=hub_env.repo_id,
+            port=39046,
+        )
+    )
+
+    supervisor = _build_supervisor(hub_env.hub_root)
+    try:
+        snapshot = asyncio.run(
+            build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
+        )
+    finally:
+        supervisor.shutdown()
+
+    services = snapshot["services"]
+    assert services["counts"]["attention"] == 2
+    attention_ids = {item["service_id"] for item in services["attention_sample"]}
+    assert attention_ids == {"svc_failed123", "svc_conflict123"}
+
+    queue = snapshot.get("action_queue") or []
+    service_items = [
+        item for item in queue if item.get("queue_source") == "preview_services"
+    ]
+    assert {item["service_id"] for item in service_items} == {
+        "svc_failed123",
+        "svc_conflict123",
+    }
+    assert all(
+        "car services get" in item["drilldown_commands"][1] for item in service_items
+    )
+    assert all("SECRET_TOKEN" not in json.dumps(item) for item in service_items)
+
+
 def test_build_hub_snapshot_failed_run_queue_item_recommends_archive_with_repo(
     hub_env,
 ) -> None:
@@ -1939,6 +2109,64 @@ def test_render_hub_snapshot_empty_both(tmp_path: Path) -> None:
     assert "Run Dispatches" not in result
     assert "PMA File Inbox:" not in result
     assert "next_action: process_uploaded_file" not in result
+
+
+def test_render_hub_snapshot_includes_compact_preview_services() -> None:
+    from codex_autorunner.core.pma_context import _render_hub_snapshot
+
+    snapshot = _snapshot(generated_at="2026-03-16T00:00:00Z", action_queue=[])
+    snapshot["services"] = {
+        "counts": {
+            "total": 2,
+            "running": 1,
+            "attention": 1,
+            "managed": 1,
+            "static": 0,
+            "loopback": 1,
+        },
+        "running_sample": [
+            {
+                "service_id": "svc_running123",
+                "name": "Frontend dev server",
+                "kind": "managed_command",
+                "status": "healthy",
+                "car_url": "/preview/services/svc_running123/",
+                "scope": "repo:repo-1",
+                "port": 39044,
+                "updated_at": "2026-06-05T00:00:01Z",
+                "logs": {"path": "should-not-render.log"},
+                "command": {"env": {"SECRET_TOKEN": "should-not-render"}},
+            }
+        ],
+        "attention_sample": [
+            {
+                "service_id": "svc_failed123",
+                "name": "Failed dev server",
+                "kind": "loopback_url",
+                "status": "failed",
+                "car_url": "/preview/services/svc_failed123/",
+                "scope": "repo:repo-1",
+                "updated_at": "2026-06-05T00:00:01Z",
+            }
+        ],
+        "drilldown_commands": [
+            "car services list --json",
+            "car services get SERVICE_ID --json",
+            "car services logs SERVICE_ID --tail 200",
+        ],
+    }
+
+    result = _render_hub_snapshot(snapshot)
+
+    assert "Preview Services:" in result
+    assert "total=2 running=1 attention=1 managed=1 static=0 loopback=1" in result
+    assert "service_id=svc_running123" in result
+    assert "car_url=/preview/services/svc_running123/" in result
+    assert "service_id=svc_failed123" in result
+    assert "car services list --json" in result
+    assert "logs and command env are omitted" in result
+    assert "should-not-render" not in result
+    assert "SECRET_TOKEN" not in result
 
 
 def test_format_pma_prompt_includes_artifact_delivery_contract(tmp_path: Path) -> None:
