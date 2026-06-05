@@ -72,7 +72,7 @@ def annotate_stale_alive_health(
 
 
 def stale_alive_recovery_payload(health: Any) -> dict[str, Any]:
-    return {
+    payload = {
         "reason": getattr(health, "stale_reason", None),
         "last_semantic_progress_at": getattr(health, "last_semantic_progress_at", None),
         "last_tool_activity_at": getattr(health, "last_tool_activity_at", None),
@@ -83,3 +83,10 @@ def stale_alive_recovery_payload(health: Any) -> dict[str, Any]:
         ),
         "worker_pid": getattr(health, "pid", None),
     }
+    backend_failure = getattr(health, "backend_failure", None)
+    if isinstance(backend_failure, dict) and backend_failure:
+        payload["backend_failure"] = dict(backend_failure)
+    backend_connected = getattr(health, "backend_connected", None)
+    if isinstance(backend_connected, bool):
+        payload["backend_connected"] = backend_connected
+    return payload

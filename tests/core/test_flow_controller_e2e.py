@@ -101,6 +101,68 @@ async def test_flow_controller_stop_pending_flow_finishes_immediately(flow_contr
 
 
 @pytest.mark.asyncio
+async def test_flow_controller_stop_running_flow_finishes_immediately(temp_dir):
+    step_started = asyncio.Event()
+    step_can_finish = asyncio.Event()
+
+    async def blocked_step(record: FlowRunRecord, input_data: dict) -> StepOutcome:
+        step_started.set()
+        await step_can_finish.wait()
+        return StepOutcome.complete(output={"late_step": True})
+
+    definition = FlowDefinition(
+        flow_type="test_flow",
+        initial_step="blocked",
+        steps={"blocked": blocked_step},
+    )
+    definition.validate()
+    controller = FlowController(
+        definition=definition,
+        db_path=temp_dir / "flow.db",
+        artifacts_root=temp_dir / "artifacts",
+    )
+    controller.initialize()
+    try:
+        record = await controller.start_flow(input_data={"value": 0})
+        runner = asyncio.create_task(controller.run_flow(record.id))
+        await asyncio.wait_for(step_started.wait(), timeout=1)
+
+        stopped_record = await controller.stop_flow(record.id)
+
+        assert stopped_record.status == FlowRunStatus.STOPPED
+        assert stopped_record.finished_at is not None
+        assert stopped_record.current_step is None
+        assert stopped_record.stop_requested is False
+        assert stopped_record.state.get("reason_code") == "user_stop"
+        persisted = controller.store.get_flow_run(record.id)
+        assert persisted is not None
+        assert persisted.status == FlowRunStatus.STOPPED
+        assert persisted.current_step is None
+        assert persisted.stop_requested is False
+
+        step_can_finish.set()
+        final_record = await asyncio.wait_for(runner, timeout=1)
+
+        assert final_record.status == FlowRunStatus.STOPPED
+        assert final_record.stop_requested is False
+        persisted = controller.store.get_flow_run(record.id)
+        assert persisted is not None
+        assert persisted.status == FlowRunStatus.STOPPED
+        assert persisted.current_step is None
+        assert persisted.stop_requested is False
+        assert persisted.state.get("late_step") is None
+        event_types = [
+            event.event_type.value for event in controller.store.get_events(record.id)
+        ]
+        assert "flow_stopped" in event_types
+        assert "flow_completed" not in event_types
+    finally:
+        if not step_can_finish.is_set():
+            step_can_finish.set()
+        controller.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_flow_controller_stop_flow(flow_controller):
     """Test stopping a flow."""
     # Start a slow flow that takes longer to stop

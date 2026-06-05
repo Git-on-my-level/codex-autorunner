@@ -1374,6 +1374,16 @@ def test_stale_alive_worker_restart_exhaustion_fails_run(
         status=FlowRunStatus.RUNNING,
         state=record.state,
     )
+    store.create_telemetry(
+        telemetry_id="app-server-circuit-open",
+        run_id=record.id,
+        event_type=FlowEventType.APP_SERVER_EVENT,
+        data={
+            "event": "orchestration.thread.start_failed",
+            "error_type": "CodexAppServerDisconnected",
+            "error": "Circuit breaker OPEN for App-Server after 5 failures",
+        },
+    )
 
     monkeypatch.setattr(
         "codex_autorunner.core.flows.reconciler._latest_semantic_progress_at",
@@ -1411,6 +1421,10 @@ def test_stale_alive_worker_restart_exhaustion_fails_run(
     assert "Worker stalled while still alive" in (recovered.error_message or "")
     restart = recovered.state["recovery"]["restart"]
     assert restart["exhausted"] is True
+    stale_alive = recovered.state["recovery"]["stale_alive"]
+    assert stale_alive["backend_connected"] is False
     assert (
-        recovered.state["recovery"]["stale_alive"]["semantic_stale_age_seconds"] == 3600
+        stale_alive["backend_failure"]["event"] == "orchestration.thread.start_failed"
     )
+    assert stale_alive["backend_failure"]["error_type"] == "CodexAppServerDisconnected"
+    assert stale_alive["semantic_stale_age_seconds"] == 3600

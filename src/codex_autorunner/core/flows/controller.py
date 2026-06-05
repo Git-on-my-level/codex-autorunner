@@ -163,11 +163,28 @@ class FlowController:
         return await runtime.run_flow(run_id=run_id, initial_state=initial_state)
 
     async def stop_flow(self, run_id: str) -> FlowRunRecord:
+        record = self.store.get_flow_run(run_id)
+        if not record:
+            raise ValueError(f"Flow run {run_id} not found")
+
+        if record.status.is_terminal():
+            return record
+
+        if record.status == FlowRunStatus.PAUSED:
+            raise ValueError(
+                f"Flow run {run_id} is paused; resume or archive it instead of stopping"
+            )
+
         record = self.store.set_stop_requested(run_id, True)
         if not record:
             raise ValueError(f"Flow run {run_id} not found")
 
-        if record.status == FlowRunStatus.PENDING:
+        if record.status in {
+            FlowRunStatus.PENDING,
+            FlowRunStatus.RUNNING,
+            FlowRunStatus.STOPPING,
+        }:
+            previous_status = record.status
             runtime = FlowRuntime(
                 definition=self.definition,
                 store=self.store,
@@ -182,20 +199,15 @@ class FlowController:
                 current_step=record.current_step,
                 initial_step=self.definition.initial_step,
             )
-            return runtime._apply_transition(
+            stopped = runtime._apply_transition(
                 record,
                 result,
                 run_id,
                 trigger_kind="stop_requested",
             )
-
-        if record.status == FlowRunStatus.RUNNING:
-            updated = self.store.update_flow_run_status(
-                run_id=run_id,
-                status=FlowRunStatus.STOPPING,
-            )
-            if updated:
-                record = updated
+            if previous_status in {FlowRunStatus.RUNNING, FlowRunStatus.STOPPING}:
+                self._terminate_worker_after_user_stop(run_id)
+            return stopped
 
         updated = self.store.get_flow_run(run_id)
         if not updated:
@@ -289,16 +301,71 @@ class FlowController:
     def _clear_stale_worker_metadata(self, run_id: str) -> None:
         from .worker_process import clear_worker_metadata
 
-        repo_root = self._repo_root()
-        if repo_root is None:
-            return
-        flows_dir = repo_root / ".codex-autorunner" / "flows" / run_id
+        flows_dir = self.artifacts_root / run_id
         if flows_dir.exists():
             try:
                 clear_worker_metadata(flows_dir)
             except OSError as exc:
                 _logger.warning(
                     "Failed to clear stale worker metadata for run %s: %s", run_id, exc
+                )
+
+    def _terminate_worker_after_user_stop(self, run_id: str) -> None:
+        from .worker_process import (
+            check_worker_health,
+            clear_worker_metadata,
+            terminate_flow_worker_pid,
+        )
+
+        repo_root = self._repo_root()
+        if repo_root is None:
+            return
+        try:
+            health = check_worker_health(
+                repo_root,
+                run_id,
+                artifacts_root=self.artifacts_root,
+            )
+        except (OSError, ValueError, TypeError, RuntimeError) as exc:
+            _logger.warning(
+                "Failed to inspect worker for stopped run %s: %s", run_id, exc
+            )
+            return
+
+        if health.status == "alive":
+            try:
+                stopped = terminate_flow_worker_pid(
+                    repo_root,
+                    run_id,
+                    pid=health.pid,
+                    reason="user_stop",
+                    artifacts_root=self.artifacts_root,
+                    exit_origin="user_stop",
+                    exit_kind="user_stop",
+                )
+            except (OSError, ValueError, TypeError, RuntimeError) as exc:
+                _logger.warning(
+                    "Failed to terminate worker after user stop for run %s: %s",
+                    run_id,
+                    exc,
+                )
+                return
+            if not stopped:
+                _logger.warning(
+                    "Worker for stopped run %s is still running (pid=%s)",
+                    run_id,
+                    health.pid,
+                )
+                return
+
+        if health.status in {"absent", "dead", "invalid", "mismatch", "alive"}:
+            try:
+                clear_worker_metadata(health.artifact_path.parent)
+            except (OSError, RuntimeError) as exc:
+                _logger.warning(
+                    "Failed to clear worker metadata for stopped run %s: %s",
+                    run_id,
+                    exc,
                 )
 
     def _repo_root(self) -> Optional[Path]:

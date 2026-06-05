@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -14,6 +15,9 @@ from codex_autorunner.adapters.discord.flow_watchers import (
 from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.core.apps import compute_bundle_sha
 from codex_autorunner.core.filebox import outbox_dir
+from codex_autorunner.core.flows import FlowStore
+from codex_autorunner.core.flows.models import FlowRunStatus
+from codex_autorunner.core.flows.worker_process import FlowWorkerHealth
 from codex_autorunner.core.state_roots import resolve_repo_state_root
 
 
@@ -167,4 +171,128 @@ async def test_discord_terminal_notification_keeps_plain_text_when_no_artifacts(
     assert notified == 1
     assert enqueued[0].payload_json["content"] == (
         "Ticket flow completed successfully (run run-2)."
+    )
+
+
+@pytest.mark.anyio
+async def test_discord_terminal_scan_reconciles_before_loading_terminal_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    _init_workspace(workspace)
+    calls: list[str] = []
+
+    service = SimpleNamespace(
+        _logger=logging.getLogger("test"),
+        _store=SimpleNamespace(
+            list_bindings=AsyncMock(
+                return_value=[
+                    {
+                        "channel_id": "channel-1",
+                        "workspace_path": str(workspace),
+                        "last_terminal_run_id": None,
+                    }
+                ]
+            ),
+            enqueue_outbox=AsyncMock(),
+            mark_terminal_run_seen=AsyncMock(),
+        ),
+        _hub_raw_config_cache={},
+        _flow_run_mirror=lambda _workspace: _Mirror(),
+    )
+
+    async def fake_reconcile(_service, _bindings) -> int:
+        calls.append("reconcile")
+        return 1
+
+    def fake_load(_service, _workspace):
+        calls.append("load")
+        return None
+
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.discord.flow_watchers._reconcile_bound_ticket_flow_runs",
+        fake_reconcile,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.discord.flow_watchers._load_latest_terminal_ticket_flow_run",
+        fake_load,
+    )
+
+    notified = await _scan_and_enqueue_terminal_notifications(service)
+
+    assert notified == 0
+    assert calls == ["reconcile", "load"]
+
+
+@pytest.mark.anyio
+async def test_discord_terminal_scan_notifies_run_terminalized_by_reconcile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    _init_workspace(workspace)
+    run_id = str(uuid.uuid4())
+    flows_db = workspace / ".codex-autorunner" / "flows.db"
+    artifact_dir = workspace / ".codex-autorunner" / "flows" / run_id
+    artifact_dir.mkdir(parents=True)
+
+    with FlowStore(flows_db) as store:
+        store.initialize()
+        record = store.create_flow_run(
+            run_id=run_id,
+            flow_type="ticket_flow",
+            input_data={},
+            state={"ticket_engine": {"status": "running"}},
+            current_step="ticket_turn",
+        )
+        store.update_flow_run_status(run_id=record.id, status=FlowRunStatus.STOPPING)
+        store.set_stop_requested(record.id, True)
+
+    enqueued = []
+
+    async def _enqueue(record):
+        enqueued.append(record)
+
+    service = SimpleNamespace(
+        _logger=logging.getLogger("test"),
+        _store=SimpleNamespace(
+            list_bindings=AsyncMock(
+                return_value=[
+                    {
+                        "channel_id": "channel-1",
+                        "workspace_path": str(workspace),
+                        "last_terminal_run_id": None,
+                    }
+                ]
+            ),
+            enqueue_outbox=AsyncMock(side_effect=_enqueue),
+            mark_terminal_run_seen=AsyncMock(),
+        ),
+        _hub_raw_config_cache={},
+        _flow_run_mirror=lambda _workspace: _Mirror(),
+    )
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.check_worker_health",
+        lambda _repo_root, _run_id: FlowWorkerHealth(
+            status="dead",
+            pid=12345,
+            cmdline=[],
+            artifact_path=artifact_dir / "worker.json",
+            message="worker exited",
+            exit_code=1,
+            stderr_tail="worker crashed",
+        ),
+    )
+
+    notified = await _scan_and_enqueue_terminal_notifications(service)
+
+    assert notified == 1
+    assert len(enqueued) == 1
+    assert enqueued[0].record_id == f"terminal:channel-1:{run_id}"
+    assert enqueued[0].payload_json["content"] == f"Ticket flow stopped (run {run_id})."
+    service._store.mark_terminal_run_seen.assert_awaited_once_with(
+        channel_id="channel-1",
+        run_id=run_id,
     )

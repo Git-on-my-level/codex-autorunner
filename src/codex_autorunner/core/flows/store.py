@@ -488,6 +488,7 @@ class FlowStore:
         started_at: Any = UNSET,
         finished_at: Any = UNSET,
         error_message: Any = UNSET,
+        stop_requested: Any = UNSET,
     ) -> Optional[FlowRunRecord]:
         updates = ["status = ?"]
         params: List[Any] = [status.value]
@@ -511,6 +512,10 @@ class FlowStore:
         if error_message is not UNSET:
             updates.append("error_message = ?")
             params.append(error_message)
+
+        if stop_requested is not UNSET:
+            updates.append("stop_requested = ?")
+            params.append(1 if stop_requested else 0)
 
         params.append(run_id)
 

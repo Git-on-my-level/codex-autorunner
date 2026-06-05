@@ -98,6 +98,7 @@ class TransitionResult:
     status: FlowRunStatus
     state: Any = NO_CHANGE
     current_step: Any = NO_CHANGE
+    stop_requested: Any = NO_CHANGE
     started_at: Any = NO_CHANGE
     finished_at: Any = NO_CHANGE
     error_message: Any = NO_CHANGE
@@ -273,7 +274,8 @@ def _reduce_stop_requested(
     return TransitionResult(
         status=FlowRunStatus.STOPPED,
         state=state,
-        current_step=None if current_status == FlowRunStatus.PENDING else NO_CHANGE,
+        current_step=None,
+        stop_requested=False,
         finished_at=now,
         effects=[
             EffectIntent(
