@@ -533,6 +533,9 @@ def terminate_flow_worker_pid(
     *,
     pid: Optional[int],
     reason: str,
+    artifacts_root: Optional[Path] = None,
+    exit_origin: str = "stale_alive_recovery",
+    exit_kind: str = "reaped_stale_alive",
     terminate_grace_seconds: float = 5.0,
 ) -> bool:
     if not isinstance(pid, int) or pid <= 0:
@@ -542,10 +545,11 @@ def terminate_flow_worker_pid(
         run_id,
         returncode=-signal.SIGTERM,
         shutdown_intent=False,
-        exit_origin="stale_alive_recovery",
-        exit_kind="reaped_stale_alive",
+        exit_origin=exit_origin,
+        exit_kind=exit_kind,
         reap_reason=reason,
         preserve_existing_shutdown_intent=False,
+        artifacts_root=artifacts_root,
     )
     try:
         _send_signal(pid, signal.SIGTERM)
@@ -565,10 +569,11 @@ def terminate_flow_worker_pid(
         run_id,
         returncode=-signal.SIGKILL,
         shutdown_intent=False,
-        exit_origin="stale_alive_recovery",
-        exit_kind="reaped_stale_alive",
+        exit_origin=exit_origin,
+        exit_kind=exit_kind,
         reap_reason=reason,
         preserve_existing_shutdown_intent=False,
+        artifacts_root=artifacts_root,
     )
     try:
         _send_signal(pid, signal.SIGKILL)

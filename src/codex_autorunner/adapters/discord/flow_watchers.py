@@ -18,6 +18,7 @@ from ...core.flows import (
     FlowStore,
     list_unseen_ticket_flow_dispatches,
 )
+from ...core.flows.reconciler import reconcile_flow_runs
 from ...core.logging_utils import log_event
 from ...core.recovery_notification_intents import (
     list_active_ticket_flow_notification_intents,
@@ -46,6 +47,54 @@ PAUSE_SCAN_INTERVAL_SECONDS = 5.0
 TERMINAL_SCAN_INTERVAL_SECONDS = 5.0
 _IDLE_BACKOFF_MAX_SECONDS = 30.0
 _IDLE_BACKOFF_STEP_SECONDS = 5.0
+
+
+async def _reconcile_bound_ticket_flow_runs(service: Any, bindings: list[Any]) -> int:
+    """Advance core flow lifecycle before Discord observes notification state.
+
+    TODO: Move this bridge into a hub/core flow supervisor loop so every surface
+    observes already-reconciled projections instead of reconciling per transport.
+    """
+
+    reconciled = 0
+    workspace_roots: dict[str, Path] = {}
+    for binding in bindings:
+        workspace_raw = binding.get("workspace_path")
+        if not isinstance(workspace_raw, str) or not workspace_raw.strip():
+            continue
+        workspace_root = canonicalize_path(Path(workspace_raw))
+        workspace_roots.setdefault(str(workspace_root), workspace_root)
+
+    for workspace_root in workspace_roots.values():
+        try:
+            result = await asyncio.to_thread(
+                reconcile_flow_runs,
+                workspace_root,
+                flow_type="ticket_flow",
+                logger=service._logger,
+            )
+        except (OSError, RuntimeError, ValueError, TypeError) as exc:
+            log_event(
+                service._logger,
+                logging.WARNING,
+                "discord.flow_watch.reconcile_failed",
+                exc=exc,
+                workspace_root=str(workspace_root),
+            )
+            continue
+        reconciled += result.summary.checked
+        if result.summary.updated or result.summary.errors:
+            log_event(
+                service._logger,
+                logging.INFO if result.summary.updated else logging.WARNING,
+                "discord.flow_watch.reconciled",
+                workspace_root=str(workspace_root),
+                checked=result.summary.checked,
+                updated=result.summary.updated,
+                locked=result.summary.locked,
+                errors=result.summary.errors,
+            )
+    return reconciled
 
 
 def _truncate_error(error_message: Optional[str], limit: int = 200) -> str:
@@ -219,6 +268,7 @@ def _preferred_bound_sources_by_workspace(service: Any) -> dict[str, str]:
 async def _scan_and_enqueue_pause_notifications(service: Any) -> int:
     notified = 0
     bindings = await service._store.list_bindings()
+    await _reconcile_bound_ticket_flow_runs(service, list(bindings))
     preferred_sources = _preferred_bound_sources_by_workspace(service)
     for binding in bindings:
         channel_id = binding.get("channel_id")
@@ -348,6 +398,7 @@ async def _scan_and_enqueue_pause_notifications(service: Any) -> int:
 async def _scan_and_enqueue_recovery_notifications(service: Any) -> int:
     notified = 0
     bindings = await service._store.list_bindings()
+    await _reconcile_bound_ticket_flow_runs(service, list(bindings))
     preferred_sources = _preferred_bound_sources_by_workspace(service)
     for binding in bindings:
         channel_id = binding.get("channel_id")
@@ -461,6 +512,7 @@ async def _scan_and_enqueue_recovery_notifications(service: Any) -> int:
 async def _scan_and_enqueue_terminal_notifications(service: Any) -> int:
     notified = 0
     bindings = await service._store.list_bindings()
+    await _reconcile_bound_ticket_flow_runs(service, list(bindings))
     for binding in bindings:
         channel_id = binding.get("channel_id")
         workspace_raw = binding.get("workspace_path")

@@ -416,6 +416,12 @@ class FlowRuntime:
             else:
                 outcome = await cast(StepFn2, step_fn)(record, record.input_data)
 
+            latest = self.store.get_flow_run(record.id)
+            if latest is not None and latest.status.is_terminal():
+                return latest
+            if latest is not None:
+                record = latest
+
             now = now_iso()
             state_output = dict(outcome.output) if outcome.output else {}
 
@@ -490,6 +496,9 @@ class FlowRuntime:
 
         except Exception as e:
             _logger.exception("Step %s failed with exception", step_id)
+            latest = self.store.get_flow_run(record.id)
+            if latest is not None and latest.status.is_terminal():
+                return latest
             now = now_iso()
             trigger = FlowTrigger(
                 kind=TriggerKind.STEP_EXCEPTION,

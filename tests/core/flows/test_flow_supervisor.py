@@ -132,6 +132,29 @@ def test_policy_classifies_stale_alive_worker_as_unhealthy() -> None:
     assert "Worker stalled while still alive" in (trigger.error_message or "")
 
 
+def test_policy_keeps_backend_disconnect_as_observation_for_stale_alive() -> None:
+    decision = supervise_flow_recovery(
+        FlowSupervisorObservation(
+            run=_run(),
+            worker=_worker(
+                WorkerHealthStatus.STALE_ALIVE,
+                pid=123,
+                stale_reason="semantic_progress_stale_without_active_tool",
+            ),
+            backend_connected=False,
+        )
+    )
+
+    assert decision.note == "stale-alive-worker"
+    assert _intent_kinds(decision) == [
+        RecoveryIntentKind.BACKEND_DISCONNECT,
+        RecoveryIntentKind.STALE_ALIVE_WORKER,
+        RecoveryIntentKind.STALE_ALIVE_UNKNOWN,
+    ]
+    assert SupervisorEffectKind.UPDATE_RUN_STATE in _effect_kinds(decision)
+    assert SupervisorEffectKind.NOTIFY_SURFACES in _effect_kinds(decision)
+
+
 def test_policy_restarts_stale_alive_worker_when_budget_remains() -> None:
     decision = supervise_flow_recovery(
         FlowSupervisorObservation(

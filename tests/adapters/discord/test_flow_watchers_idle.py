@@ -16,6 +16,7 @@ from codex_autorunner.adapters.discord.flow_watchers import (
     PAUSE_SCAN_INTERVAL_SECONDS,
     TERMINAL_SCAN_INTERVAL_SECONDS,
     _next_idle_interval,
+    _reconcile_bound_ticket_flow_runs,
     _recovery_notification_is_suppressed_by_binding,
     _scan_and_enqueue_recovery_notifications,
 )
@@ -57,6 +58,39 @@ def test_next_idle_interval_monotonically_increases():
         assert current >= prev
         prev = current
     assert prev == _IDLE_BACKOFF_MAX_SECONDS
+
+
+@pytest.mark.anyio
+async def test_reconcile_bound_ticket_flow_runs_deduplicates_workspaces(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    calls = []
+
+    def fake_reconcile(workspace_root, *, flow_type, logger):
+        calls.append((workspace_root, flow_type, logger))
+        return SimpleNamespace(
+            summary=SimpleNamespace(checked=2, updated=1, locked=0, errors=0)
+        )
+
+    service = SimpleNamespace(_logger=logging.getLogger("test"))
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.discord.flow_watchers.reconcile_flow_runs",
+        fake_reconcile,
+    )
+
+    checked = await _reconcile_bound_ticket_flow_runs(
+        service,
+        [
+            {"channel_id": "channel-1", "workspace_path": str(workspace)},
+            {"channel_id": "channel-2", "workspace_path": str(workspace)},
+            {"channel_id": "channel-3", "workspace_path": ""},
+        ],
+    )
+
+    assert checked == 2
+    assert calls == [(workspace.resolve(), "ticket_flow", service._logger)]
 
 
 @pytest.mark.anyio

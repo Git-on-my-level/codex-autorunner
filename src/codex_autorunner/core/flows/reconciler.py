@@ -160,6 +160,57 @@ def _latest_app_server_event_details(
     return method, turn_id
 
 
+_APP_SERVER_BACKEND_FAILURE_MARKERS = (
+    "app-server disconnected",
+    "app_server_disconnected",
+    "codexappserverdisconnected",
+    "app-server process is not running",
+    "circuit breaker open",
+    "startup timed out",
+    "start_failed",
+    "restart failed",
+    "transport disconnected",
+)
+
+
+def _string_value(value: Any) -> Optional[str]:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _latest_app_server_backend_health(
+    store: FlowStore, run_id: str
+) -> tuple[bool, Optional[dict[str, Any]]]:
+    try:
+        event = store.get_last_telemetry_by_type(run_id, FlowEventType.APP_SERVER_EVENT)
+    except (sqlite3.Error, ValueError, TypeError, RuntimeError) as exc:
+        _logger.debug("Failed to get last app server health event: %s", exc)
+        return True, None
+    if event is None:
+        return True, None
+    data: dict[str, Any] = event.data if isinstance(event.data, dict) else {}
+    message_raw = data.get("message")
+    message: dict[str, Any] = message_raw if isinstance(message_raw, dict) else {}
+    params_raw = message.get("params")
+    params: dict[str, Any] = params_raw if isinstance(params_raw, dict) else {}
+    fields = {
+        "event": _string_value(data.get("event")),
+        "method": _string_value(message.get("method")),
+        "error": _string_value(data.get("error")) or _string_value(params.get("error")),
+        "error_type": _string_value(data.get("error_type"))
+        or _string_value(params.get("error_type")),
+        "reason": _string_value(data.get("reason"))
+        or _string_value(params.get("reason")),
+    }
+    haystack = " ".join(value for value in fields.values() if value).lower()
+    if not haystack:
+        return True, None
+    if not any(marker in haystack for marker in _APP_SERVER_BACKEND_FAILURE_MARKERS):
+        return True, None
+    return False, {key: value for key, value in fields.items() if value}
+
+
 def _latest_seq(history_dir: Path) -> int:
     if not history_dir.exists() or not history_dir.is_dir():
         return 0
@@ -818,11 +869,19 @@ def reconcile_flow_run(
 
             commit_barrier = _commit_barrier_observation(repo_root, record)
             restart_policy = _restart_policy_observation(repo_root, record, health)
+            backend_connected, backend_failure = _latest_app_server_backend_health(
+                store, record.id
+            )
+            if health.status == "stale_alive":
+                health.backend_connected = backend_connected
+                if backend_failure is not None:
+                    health.backend_failure = backend_failure
             decision = supervise_reconcile_flow(
                 record,
                 health,
                 commit_barrier=commit_barrier,
                 restart=restart_policy,
+                backend_connected=backend_connected,
             )
             trigger = decision.first_lifecycle_trigger()
 
