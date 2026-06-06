@@ -239,10 +239,15 @@ def service_read_model(record: PreviewServiceRecord) -> dict[str, Any]:
     target = data.get("target") or {}
     port_policy = data.get("port_policy") or {}
     process = data.get("process") or {}
+    capabilities = service_capabilities(record)
     return {
         "service_id": data["service_id"],
         "name": data["name"],
         "kind": data["kind"],
+        "service_class": data["service_class"],
+        "trust_level": data["trust_level"],
+        "ownership": data["ownership"],
+        "network_policy": data["network_policy"],
         "status": data["status"],
         "created_by": data.get("created_by"),
         "created_at": data["created_at"],
@@ -259,6 +264,39 @@ def service_read_model(record: PreviewServiceRecord) -> dict[str, Any]:
         "restart_policy": data.get("restart_policy") or {},
         "logs": data.get("logs"),
         "metadata": data.get("metadata") or {},
+        "capabilities": capabilities,
+        "desired_state": record.desired_state.model_dump(
+            mode="json", exclude_none=True
+        ),
+        "observed_state": record.observed_state.model_dump(
+            mode="json", exclude_none=True
+        ),
+    }
+
+
+def service_capabilities(record: PreviewServiceRecord) -> dict[str, bool]:
+    kind = _enum_value(record.kind)
+    status = _enum_value(record.status)
+    managed = kind == PreviewServiceKind.MANAGED_COMMAND.value
+    running = status in _running_statuses()
+    startable = status in {
+        PreviewServiceStatus.REGISTERED.value,
+        PreviewServiceStatus.STOPPED.value,
+        PreviewServiceStatus.EXITED.value,
+        PreviewServiceStatus.FAILED.value,
+        PreviewServiceStatus.CONFLICT.value,
+    }
+    return {
+        "can_open": bool(record.exposure.proxy_enabled),
+        "can_start": bool(managed and startable),
+        "can_stop": bool(managed and running),
+        "can_restart": bool(managed and record.command is not None),
+        "can_kill": bool(managed and running),
+        "can_unlink": not (managed and running),
+        "can_teardown": True,
+        "can_edit": True,
+        "can_view_logs": bool(managed and record.logs is not None),
+        "requires_force_for_unlink": bool(managed and running),
     }
 
 
@@ -274,20 +312,14 @@ def _service_counts(records: list[dict[str, Any]]) -> dict[str, int]:
     attention_statuses = {
         PreviewServiceStatus.UNHEALTHY.value,
         PreviewServiceStatus.FAILED.value,
+        PreviewServiceStatus.EXITED.value,
         PreviewServiceStatus.ORPHANED.value,
         PreviewServiceStatus.CONFLICT.value,
     }
     return {
         "total": len(records),
         "running": sum(
-            1
-            for record in records
-            if record["status"]
-            in {
-                PreviewServiceStatus.RUNNING.value,
-                PreviewServiceStatus.HEALTHY.value,
-                PreviewServiceStatus.UNHEALTHY.value,
-            }
+            1 for record in records if record["status"] in _running_statuses()
         ),
         "attention": sum(
             1 for record in records if record["status"] in attention_statuses
@@ -311,7 +343,28 @@ def _service_counts(records: list[dict[str, Any]]) -> dict[str, int]:
             for record in records
             if record["kind"] == PreviewServiceKind.LOOPBACK_URL.value
         ),
+        "preview": sum(1 for record in records if record["service_class"] == "preview"),
+        "application": sum(
+            1 for record in records if record["service_class"] == "application"
+        ),
+        "infrastructure": sum(
+            1 for record in records if record["service_class"] == "infrastructure"
+        ),
     }
+
+
+def _running_statuses() -> set[str]:
+    return {
+        PreviewServiceStatus.STARTING.value,
+        PreviewServiceStatus.RUNNING.value,
+        PreviewServiceStatus.HEALTHY.value,
+        PreviewServiceStatus.UNHEALTHY.value,
+    }
+
+
+def _enum_value(value: Any) -> str:
+    raw = getattr(value, "value", value)
+    return str(raw or "")
 
 
 def _scope_label(scope_links: list[dict[str, Any]]) -> str | None:

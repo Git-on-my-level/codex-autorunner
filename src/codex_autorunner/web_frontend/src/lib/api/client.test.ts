@@ -194,6 +194,10 @@ describe('API client error handling', () => {
               service_id: 'svc_managed123',
               name: 'Frontend',
               kind: 'managed_command',
+              service_class: 'preview',
+              trust_level: 'generated',
+              ownership: 'car_managed',
+              network_policy: 'loopback_only',
               status: 'healthy',
               created_by: 'pma',
               created_at: '2026-06-05T00:00:00Z',
@@ -206,10 +210,13 @@ describe('API client error handling', () => {
               host: '127.0.0.1',
               port: 39001,
               owner_pid: 123,
-              logs: { path: '.codex-autorunner/services/logs/svc_managed123.log' }
+              logs: { path: '.codex-autorunner/services/logs/svc_managed123.log' },
+              capabilities: { can_stop: true, can_kill: true, can_view_logs: true },
+              desired_state: { kind: 'managed_command' },
+              observed_state: { status: 'healthy' }
             }
           ],
-          counts: { total: 1, running: 1, attention: 0, managed: 1, static: 0, loopback: 0 }
+          counts: { total: 1, running: 1, attention: 0, managed: 1, static: 0, loopback: 0, preview: 1, application: 0, infrastructure: 0 }
         });
       }
       if (String(url) === '/hub/services/svc_managed123/kill') {
@@ -240,10 +247,16 @@ describe('API client error handling', () => {
         serviceId: 'svc_managed123',
         kind: 'managed_command',
         status: 'healthy',
+        serviceClass: 'preview',
+        trustLevel: 'generated',
+        ownership: 'car_managed',
         scope: 'repo:car',
         carUrl: '/preview/services/svc_managed123/',
         port: 39001,
-        ownerPid: 123
+        ownerPid: 123,
+        capabilities: { can_stop: true, can_kill: true, can_view_logs: true },
+        desiredState: { kind: 'managed_command' },
+        observedState: { status: 'healthy' }
       });
     }
 

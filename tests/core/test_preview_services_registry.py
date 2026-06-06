@@ -127,6 +127,44 @@ def test_static_and_loopback_services_do_not_require_process_metadata(
     assert loopback.command is None
 
 
+def test_old_records_load_with_safe_taxonomy_defaults() -> None:
+    static_payload = static_service_payload()
+    loopback_payload = loopback_service_payload()
+    managed_payload = managed_service_payload()
+    for payload in (static_payload, loopback_payload, managed_payload):
+        payload.pop("service_class", None)
+        payload.pop("trust_level", None)
+        payload.pop("ownership", None)
+        payload.pop("network_policy", None)
+
+    static = service_record_from_dict(static_payload)
+    loopback = service_record_from_dict(loopback_payload)
+    managed = service_record_from_dict(managed_payload)
+
+    assert static.service_class == "preview"
+    assert static.trust_level == "generated"
+    assert static.ownership == "static"
+    assert static.network_policy == "loopback_only"
+    assert loopback.service_class == "application"
+    assert loopback.trust_level == "external"
+    assert loopback.ownership == "external"
+    assert managed.service_class == "preview"
+    assert managed.trust_level == "generated"
+    assert managed.ownership == "car_managed"
+
+
+def test_infrastructure_metadata_default_is_trusted() -> None:
+    payload = managed_service_payload()
+    payload["created_by"] = "opencode"
+    payload["metadata"] = {"service_class": "infrastructure"}
+
+    record = service_record_from_dict(payload)
+
+    assert record.service_class == "infrastructure"
+    assert record.trust_level == "trusted"
+    assert record.ownership == "car_managed"
+
+
 def test_managed_service_can_include_process_metadata(tmp_path: Path) -> None:
     registry = PreviewServiceRegistry(tmp_path)
 
@@ -222,6 +260,9 @@ def test_read_model_shape_is_stable(tmp_path: Path) -> None:
         "managed": 1,
         "static": 1,
         "loopback": 1,
+        "preview": 2,
+        "application": 1,
+        "infrastructure": 0,
     }
     assert model["services"][0]["service_id"] == "svc_loopback123"
     assert {
@@ -232,7 +273,57 @@ def test_read_model_shape_is_stable(tmp_path: Path) -> None:
         "car_url",
         "scope_links",
         "proxy_enabled",
+        "service_class",
+        "trust_level",
+        "ownership",
+        "network_policy",
+        "capabilities",
+        "desired_state",
+        "observed_state",
     } <= set(model["services"][0])
+
+
+def test_read_model_capabilities_cover_service_lifecycle_states(tmp_path: Path) -> None:
+    registry = PreviewServiceRegistry(tmp_path)
+    static = registry.create(static_service_payload("svc_static124"))
+    loopback = registry.create(loopback_service_payload("svc_loopback124"))
+    running = registry.create(managed_service_payload("svc_running124"))
+    stopped_payload = managed_service_payload("svc_stopped124")
+    stopped_payload["status"] = "stopped"
+    stopped_payload.pop("process")
+    stopped = registry.create(stopped_payload)
+    failed_payload = managed_service_payload("svc_failed124")
+    failed_payload["status"] = "failed"
+    failed_payload.pop("process")
+    failed = registry.create(failed_payload)
+    orphaned_payload = managed_service_payload("svc_orphaned124")
+    orphaned_payload["status"] = "orphaned"
+    orphaned = registry.create(orphaned_payload)
+    exited_payload = managed_service_payload("svc_exited124")
+    exited_payload["status"] = "exited"
+    exited_payload["process"]["exit_code"] = 1
+    exited = registry.create(exited_payload)
+
+    by_id = {
+        item["service_id"]: item
+        for item in services_read_model(
+            [static, loopback, running, stopped, failed, orphaned, exited]
+        )["services"]
+    }
+
+    assert by_id[static.service_id]["capabilities"]["can_open"] is True
+    assert by_id[static.service_id]["capabilities"]["can_start"] is False
+    assert by_id[loopback.service_id]["capabilities"]["can_unlink"] is True
+    assert by_id[running.service_id]["capabilities"]["can_stop"] is True
+    assert by_id[running.service_id]["capabilities"]["can_kill"] is True
+    assert (
+        by_id[running.service_id]["capabilities"]["requires_force_for_unlink"] is True
+    )
+    assert by_id[stopped.service_id]["capabilities"]["can_start"] is True
+    assert by_id[failed.service_id]["capabilities"]["can_start"] is True
+    assert by_id[orphaned.service_id]["capabilities"]["can_start"] is False
+    assert by_id[exited.service_id]["capabilities"]["can_start"] is True
+    assert by_id[exited.service_id]["observed_state"]["status"] == "exited"
 
 
 def test_path_payload_mismatch_is_rejected_on_list(tmp_path: Path) -> None:

@@ -19,13 +19,16 @@
     defaultServiceFilters,
     filterServices,
     serviceActionEligibility,
+    serviceClassLabel,
     serviceCounts,
     serviceKindLabel,
     serviceNeedsAttention,
     serviceOpenUrl,
+    serviceOwnershipLabel,
     serviceScopeLabel,
     serviceStatusLabel,
     serviceTargetLabel,
+    serviceTrustLabel,
     serviceUptimeLabel,
     type ServiceFilters
   } from '$lib/viewModels/services';
@@ -102,7 +105,7 @@
     actionId = `${action}:${service.serviceId}`;
     error = null;
     notice = null;
-    const shouldForce = action === 'kill' || (action === 'unlink' && serviceActionEligibility(service).canUnlink === false);
+    const shouldForce = action === 'kill' || (action === 'unlink' && serviceActionEligibility(service).requiresForceForUnlink);
     const result = await webApi.hub.serviceAction(
       service.serviceId,
       action,
@@ -266,9 +269,9 @@
       <div><span>Total</span><strong>{counts.total}</strong></div>
       <div><span>Running</span><strong>{counts.running}</strong></div>
       <div class:attention={counts.attention > 0}><span>Attention</span><strong>{counts.attention}</strong></div>
-      <div><span>Managed</span><strong>{counts.managed}</strong></div>
-      <div><span>Static</span><strong>{counts.static}</strong></div>
-      <div><span>Loopback</span><strong>{counts.loopback}</strong></div>
+      <div><span>Preview</span><strong>{counts.preview}</strong></div>
+      <div><span>Application</span><strong>{counts.application}</strong></div>
+      <div><span>Infrastructure</span><strong>{counts.infrastructure}</strong></div>
     </div>
 
     <div class="services-filters" aria-label="Service filters">
@@ -317,7 +320,8 @@
               <th>Service</th>
               <th>Status</th>
               <th>Health</th>
-              <th>Kind</th>
+              <th>Class</th>
+              <th>Substrate</th>
               <th>Scope</th>
               <th>Target</th>
               <th>Uptime</th>
@@ -338,6 +342,13 @@
                 </td>
                 <td><span class={`status-pill status-${service.status}`}>{serviceStatusLabel(service.status)}</span></td>
                 <td>{healthLabel(service)}</td>
+                <td>
+                  <div class="badge-stack">
+                    <span class={`meta-badge class-${service.serviceClass}`}>{serviceClassLabel(service.serviceClass)}</span>
+                    <span class="meta-badge">{serviceTrustLabel(service.trustLevel)}</span>
+                    <span class="meta-badge">{serviceOwnershipLabel(service.ownership)}</span>
+                  </div>
+                </td>
                 <td>{serviceKindLabel(service.kind)}</td>
                 <td><span class="truncate">{serviceScopeLabel(service)}</span></td>
                 <td><span class="truncate">{serviceTargetLabel(service)}</span></td>
@@ -345,7 +356,7 @@
                 <td>{service.ownerPid ? `pid ${service.ownerPid}` : service.createdBy ?? '—'}</td>
                 <td>
                   <div class="link-actions">
-                    <button class="ghost-button compact" type="button" onclick={() => openCarUrl(service)} disabled={!service.proxyEnabled || !serviceOpenUrl(service)}>Open</button>
+                    <button class="ghost-button compact" type="button" onclick={() => openCarUrl(service)} disabled={!eligibility.canOpen}>Open</button>
                     <button class="ghost-button compact" type="button" onclick={() => copyCarUrl(service)} disabled={!serviceOpenUrl(service)}>
                       {copiedServiceId === service.serviceId ? 'Copied' : 'Copy'}
                     </button>
@@ -359,7 +370,7 @@
                     <button class="ghost-button compact" type="button" onclick={() => viewLogs(service)} disabled={!eligibility.canViewLogs || logsLoadingId === service.serviceId}>Logs</button>
                     <button class="ghost-button compact danger" type="button" onclick={() => runDestructive(service, 'kill')} disabled={!eligibility.canKill || actionBusy(service, 'kill')}>Kill</button>
                     <button class="ghost-button compact danger" type="button" onclick={() => runDestructive(service, 'teardown')} disabled={!eligibility.canTeardown || actionBusy(service, 'teardown')}>Teardown</button>
-                    <button class="ghost-button compact danger" type="button" onclick={() => unlinkService(service)} disabled={actionBusy(service, 'unlink')}>Unlink</button>
+                    <button class="ghost-button compact danger" type="button" onclick={() => unlinkService(service)} disabled={(!eligibility.canUnlink && !eligibility.requiresForceForUnlink) || actionBusy(service, 'unlink')}>Unlink</button>
                   </div>
                 </td>
               </tr>
@@ -539,6 +550,38 @@
     color: var(--color-ink);
     text-transform: capitalize;
     white-space: nowrap;
+  }
+
+  .badge-stack {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+    min-width: 150px;
+  }
+
+  .meta-badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 22px;
+    padding: 0 var(--space-2);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-1);
+    background: var(--color-surface-muted);
+    color: var(--color-ink);
+    font-size: var(--font-size-0);
+    white-space: nowrap;
+  }
+
+  .class-preview {
+    border-color: var(--color-accent-soft);
+  }
+
+  .class-application {
+    border-color: var(--color-success-soft);
+  }
+
+  .class-infrastructure {
+    border-color: var(--color-warning-soft);
   }
 
   .status-running,

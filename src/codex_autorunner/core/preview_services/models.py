@@ -43,6 +43,31 @@ class PreviewScopeKind(str, Enum):
     TICKET = "ticket"
 
 
+class ServiceClass(str, Enum):
+    PREVIEW = "preview"
+    APPLICATION = "application"
+    INFRASTRUCTURE = "infrastructure"
+
+
+class TrustLevel(str, Enum):
+    TRUSTED = "trusted"
+    GENERATED = "generated"
+    EXTERNAL = "external"
+
+
+class ServiceOwnership(str, Enum):
+    STATIC = "static"
+    CAR_MANAGED = "car_managed"
+    EXTERNAL = "external"
+
+
+class NetworkPolicy(str, Enum):
+    LOOPBACK_ONLY = "loopback_only"
+    INTERNAL_ALLOWLIST = "internal_allowlist"
+    EXPLICIT_ALLOWLIST = "explicit_allowlist"
+    WORKSPACE_RUNTIME = "workspace_runtime"
+
+
 class PortPolicyMode(str, Enum):
     EXACT = "exact"
     PREFERRED = "preferred"
@@ -193,6 +218,31 @@ class RestartPolicy(StrictModel):
     restart_on_exit: RestartOnExit = RestartOnExit.NEVER
 
 
+class ServiceDesiredState(StrictModel):
+    kind: PreviewServiceKind
+    service_class: ServiceClass
+    trust_level: TrustLevel
+    ownership: ServiceOwnership
+    network_policy: NetworkPolicy
+    scope_links: list[ScopeLink] = Field(default_factory=list)
+    target: ServiceTarget | None = None
+    exposure: ServiceExposure
+    port_policy: PortPolicy | None = None
+    command: CommandDefinition | None = None
+    health_check: HealthCheck | None = None
+    restart_policy: RestartPolicy = Field(default_factory=RestartPolicy)
+    logs: ServiceLogs | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ServiceObservedState(StrictModel):
+    status: PreviewServiceStatus
+    process: ProcessMetadata | None = None
+    target: ServiceTarget | None = None
+    health_check: HealthCheck | None = None
+    updated_at: str
+
+
 class ServiceLogs(StrictModel):
     path: str
     tail_url: str | None = None
@@ -214,6 +264,10 @@ class PreviewServiceRecord(StrictModel):
     service_id: str
     name: str
     kind: PreviewServiceKind
+    service_class: ServiceClass | None = None
+    trust_level: TrustLevel | None = None
+    ownership: ServiceOwnership | None = None
+    network_policy: NetworkPolicy | None = None
     status: PreviewServiceStatus = PreviewServiceStatus.REGISTERED
     created_by: str | None = None
     created_at: str
@@ -228,6 +282,21 @@ class PreviewServiceRecord(StrictModel):
     restart_policy: RestartPolicy = Field(default_factory=RestartPolicy)
     logs: ServiceLogs | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_defaults(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        payload = dict(data)
+        defaults = service_taxonomy_defaults(
+            kind=payload.get("kind"),
+            created_by=payload.get("created_by"),
+            metadata=payload.get("metadata"),
+        )
+        for key, value in defaults.items():
+            payload.setdefault(key, value)
+        return payload
 
     @field_validator("service_id")
     @classmethod
@@ -268,6 +337,35 @@ class PreviewServiceRecord(StrictModel):
                 raise ValueError("loopback_url service requires target.direct_url")
         return self
 
+    @property
+    def desired_state(self) -> ServiceDesiredState:
+        return ServiceDesiredState(
+            kind=self.kind,
+            service_class=self.service_class or ServiceClass.PREVIEW,
+            trust_level=self.trust_level or TrustLevel.GENERATED,
+            ownership=self.ownership or ServiceOwnership.STATIC,
+            network_policy=self.network_policy or NetworkPolicy.LOOPBACK_ONLY,
+            scope_links=self.scope_links,
+            target=self.target,
+            exposure=self.exposure,
+            port_policy=self.port_policy,
+            command=self.command,
+            health_check=self.health_check,
+            restart_policy=self.restart_policy,
+            logs=self.logs,
+            metadata=self.metadata,
+        )
+
+    @property
+    def observed_state(self) -> ServiceObservedState:
+        return ServiceObservedState(
+            status=self.status,
+            process=self.process,
+            target=self.target,
+            health_check=self.health_check,
+            updated_at=self.updated_at,
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return self.model_dump(mode="json", exclude_none=True)
 
@@ -294,3 +392,80 @@ def service_record_from_dict(data: dict[str, Any]) -> PreviewServiceRecord:
         return PreviewServiceRecord.model_validate(data)
     except ValueError as exc:
         raise PreviewServiceValidationError(str(exc)) from exc
+
+
+def service_taxonomy_defaults(
+    *,
+    kind: Any,
+    created_by: Any = None,
+    metadata: Any = None,
+) -> dict[str, str]:
+    raw_kind = _enum_value(kind)
+    raw_created_by = str(created_by or "").lower()
+    metadata_map = metadata if isinstance(metadata, dict) else {}
+    raw_class = str(
+        metadata_map.get("service_class")
+        or metadata_map.get("class")
+        or metadata_map.get("product_class")
+        or ""
+    ).lower()
+    infrastructure = raw_class == ServiceClass.INFRASTRUCTURE.value or any(
+        marker in raw_created_by
+        for marker in (
+            "opencode",
+            "mcp",
+            "daemon",
+            "tunnel",
+            "webhook",
+            "browser",
+            "vector",
+            "codex_bridge",
+        )
+    )
+    if infrastructure:
+        ownership = (
+            ServiceOwnership.CAR_MANAGED.value
+            if raw_kind == PreviewServiceKind.MANAGED_COMMAND.value
+            else ServiceOwnership.EXTERNAL.value
+        )
+        return {
+            "service_class": ServiceClass.INFRASTRUCTURE.value,
+            "trust_level": TrustLevel.TRUSTED.value,
+            "ownership": ownership,
+            "network_policy": NetworkPolicy.LOOPBACK_ONLY.value,
+        }
+    if raw_kind in {
+        PreviewServiceKind.STATIC_FILE.value,
+        PreviewServiceKind.STATIC_DIR.value,
+    }:
+        return {
+            "service_class": ServiceClass.PREVIEW.value,
+            "trust_level": TrustLevel.GENERATED.value,
+            "ownership": ServiceOwnership.STATIC.value,
+            "network_policy": NetworkPolicy.LOOPBACK_ONLY.value,
+        }
+    if raw_kind == PreviewServiceKind.MANAGED_COMMAND.value:
+        return {
+            "service_class": ServiceClass.PREVIEW.value,
+            "trust_level": TrustLevel.GENERATED.value,
+            "ownership": ServiceOwnership.CAR_MANAGED.value,
+            "network_policy": NetworkPolicy.LOOPBACK_ONLY.value,
+        }
+    if raw_kind == PreviewServiceKind.LOOPBACK_URL.value:
+        return {
+            "service_class": ServiceClass.APPLICATION.value,
+            "trust_level": TrustLevel.EXTERNAL.value,
+            "ownership": ServiceOwnership.EXTERNAL.value,
+            "network_policy": NetworkPolicy.LOOPBACK_ONLY.value,
+        }
+    return {
+        "service_class": ServiceClass.PREVIEW.value,
+        "trust_level": TrustLevel.GENERATED.value,
+        "ownership": ServiceOwnership.EXTERNAL.value,
+        "network_policy": NetworkPolicy.LOOPBACK_ONLY.value,
+    }
+
+
+def _enum_value(value: Any) -> str:
+    raw = getattr(value, "value", value)
+    return str(raw or "")

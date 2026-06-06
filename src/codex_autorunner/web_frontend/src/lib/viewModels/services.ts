@@ -17,12 +17,14 @@ export type ServiceFilters = {
 };
 
 export type ServiceActionEligibility = {
+  canOpen: boolean;
   canStart: boolean;
   canStop: boolean;
   canRestart: boolean;
   canKill: boolean;
   canTeardown: boolean;
   canUnlink: boolean;
+  requiresForceForUnlink: boolean;
   canViewLogs: boolean;
 };
 
@@ -59,15 +61,30 @@ export function filterServices(
 }
 
 export function serviceActionEligibility(service: PreviewServiceReadModel): ServiceActionEligibility {
+  if (Object.keys(service.capabilities).length > 0) {
+    return {
+      canOpen: service.capabilities.can_open === true,
+      canStart: service.capabilities.can_start === true,
+      canStop: service.capabilities.can_stop === true,
+      canRestart: service.capabilities.can_restart === true,
+      canKill: service.capabilities.can_kill === true,
+      canTeardown: service.capabilities.can_teardown === true,
+      canUnlink: service.capabilities.can_unlink === true,
+      requiresForceForUnlink: service.capabilities.requires_force_for_unlink === true,
+      canViewLogs: service.capabilities.can_view_logs === true
+    };
+  }
   const managed = service.kind === 'managed_command';
   const running = serviceIsRunning(service);
   return {
+    canOpen: service.proxyEnabled && Boolean(serviceOpenUrl(service)),
     canStart: managed && ['stopped', 'exited', 'failed', 'registered', 'conflict'].includes(service.status),
     canStop: managed && running,
     canRestart: managed,
     canKill: managed && running,
     canTeardown: true,
     canUnlink: !running,
+    requiresForceForUnlink: managed && running,
     canViewLogs: managed && Boolean(service.logs)
   };
 }
@@ -88,6 +105,33 @@ export function serviceKindLabel(kind: PreviewServiceKind): string {
     managed_command: 'Managed command'
   };
   return labels[kind] ?? kind;
+}
+
+export function serviceClassLabel(serviceClass: PreviewServiceReadModel['serviceClass']): string {
+  const labels: Record<PreviewServiceReadModel['serviceClass'], string> = {
+    preview: 'Preview',
+    application: 'Application',
+    infrastructure: 'Infrastructure'
+  };
+  return labels[serviceClass] ?? serviceClass;
+}
+
+export function serviceTrustLabel(trustLevel: PreviewServiceReadModel['trustLevel']): string {
+  const labels: Record<PreviewServiceReadModel['trustLevel'], string> = {
+    trusted: 'Trusted',
+    generated: 'Generated',
+    external: 'External'
+  };
+  return labels[trustLevel] ?? trustLevel;
+}
+
+export function serviceOwnershipLabel(ownership: PreviewServiceReadModel['ownership']): string {
+  const labels: Record<PreviewServiceReadModel['ownership'], string> = {
+    static: 'Static',
+    car_managed: 'CAR-managed',
+    external: 'External'
+  };
+  return labels[ownership] ?? ownership;
 }
 
 export function serviceStatusLabel(status: PreviewServiceStatus): string {
@@ -130,5 +174,15 @@ export function serviceUptimeLabel(service: PreviewServiceReadModel, now = Date.
 }
 
 export function serviceCounts(model: PreviewServicesReadModel | null): PreviewServicesCounts {
-  return model?.counts ?? { total: 0, running: 0, attention: 0, managed: 0, static: 0, loopback: 0 };
+  return model?.counts ?? {
+    total: 0,
+    running: 0,
+    attention: 0,
+    managed: 0,
+    static: 0,
+    loopback: 0,
+    preview: 0,
+    application: 0,
+    infrastructure: 0
+  };
 }

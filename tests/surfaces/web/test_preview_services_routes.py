@@ -60,8 +60,12 @@ def test_preview_services_static_crud_and_read_model(tmp_path: Path) -> None:
     service = created.json()["service"]
     service_id = service["service_id"]
     assert service["kind"] == "static_file"
+    assert service["service_class"] == "preview"
+    assert service["trust_level"] == "generated"
+    assert service["ownership"] == "static"
     assert service["exposure"]["car_url"] == f"/preview/services/{service_id}/"
     assert created.json()["read_model"]["scope"] == "repo:repo-1"
+    assert created.json()["read_model"]["capabilities"]["can_open"] is True
 
     listing = client.get("/hub/services")
     assert listing.status_code == 200
@@ -77,6 +81,9 @@ def test_preview_services_static_crud_and_read_model(tmp_path: Path) -> None:
         "managed": 0,
         "static": 1,
         "loopback": 0,
+        "preview": 1,
+        "application": 0,
+        "infrastructure": 0,
     }
     assert payload["services"][0]["car_url"] == f"/preview/services/{service_id}/"
 

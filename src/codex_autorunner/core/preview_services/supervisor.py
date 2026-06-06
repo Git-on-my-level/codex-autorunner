@@ -94,6 +94,10 @@ class PreviewServiceSupervisor:
         kind: PreviewServiceKind | str | None = None,
         scope_links: Sequence[ScopeLink | dict[str, object]] | None = None,
         created_by: str | None = None,
+        service_class: str | None = None,
+        trust_level: str | None = None,
+        ownership: str | None = None,
+        network_policy: str | None = None,
     ) -> PreviewServiceRecord:
         resolved = path.resolve()
         selected_kind = kind or (
@@ -117,6 +121,12 @@ class PreviewServiceSupervisor:
             name=name or resolved.name or "Static preview",
             kind=parsed_kind,
             created_by=created_by,
+            **_taxonomy_fields(
+                service_class=service_class,
+                trust_level=trust_level,
+                ownership=ownership,
+                network_policy=network_policy,
+            ),
             scope_links=_scope_links(scope_links),
             target=ServiceTarget(path=str(resolved)).model_dump(
                 mode="json", exclude_none=True
@@ -132,6 +142,10 @@ class PreviewServiceSupervisor:
         health_path: str | None = "/",
         scope_links: Sequence[ScopeLink | dict[str, object]] | None = None,
         created_by: str | None = None,
+        service_class: str | None = None,
+        trust_level: str | None = None,
+        ownership: str | None = None,
+        network_policy: str | None = None,
     ) -> PreviewServiceRecord:
         target = _loopback_target(url)
         health_check = (
@@ -143,6 +157,12 @@ class PreviewServiceSupervisor:
             name=name or url,
             kind=PreviewServiceKind.LOOPBACK_URL,
             created_by=created_by,
+            **_taxonomy_fields(
+                service_class=service_class,
+                trust_level=trust_level,
+                ownership=ownership,
+                network_policy=network_policy,
+            ),
             scope_links=_scope_links(scope_links),
             target=target.model_dump(mode="json", exclude_none=True),
             health_check=health_check.model_dump(mode="json", exclude_none=True),
@@ -161,6 +181,10 @@ class PreviewServiceSupervisor:
         scope_links: Sequence[ScopeLink | dict[str, object]] | None = None,
         created_by: str | None = None,
         auto_start_on_hub_start: bool = False,
+        service_class: str | None = None,
+        trust_level: str | None = None,
+        ownership: str | None = None,
+        network_policy: str | None = None,
     ) -> PreviewServiceRecord:
         command = CommandDefinition(
             argv=[str(item) for item in argv],
@@ -174,6 +198,12 @@ class PreviewServiceSupervisor:
             kind=PreviewServiceKind.MANAGED_COMMAND,
             status=PreviewServiceStatus.STOPPED,
             created_by=created_by,
+            **_taxonomy_fields(
+                service_class=service_class,
+                trust_level=trust_level,
+                ownership=ownership,
+                network_policy=network_policy,
+            ),
             scope_links=_scope_links(scope_links),
             port_policy=policy.model_dump(mode="json", exclude_none=True),
             command=command.model_dump(mode="json", exclude_none=True),
@@ -195,6 +225,10 @@ class PreviewServiceSupervisor:
         scope_links: Sequence[ScopeLink | dict[str, object]] | None = None,
         created_by: str | None = None,
         auto_start_on_hub_start: bool = False,
+        service_class: str | None = None,
+        trust_level: str | None = None,
+        ownership: str | None = None,
+        network_policy: str | None = None,
     ) -> PreviewServiceRecord:
         record = self.register_managed_command(
             name=name,
@@ -206,6 +240,10 @@ class PreviewServiceSupervisor:
             scope_links=scope_links,
             created_by=created_by,
             auto_start_on_hub_start=auto_start_on_hub_start,
+            service_class=service_class,
+            trust_level=trust_level,
+            ownership=ownership,
+            network_policy=network_policy,
         )
         return self.start(record.service_id)
 
@@ -457,6 +495,25 @@ def _scope_links(
         )
         for link in scope_links
     ]
+
+
+def _taxonomy_fields(
+    *,
+    service_class: str | None,
+    trust_level: str | None,
+    ownership: str | None,
+    network_policy: str | None,
+) -> dict[str, str]:
+    return {
+        key: value
+        for key, value in {
+            "service_class": service_class,
+            "trust_level": trust_level,
+            "ownership": ownership,
+            "network_policy": network_policy,
+        }.items()
+        if value is not None
+    }
 
 
 def _port_policy(policy: PortPolicy | dict[str, object] | None) -> PortPolicy:

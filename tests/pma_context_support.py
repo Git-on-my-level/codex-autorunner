@@ -1136,6 +1136,9 @@ def test_build_hub_snapshot_includes_empty_preview_services(hub_env) -> None:
         "managed": 0,
         "static": 0,
         "loopback": 0,
+        "preview": 0,
+        "application": 0,
+        "infrastructure": 0,
     }
     assert services["running_sample"] == []
     assert services["attention_sample"] == []
@@ -1167,12 +1170,16 @@ def test_build_hub_snapshot_includes_preview_services_running_sample(
     services = snapshot["services"]
     assert services["counts"]["total"] == 1
     assert services["counts"]["running"] == 1
+    assert services["counts"]["preview"] == 1
     sample = services["running_sample"]
     assert len(sample) == 1
     assert sample[0] == {
         "service_id": "svc_running123",
         "name": "Frontend dev server",
         "kind": "managed_command",
+        "service_class": "preview",
+        "trust_level": "generated",
+        "ownership": "car_managed",
         "status": "healthy",
         "car_url": "/preview/services/svc_running123/",
         "scope": f"repo:{hub_env.repo_id}",
@@ -2124,12 +2131,18 @@ def test_render_hub_snapshot_includes_compact_preview_services() -> None:
             "managed": 1,
             "static": 0,
             "loopback": 1,
+            "preview": 1,
+            "application": 1,
+            "infrastructure": 0,
         },
         "running_sample": [
             {
                 "service_id": "svc_running123",
                 "name": "Frontend dev server",
                 "kind": "managed_command",
+                "service_class": "preview",
+                "trust_level": "generated",
+                "ownership": "car_managed",
                 "status": "healthy",
                 "car_url": "/preview/services/svc_running123/",
                 "scope": "repo:repo-1",
@@ -2144,6 +2157,9 @@ def test_render_hub_snapshot_includes_compact_preview_services() -> None:
                 "service_id": "svc_failed123",
                 "name": "Failed dev server",
                 "kind": "loopback_url",
+                "service_class": "application",
+                "trust_level": "external",
+                "ownership": "external",
                 "status": "failed",
                 "car_url": "/preview/services/svc_failed123/",
                 "scope": "repo:repo-1",
@@ -2160,7 +2176,12 @@ def test_render_hub_snapshot_includes_compact_preview_services() -> None:
     result = _render_hub_snapshot(snapshot)
 
     assert "Preview Services:" in result
-    assert "total=2 running=1 attention=1 managed=1 static=0 loopback=1" in result
+    assert (
+        "total=2 running=1 attention=1 managed=1 static=0 loopback=1 preview=1 application=1 infrastructure=0"
+        in result
+    )
+    assert "class=preview trust=generated ownership=car_managed" in result
+    assert "class=application trust=external ownership=external" in result
     assert "service_id=svc_running123" in result
     assert "car_url=/preview/services/svc_running123/" in result
     assert "service_id=svc_failed123" in result

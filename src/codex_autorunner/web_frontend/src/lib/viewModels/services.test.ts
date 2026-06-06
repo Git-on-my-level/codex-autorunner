@@ -4,8 +4,11 @@ import {
   defaultServiceFilters,
   filterServices,
   serviceActionEligibility,
+  serviceClassLabel,
+  serviceOwnershipLabel,
   serviceScopeLabel,
   serviceTargetLabel,
+  serviceTrustLabel,
   serviceUptimeLabel
 } from './services';
 
@@ -14,6 +17,10 @@ function service(overrides: Partial<PreviewServiceReadModel>): PreviewServiceRea
     serviceId: 'svc_base123',
     name: 'Base service',
     kind: 'loopback_url',
+    serviceClass: 'application',
+    trustLevel: 'external',
+    ownership: 'external',
+    networkPolicy: 'loopback_only',
     status: 'registered',
     createdBy: 'test',
     createdAt: '2026-06-05T00:00:00Z',
@@ -32,6 +39,9 @@ function service(overrides: Partial<PreviewServiceReadModel>): PreviewServiceRea
     restartPolicy: {},
     logs: null,
     metadata: {},
+    capabilities: {},
+    desiredState: {},
+    observedState: {},
     raw: {},
     ...overrides
   };
@@ -63,17 +73,43 @@ describe('preview service view models', () => {
     expect(filterServices(services, { ...defaultServiceFilters(), query: 'front' })).toEqual([services[0]]);
   });
 
-  it('derives action eligibility from kind and running state', () => {
-    const runningManaged = service({ kind: 'managed_command', status: 'healthy', logs: { path: 'log' } });
-    const stoppedManaged = service({ kind: 'managed_command', status: 'stopped' });
+  it('derives action eligibility from backend capabilities when present', () => {
+    const runningManaged = service({
+      kind: 'managed_command',
+      status: 'healthy',
+      logs: { path: 'log' },
+      capabilities: {
+        can_open: true,
+        can_start: false,
+        can_stop: true,
+        can_restart: true,
+        can_kill: true,
+        can_teardown: true,
+        can_unlink: false,
+        requires_force_for_unlink: true,
+        can_view_logs: true
+      }
+    });
+    const stoppedManaged = service({
+      kind: 'managed_command',
+      status: 'healthy',
+      capabilities: {
+        can_start: true,
+        can_stop: false,
+        can_unlink: true,
+        can_teardown: true
+      }
+    });
     const loopback = service({ kind: 'loopback_url', status: 'healthy' });
 
     expect(serviceActionEligibility(runningManaged)).toMatchObject({
+      canOpen: true,
       canStart: false,
       canStop: true,
       canRestart: true,
       canKill: true,
       canUnlink: false,
+      requiresForceForUnlink: true,
       canViewLogs: true
     });
     expect(serviceActionEligibility(stoppedManaged)).toMatchObject({
@@ -102,5 +138,11 @@ describe('preview service view models', () => {
     expect(serviceScopeLabel(managed)).toBe('repo:car');
     expect(serviceTargetLabel(managed)).toBe('127.0.0.1:39001');
     expect(serviceUptimeLabel(managed, Date.parse('2026-06-05T01:02:00Z'))).toBe('1h 2m');
+  });
+
+  it('formats class, trust, and ownership badges', () => {
+    expect(serviceClassLabel('infrastructure')).toBe('Infrastructure');
+    expect(serviceTrustLabel('trusted')).toBe('Trusted');
+    expect(serviceOwnershipLabel('car_managed')).toBe('CAR-managed');
   });
 });

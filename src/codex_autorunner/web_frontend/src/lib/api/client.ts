@@ -1244,7 +1244,10 @@ function mapPreviewServicesReadModel(raw: JsonRecord): PreviewServicesReadModel 
       attention: numberValue(counts.attention, 0),
       managed: numberValue(counts.managed, 0),
       static: numberValue(counts.static, 0),
-      loopback: numberValue(counts.loopback, 0)
+      loopback: numberValue(counts.loopback, 0),
+      preview: numberValue(counts.preview, 0),
+      application: numberValue(counts.application, 0),
+      infrastructure: numberValue(counts.infrastructure, 0)
     }
   };
 }
@@ -1254,6 +1257,10 @@ function mapPreviewServiceReadModel(raw: JsonRecord): PreviewServiceReadModel {
     serviceId: stringValue(raw.service_id ?? raw.serviceId, ''),
     name: stringValue(raw.name, 'Untitled service'),
     kind: previewServiceKind(raw.kind),
+    serviceClass: previewServiceClass(raw.service_class ?? raw.serviceClass),
+    trustLevel: previewServiceTrustLevel(raw.trust_level ?? raw.trustLevel),
+    ownership: previewServiceOwnership(raw.ownership),
+    networkPolicy: previewServiceNetworkPolicy(raw.network_policy ?? raw.networkPolicy),
     status: previewServiceStatus(raw.status),
     createdBy: nullableString(raw.created_by ?? raw.createdBy),
     createdAt: nullableString(raw.created_at ?? raw.createdAt),
@@ -1272,6 +1279,9 @@ function mapPreviewServiceReadModel(raw: JsonRecord): PreviewServiceReadModel {
     restartPolicy: asRecord(raw.restart_policy ?? raw.restartPolicy),
     logs: recordOrNull(raw.logs),
     metadata: asRecord(raw.metadata),
+    capabilities: booleanRecord(raw.capabilities),
+    desiredState: asRecord(raw.desired_state ?? raw.desiredState),
+    observedState: asRecord(raw.observed_state ?? raw.observedState),
     raw
   };
 }
@@ -1296,6 +1306,30 @@ function previewServiceKind(value: unknown): PreviewServiceKind {
   const raw = stringValue(value, 'loopback_url');
   if (raw === 'static_file' || raw === 'static_dir' || raw === 'loopback_url' || raw === 'managed_command') return raw;
   return 'loopback_url';
+}
+
+function previewServiceClass(value: unknown): PreviewServiceReadModel['serviceClass'] {
+  const raw = stringValue(value, 'preview');
+  if (raw === 'preview' || raw === 'application' || raw === 'infrastructure') return raw;
+  return 'preview';
+}
+
+function previewServiceTrustLevel(value: unknown): PreviewServiceReadModel['trustLevel'] {
+  const raw = stringValue(value, 'generated');
+  if (raw === 'trusted' || raw === 'generated' || raw === 'external') return raw;
+  return 'generated';
+}
+
+function previewServiceOwnership(value: unknown): PreviewServiceReadModel['ownership'] {
+  const raw = stringValue(value, 'external');
+  if (raw === 'static' || raw === 'car_managed' || raw === 'external') return raw;
+  return 'external';
+}
+
+function previewServiceNetworkPolicy(value: unknown): PreviewServiceReadModel['networkPolicy'] {
+  const raw = stringValue(value, 'loopback_only');
+  if (raw === 'loopback_only' || raw === 'internal_allowlist' || raw === 'explicit_allowlist' || raw === 'workspace_runtime') return raw;
+  return 'loopback_only';
 }
 
 function previewServiceStatus(value: unknown): PreviewServiceStatus {
@@ -1352,6 +1386,15 @@ export function partialPageIssue(
 
 function asRecord(value: unknown): JsonRecord {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as JsonRecord) : {};
+}
+
+function booleanRecord(value: unknown): Record<string, boolean> {
+  const raw = asRecord(value);
+  const mapped: Record<string, boolean> = {};
+  for (const [key, item] of Object.entries(raw)) {
+    mapped[key] = item === true;
+  }
+  return mapped;
 }
 
 function recordOrNull(value: unknown): JsonRecord | null {

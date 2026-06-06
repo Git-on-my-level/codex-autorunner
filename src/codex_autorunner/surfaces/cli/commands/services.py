@@ -117,6 +117,9 @@ def register_services_commands(
         service_id = service.get("service_id", "")
         name = service.get("name", "")
         kind = service.get("kind", "")
+        service_class = service.get("service_class", "")
+        trust_level = service.get("trust_level", "")
+        ownership = service.get("ownership", "")
         status = service.get("status", "")
         scope = service.get("scope") or _first_scope(service.get("scope_links"))
         car_url = service.get("car_url") or (service.get("exposure") or {}).get(
@@ -125,8 +128,12 @@ def register_services_commands(
         port = service.get("port") or (service.get("target") or {}).get("port")
         port_text = f" port={port}" if port else ""
         scope_text = f" scope={scope}" if scope else ""
+        taxonomy = "/".join(
+            str(item) for item in (service_class, trust_level, ownership) if item
+        )
+        taxonomy_text = f" {taxonomy}" if taxonomy else ""
         typer.echo(
-            f"{service_id}\t{status}\t{kind}\t{name}{scope_text}{port_text}\t{car_url}"
+            f"{service_id}\t{status}\t{kind}{taxonomy_text}\t{name}{scope_text}{port_text}\t{car_url}"
         )
 
     def _first_scope(scope_links: Any) -> Optional[str]:
@@ -149,6 +156,10 @@ def register_services_commands(
             ("id", service.get("service_id")),
             ("name", service.get("name")),
             ("kind", service.get("kind")),
+            ("service_class", service.get("service_class")),
+            ("trust_level", service.get("trust_level")),
+            ("ownership", service.get("ownership")),
+            ("network_policy", service.get("network_policy")),
             ("status", service.get("status")),
             ("scope", service.get("scope") or _first_scope(service.get("scope_links"))),
             (

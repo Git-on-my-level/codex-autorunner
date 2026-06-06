@@ -713,6 +713,9 @@ def _render_preview_services_section(
                 f"managed={int(counts.get('managed') or 0)}",
                 f"static={int(counts.get('static') or 0)}",
                 f"loopback={int(counts.get('loopback') or 0)}",
+                f"preview={int(counts.get('preview') or 0)}",
+                f"application={int(counts.get('application') or 0)}",
+                f"infrastructure={int(counts.get('infrastructure') or 0)}",
             ]
         )
     )
@@ -723,6 +726,9 @@ def _render_preview_services_section(
                 "  - "
                 f"service_id={_field(service, 'service_id', max_field_chars)} "
                 f"name={_field(service, 'name', max_field_chars)} "
+                f"class={_field(service, 'service_class', max_field_chars)} "
+                f"trust={_field(service, 'trust_level', max_field_chars)} "
+                f"ownership={_field(service, 'ownership', max_field_chars)} "
                 f"kind={_field(service, 'kind', max_field_chars)} "
                 f"status={_field(service, 'status', max_field_chars)} "
                 f"scope={_field(service, 'scope', max_field_chars)}"
@@ -740,6 +746,9 @@ def _render_preview_services_section(
                 "  - "
                 f"service_id={_field(service, 'service_id', max_field_chars)} "
                 f"name={_field(service, 'name', max_field_chars)} "
+                f"class={_field(service, 'service_class', max_field_chars)} "
+                f"trust={_field(service, 'trust_level', max_field_chars)} "
+                f"ownership={_field(service, 'ownership', max_field_chars)} "
                 f"kind={_field(service, 'kind', max_field_chars)} "
                 f"status={_field(service, 'status', max_field_chars)} "
                 f"car_url={_field(service, 'car_url', max_field_chars)} "

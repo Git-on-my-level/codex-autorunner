@@ -72,6 +72,19 @@ class RegisterStaticServiceRequest(BaseModel):
         default=None,
         validation_alias=AliasChoices("created_by", "createdBy"),
     )
+    service_class: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("service_class", "serviceClass"),
+    )
+    trust_level: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("trust_level", "trustLevel"),
+    )
+    ownership: Optional[str] = None
+    network_policy: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("network_policy", "networkPolicy"),
+    )
 
 
 class RegisterLoopbackServiceRequest(BaseModel):
@@ -90,6 +103,19 @@ class RegisterLoopbackServiceRequest(BaseModel):
     created_by: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("created_by", "createdBy"),
+    )
+    service_class: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("service_class", "serviceClass"),
+    )
+    trust_level: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("trust_level", "trustLevel"),
+    )
+    ownership: Optional[str] = None
+    network_policy: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("network_policy", "networkPolicy"),
     )
 
 
@@ -123,6 +149,19 @@ class RegisterManagedServiceRequest(BaseModel):
             "autoStartOnHubStart",
         ),
     )
+    service_class: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("service_class", "serviceClass"),
+    )
+    trust_level: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("trust_level", "trustLevel"),
+    )
+    ownership: Optional[str] = None
+    network_policy: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("network_policy", "networkPolicy"),
+    )
     start: bool = False
 
 
@@ -141,6 +180,19 @@ class UpdateServiceRequest(BaseModel):
     restart_policy: Optional[dict[str, Any]] = Field(
         default=None,
         validation_alias=AliasChoices("restart_policy", "restartPolicy"),
+    )
+    service_class: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("service_class", "serviceClass"),
+    )
+    trust_level: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("trust_level", "trustLevel"),
+    )
+    ownership: Optional[str] = None
+    network_policy: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("network_policy", "networkPolicy"),
     )
     metadata: Optional[dict[str, Any]] = None
 
@@ -214,6 +266,10 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
                 kind=payload.kind,
                 scope_links=_scope_payloads(payload.scope_links),
                 created_by=payload.created_by,
+                service_class=payload.service_class,
+                trust_level=payload.trust_level,
+                ownership=payload.ownership,
+                network_policy=payload.network_policy,
             )
         except (OSError, ValueError) as exc:
             raise _bad_request(exc) from exc
@@ -231,6 +287,10 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
                 health_path=payload.health_path,
                 scope_links=_scope_payloads(payload.scope_links),
                 created_by=payload.created_by,
+                service_class=payload.service_class,
+                trust_level=payload.trust_level,
+                ownership=payload.ownership,
+                network_policy=payload.network_policy,
             )
         except ValueError as exc:
             raise _bad_request(exc) from exc
@@ -257,6 +317,10 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
                 scope_links=_scope_payloads(payload.scope_links),
                 created_by=payload.created_by,
                 auto_start_on_hub_start=payload.auto_start_on_hub_start,
+                service_class=payload.service_class,
+                trust_level=payload.trust_level,
+                ownership=payload.ownership,
+                network_policy=payload.network_policy,
             )
         except PreviewPortAllocationError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -280,6 +344,14 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             changes["health_check"] = payload.health_check
         if payload.restart_policy is not None:
             changes["restart_policy"] = payload.restart_policy
+        if payload.service_class is not None:
+            changes["service_class"] = payload.service_class
+        if payload.trust_level is not None:
+            changes["trust_level"] = payload.trust_level
+        if payload.ownership is not None:
+            changes["ownership"] = payload.ownership
+        if payload.network_policy is not None:
+            changes["network_policy"] = payload.network_policy
         if payload.metadata is not None:
             changes["metadata"] = payload.metadata
         try:
