@@ -202,6 +202,11 @@ class UpdateServiceRequest(BaseModel):
         default=None,
         validation_alias=AliasChoices("health_check", "healthCheck"),
     )
+    command: Optional[dict[str, Any]] = None
+    port_policy: Optional[dict[str, Any]] = Field(
+        default=None,
+        validation_alias=AliasChoices("port_policy", "portPolicy"),
+    )
     restart_policy: Optional[dict[str, Any]] = Field(
         default=None,
         validation_alias=AliasChoices("restart_policy", "restartPolicy"),
@@ -277,7 +282,11 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
     @router.get("/hub/services/{service_id}")
     async def get_service(service_id: str) -> dict[str, Any]:
         record = await _require_record(manager, service_id)
-        return _service_response(record, capability_store)
+        return _service_response(
+            record,
+            capability_store,
+            events=await asyncio.to_thread(manager.events, service_id),
+        )
 
     @router.post("/hub/services/static")
     async def register_static(
@@ -369,6 +378,10 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             changes["scope_links"] = _scope_payloads(payload.scope_links)
         if payload.health_check is not None:
             changes["health_check"] = payload.health_check
+        if payload.command is not None:
+            changes["command"] = payload.command
+        if payload.port_policy is not None:
+            changes["port_policy"] = payload.port_policy
         if payload.restart_policy is not None:
             changes["restart_policy"] = payload.restart_policy
         if payload.service_class is not None:
@@ -387,6 +400,8 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             )
         except PreviewServiceNotFoundError as exc:
             raise _not_found(exc) from exc
+        except PreviewServiceSupervisorError as exc:
+            raise _supervisor_error(exc) from exc
         except ValueError as exc:
             raise _bad_request(exc) from exc
         return _service_response(record, capability_store)
@@ -472,27 +487,65 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
         return {"service": record.to_dict(), "deleted": True}
 
     @router.post("/hub/services/{service_id}/preview-token")
-    async def issue_preview_token(service_id: str) -> dict[str, Any]:
+    async def issue_preview_token(
+        service_id: str,
+        ttl_seconds: int = Query(
+            default=DEFAULT_PREVIEW_CAPABILITY_TTL_SECONDS,
+            ge=1,
+            le=60 * 60 * 24 * 30,
+            alias="ttl",
+        ),
+    ) -> dict[str, Any]:
         record = await _require_record(manager, service_id)
-        capability = await asyncio.to_thread(capability_store.issue, service_id)
+        capability = await asyncio.to_thread(
+            capability_store.issue,
+            service_id,
+            ttl_seconds=ttl_seconds,
+        )
         return {
             "service_id": record.service_id,
             "preview_url": capability.url,
             "expires_at": capability.expires_at,
         }
 
+    @router.post("/hub/services/{service_id}/preview-token/revoke")
+    async def revoke_preview_tokens(service_id: str) -> dict[str, Any]:
+        await _require_record(manager, service_id)
+        revoked = await asyncio.to_thread(capability_store.revoke_service, service_id)
+        return {"service_id": service_id, "revoked": revoked}
+
     @router.get("/hub/services/{service_id}/logs")
     async def service_logs(
         service_id: str,
         tail: int = Query(default=200, ge=0, le=5000),
+        stderr: bool = Query(default=False),
+        since: Optional[str] = None,
     ) -> dict[str, Any]:
         try:
             text = await asyncio.to_thread(manager.logs, service_id, tail=tail)
+            record = await asyncio.to_thread(manager.registry.require, service_id)
+            events = await asyncio.to_thread(manager.events, service_id)
         except PreviewServiceNotFoundError as exc:
             raise _not_found(exc) from exc
         except ValueError as exc:
             raise _bad_request(exc) from exc
-        return {"service_id": service_id, "tail": tail, "text": text}
+        process = (
+            record.process.model_dump(mode="json", exclude_none=True)
+            if record.process
+            else {}
+        )
+        return {
+            "service_id": service_id,
+            "tail": tail,
+            "stderr": stderr,
+            "since": since,
+            "text": text,
+            "exit_code": process.get("exit_code"),
+            "started_at": process.get("started_at"),
+            "exited_at": process.get("exited_at"),
+            "last_exit_reason": process.get("last_exit_reason"),
+            "events": events[-20:],
+        }
 
     @router.api_route(
         "/preview/services/{service_id}/",
@@ -662,11 +715,16 @@ async def _unlink(
 def _service_response(
     record: PreviewServiceRecord,
     capability_store: PreviewCapabilityStore,
+    *,
+    events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    return {
+    response: dict[str, Any] = {
         "service": record.to_dict(),
         "read_model": _service_read_model(record, capability_store),
     }
+    if events is not None:
+        response["events"] = events[-20:]
+    return response
 
 
 def _services_read_model(
@@ -848,7 +906,7 @@ def _request_url_for_path(request: Request, path: str) -> str:
     base = str(request.base_url).rstrip("/")
     root_path = request.scope.get("root_path") or ""
     if root_path and path.startswith(f"{root_path}/"):
-        return f"{base}{path[len(root_path):]}"
+        return f"{base}{path[len(root_path) :]}"
     return f"{base}{path}"
 
 

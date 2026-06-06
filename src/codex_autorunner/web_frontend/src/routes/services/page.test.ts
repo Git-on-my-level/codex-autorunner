@@ -18,4 +18,15 @@ describe('services page preview link security', () => {
       expect(pageSource).not.toMatch(pattern);
     }
   });
+
+  it('includes create, edit, link, health, and autostart affordances', () => {
+    expect(pageSource).toContain('registerStaticService');
+    expect(pageSource).toContain('registerLoopbackService');
+    expect(pageSource).toContain('registerManagedService');
+    expect(pageSource).toContain('issueServiceLink');
+    expect(pageSource).toContain('revokeServiceLinks');
+    expect(pageSource).toContain("runLifecycle(service, 'health')");
+    expect(pageSource).toContain('toggleAutostart(service)');
+    expect(pageSource).toContain('beginEdit(service)');
+  });
 });

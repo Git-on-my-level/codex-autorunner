@@ -938,6 +938,7 @@ def test_preview_services_managed_lifecycle_logs_and_force_semantics(
         logs = client.get(f"/hub/services/{service_id}/logs", params={"tail": 20})
         assert logs.status_code == 200
         assert logs.json()["service_id"] == service_id
+        assert isinstance(logs.json()["events"], list)
 
         stopped = client.post(f"/hub/services/{service_id}/stop")
         assert stopped.status_code == 200
@@ -949,6 +950,75 @@ def test_preview_services_managed_lifecycle_logs_and_force_semantics(
     teardown = client.post(f"/hub/services/{service_id}/teardown")
     assert teardown.status_code == 200
     assert teardown.json()["deleted"] is True
+
+
+def test_preview_services_preview_token_revoke_route(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    html = tmp_path / "index.html"
+    html.write_text("<h1>Preview</h1>", encoding="utf-8")
+    client = TestClient(create_hub_app(hub_root))
+    created = client.post(
+        "/hub/services/static",
+        json={"path": str(html), "name": "Static preview"},
+    )
+    service_id = created.json()["service"]["service_id"]
+
+    issued = client.post(
+        f"/hub/services/{service_id}/preview-token", params={"ttl": 60}
+    )
+    assert issued.status_code == 200
+    assert issued.json()["preview_url"].startswith("/preview/p/")
+
+    revoked = client.post(f"/hub/services/{service_id}/preview-token/revoke")
+    assert revoked.status_code == 200
+    assert revoked.json()["service_id"] == service_id
+    assert revoked.json()["revoked"] >= 1
+
+
+def test_preview_services_rejects_running_managed_runtime_config_edit(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    client = TestClient(create_hub_app(hub_root))
+    created = client.post(
+        "/hub/services/managed",
+        json={
+            "name": "Managed preview",
+            "argv": ["python", "-m", "http.server"],
+            "cwd": str(tmp_path),
+            "port_policy": {"mode": "auto"},
+            "health_check": {"type": "tcp", "path": None},
+        },
+    )
+    assert created.status_code == 200
+    service_id = created.json()["service"]["service_id"]
+    PreviewServiceRegistry(hub_root).update(
+        service_id,
+        {"status": "running"},
+    )
+
+    rejected = client.patch(
+        f"/hub/services/{service_id}",
+        json={"command": {"argv": ["python", "-V"], "cwd": str(tmp_path)}},
+    )
+    assert rejected.status_code == 400
+    assert "stop it before changing command" in rejected.text
+
+    autostart = client.patch(
+        f"/hub/services/{service_id}",
+        json={
+            "restart_policy": {
+                "auto_start_on_hub_start": True,
+                "restart_on_exit": "never",
+            }
+        },
+    )
+    assert autostart.status_code == 200
+    assert (
+        autostart.json()["service"]["restart_policy"]["auto_start_on_hub_start"] is True
+    )
 
 
 def test_preview_services_forced_unlink_requires_attestation_and_logs_orphan(

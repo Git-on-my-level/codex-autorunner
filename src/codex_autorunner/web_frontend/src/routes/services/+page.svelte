@@ -43,6 +43,40 @@
   let selectedLogService = $state<PreviewServiceReadModel | null>(null);
   let logsLoadingId = $state<string | null>(null);
   let copiedServiceId = $state<string | null>(null);
+  let issuedLinks = $state<Record<string, string>>({});
+  let createMode = $state<'static' | 'loopback' | 'managed'>('static');
+  let editService = $state<PreviewServiceReadModel | null>(null);
+  let createForm = $state({
+    name: '',
+    path: '',
+    url: '',
+    command: '',
+    cwd: '',
+    healthPath: '/',
+    scope: '',
+    port: '',
+    env: '',
+    envPolicy: 'minimal',
+    serviceClass: 'preview',
+    trustLevel: 'generated',
+    ownership: 'static',
+    autostart: false,
+    start: false
+  });
+  let editForm = $state({
+    name: '',
+    command: '',
+    cwd: '',
+    healthPath: '/',
+    scope: '',
+    port: '',
+    env: '',
+    envPolicy: 'minimal',
+    serviceClass: 'preview',
+    trustLevel: 'generated',
+    ownership: 'static',
+    autostart: false
+  });
   let copyTimer: ReturnType<typeof setTimeout> | null = null;
 
   const counts = $derived(serviceCounts(model));
@@ -89,6 +123,55 @@
       return;
     }
     notice = `${actionLabel(action)} ${service.name}`;
+    await refreshServices();
+  }
+
+  async function registerService(): Promise<void> {
+    actionId = `create:${createMode}`;
+    error = null;
+    notice = null;
+    const common = {
+      name: createForm.name.trim() || null,
+      scope_links: parseScopeLinks(createForm.scope),
+      created_by: 'ui',
+      service_class: createForm.serviceClass,
+      trust_level: createForm.trustLevel,
+      ownership: createForm.ownership
+    };
+    const result =
+      createMode === 'static'
+        ? await webApi.hub.registerStaticService({
+            ...common,
+            path: createForm.path.trim(),
+            kind: createForm.path.trim().includes('.') ? 'static_file' : 'static_dir'
+          })
+        : createMode === 'loopback'
+          ? await webApi.hub.registerLoopbackService({
+              ...common,
+              url: createForm.url.trim(),
+              health_path: createForm.healthPath.trim()
+            })
+          : await webApi.hub.registerManagedService({
+              ...common,
+              name: createForm.name.trim() || 'Managed service',
+              argv: shellWords(createForm.command),
+              cwd: createForm.cwd.trim(),
+              env: envPairs(createForm.env),
+              env_policy: createForm.envPolicy,
+              port_policy: portPolicy(createForm.port),
+              health_check: createForm.healthPath.trim()
+                ? { type: 'http', path: createForm.healthPath.trim() }
+                : { type: 'tcp' },
+              auto_start_on_hub_start: createForm.autostart,
+              start: createForm.start
+            });
+    actionId = null;
+    if (!result.ok) {
+      error = result.error;
+      return;
+    }
+    notice = `Registered ${result.data.name}`;
+    createForm = { ...createForm, name: '', path: '', url: '', command: '', port: '', env: '' };
     await refreshServices();
   }
 
@@ -170,7 +253,7 @@
 
   async function copyCarUrl(service: PreviewServiceReadModel): Promise<void> {
     try {
-      await navigator.clipboard.writeText(serviceOpenUrl(service));
+      await navigator.clipboard.writeText(absolutePreviewUrl(serviceOpenUrl(service)));
       copiedServiceId = service.serviceId;
       if (copyTimer) clearTimeout(copyTimer);
       copyTimer = setTimeout(() => {
@@ -183,6 +266,113 @@
 
   function openCarUrl(service: PreviewServiceReadModel): void {
     window.open(href(serviceOpenUrl(service)), '_blank', 'noopener,noreferrer');
+  }
+
+  async function issueLink(service: PreviewServiceReadModel): Promise<void> {
+    actionId = `issue-link:${service.serviceId}`;
+    error = null;
+    const result = await webApi.hub.issueServiceLink(service.serviceId, 86400);
+    actionId = null;
+    if (!result.ok) {
+      error = result.error;
+      return;
+    }
+    const url = absolutePreviewUrl(result.data.previewUrl);
+    issuedLinks = { ...issuedLinks, [service.serviceId]: url };
+    await navigator.clipboard.writeText(url);
+    copiedServiceId = service.serviceId;
+    notice = `Issued preview link for ${service.name}`;
+  }
+
+  async function revokeLinks(service: PreviewServiceReadModel): Promise<void> {
+    const confirmed = await confirmDialog({
+      title: 'Revoke preview links',
+      message: `Revoke active capability links for ${service.name}?`,
+      confirmText: 'Revoke',
+      cancelText: 'Cancel',
+      danger: true
+    });
+    if (!confirmed) return;
+    actionId = `revoke-link:${service.serviceId}`;
+    const result = await webApi.hub.revokeServiceLinks(service.serviceId);
+    actionId = null;
+    if (!result.ok) {
+      error = result.error;
+      return;
+    }
+    const next = { ...issuedLinks };
+    delete next[service.serviceId];
+    issuedLinks = next;
+    notice = `Revoked ${result.data.revoked} preview link${result.data.revoked === 1 ? '' : 's'}`;
+  }
+
+  async function toggleAutostart(service: PreviewServiceReadModel): Promise<void> {
+    const current = service.restartPolicy?.auto_start_on_hub_start === true;
+    actionId = `autostart:${service.serviceId}`;
+    const result = await webApi.hub.updateService(service.serviceId, {
+      restart_policy: { auto_start_on_hub_start: !current, restart_on_exit: 'never' }
+    });
+    actionId = null;
+    if (!result.ok) {
+      error = result.error;
+      return;
+    }
+    notice = `${!current ? 'Enabled' : 'Disabled'} autostart for ${service.name}`;
+    await refreshServices();
+  }
+
+  function beginEdit(service: PreviewServiceReadModel): void {
+    editService = service;
+    const command = service.desiredState.command as Record<string, unknown> | undefined;
+    const port = service.desiredState.port_policy as Record<string, unknown> | undefined;
+    editForm = {
+      name: service.name,
+      command: Array.isArray(command?.argv) ? command.argv.map(String).join(' ') : '',
+      cwd: typeof command?.cwd === 'string' ? command.cwd : '',
+      healthPath: typeof service.healthCheck?.path === 'string' ? service.healthCheck.path : '/',
+      scope: service.scope ?? '',
+      port: typeof port?.port === 'number' ? String(port.port) : '',
+      env: '',
+      envPolicy: typeof command?.env_policy === 'string' ? command.env_policy : 'minimal',
+      serviceClass: service.serviceClass,
+      trustLevel: service.trustLevel,
+      ownership: service.ownership,
+      autostart: service.restartPolicy?.auto_start_on_hub_start === true
+    };
+  }
+
+  async function saveEdit(): Promise<void> {
+    if (!editService) return;
+    actionId = `edit:${editService.serviceId}`;
+    const payload: Record<string, unknown> = {
+      name: editForm.name.trim(),
+      scope_links: parseScopeLinks(editForm.scope),
+      service_class: editForm.serviceClass,
+      trust_level: editForm.trustLevel,
+      ownership: editForm.ownership,
+      restart_policy: { auto_start_on_hub_start: editForm.autostart, restart_on_exit: 'never' }
+    };
+    if (editService.kind === 'managed_command') {
+      payload.command = {
+        argv: shellWords(editForm.command),
+        cwd: editForm.cwd.trim(),
+        env: envPairs(editForm.env),
+        env_policy: editForm.envPolicy
+      };
+      payload.port_policy = portPolicy(editForm.port);
+      payload.health_check = editForm.healthPath.trim()
+        ? { type: 'http', path: editForm.healthPath.trim() }
+        : { type: 'tcp' };
+    }
+    const result = await webApi.hub.updateService(editService.serviceId, payload);
+    actionId = null;
+    if (!result.ok) {
+      error = result.error;
+      return;
+    }
+    notice = `Updated ${result.data.name}`;
+    editService = null;
+    await refreshServices();
   }
 
   function clearFilters(): void {
@@ -231,6 +421,42 @@
     return type ? `${type}${path ? ` ${path}` : ''}` : '—';
   }
 
+  function absolutePreviewUrl(url: string): string {
+    return new URL(href(url), window.location.origin).toString();
+  }
+
+  function parseScopeLinks(scope: string): Array<{ kind: string; id?: string; path?: string }> {
+    return scope
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => {
+        if (!item.includes(':')) return { kind: item };
+        const [kind, value] = item.split(/:(.*)/s);
+        return kind === 'workspace' ? { kind, path: value } : { kind, id: value };
+      });
+  }
+
+  function shellWords(command: string): string[] {
+    return command.trim().split(/\s+/).filter(Boolean);
+  }
+
+  function envPairs(raw: string): Record<string, string> {
+    const env: Record<string, string> = {};
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || !trimmed.includes('=')) continue;
+      const [key, ...rest] = trimmed.split('=');
+      env[key.trim()] = rest.join('=');
+    }
+    return env;
+  }
+
+  function portPolicy(port: string): Record<string, unknown> {
+    const parsed = Number(port);
+    return Number.isInteger(parsed) && parsed > 0 ? { mode: 'preferred', port: parsed } : { mode: 'auto' };
+  }
+
   const statusOptions: Array<ServiceFilters['status']> = ['all', 'registered', 'starting', 'running', 'healthy', 'unhealthy', 'stopped', 'exited', 'failed', 'orphaned', 'conflict'];
   const kindOptions: Array<ServiceFilters['kind']> = ['all', 'static_file', 'static_dir', 'loopback_url', 'managed_command'];
 </script>
@@ -273,6 +499,42 @@
       <div><span>Application</span><strong>{counts.application}</strong></div>
       <div><span>Infrastructure</span><strong>{counts.infrastructure}</strong></div>
     </div>
+
+    <section class="service-editor" aria-label="Register service">
+      <div class="editor-head">
+        <h2>Register</h2>
+        <div class="mode-tabs">
+          <button class:active={createMode === 'static'} type="button" onclick={() => createMode = 'static'}>Static</button>
+          <button class:active={createMode === 'loopback'} type="button" onclick={() => createMode = 'loopback'}>Loopback</button>
+          <button class:active={createMode === 'managed'} type="button" onclick={() => createMode = 'managed'}>Managed</button>
+        </div>
+      </div>
+      <div class="editor-grid">
+        <label><span>Name</span><input bind:value={createForm.name} placeholder="frontend preview" /></label>
+        {#if createMode === 'static'}
+          <label class="wide"><span>Path</span><input bind:value={createForm.path} placeholder="/absolute/path/to/file-or-dir" /></label>
+        {:else if createMode === 'loopback'}
+          <label class="wide"><span>URL</span><input bind:value={createForm.url} placeholder="http://127.0.0.1:5173/" /></label>
+          <label><span>Health path</span><input bind:value={createForm.healthPath} placeholder="/" /></label>
+        {:else}
+          <label class="wide"><span>Command</span><input bind:value={createForm.command} placeholder="npm run dev -- --host 127.0.0.1 --port $PORT" /></label>
+          <label><span>CWD</span><input bind:value={createForm.cwd} placeholder="/path/to/worktree" /></label>
+          <label><span>Port</span><input bind:value={createForm.port} inputmode="numeric" placeholder="auto" /></label>
+          <label><span>Health path</span><input bind:value={createForm.healthPath} placeholder="/" /></label>
+          <label><span>Env policy</span><select bind:value={createForm.envPolicy}><option value="minimal">Minimal</option><option value="allowlist">Allowlist</option><option value="inherit_all">Inherit all</option></select></label>
+          <label class="wide"><span>Env</span><textarea bind:value={createForm.env} rows="2" placeholder="KEY=value"></textarea></label>
+        {/if}
+        <label><span>Scope</span><input bind:value={createForm.scope} placeholder="repo:car, ticket:tkt_1" /></label>
+        <label><span>Class</span><select bind:value={createForm.serviceClass}><option value="preview">Preview</option><option value="application">Application</option><option value="infrastructure">Infrastructure</option></select></label>
+        <label><span>Trust</span><select bind:value={createForm.trustLevel}><option value="generated">Generated</option><option value="trusted">Trusted</option><option value="external">External</option></select></label>
+        <label><span>Ownership</span><select bind:value={createForm.ownership}><option value="static">Static</option><option value="car_managed">CAR-managed</option><option value="external">External</option></select></label>
+        {#if createMode === 'managed'}
+          <label class="check-row"><input type="checkbox" bind:checked={createForm.start} /> <span>Start after registering</span></label>
+          <label class="check-row"><input type="checkbox" bind:checked={createForm.autostart} /> <span>Autostart on hub start</span></label>
+        {/if}
+      </div>
+      <button class="ghost-button" type="button" onclick={registerService} disabled={Boolean(actionId?.startsWith('create:'))}>Register service</button>
+    </section>
 
     <div class="services-filters" aria-label="Service filters">
       <label>
@@ -360,6 +622,11 @@
                     <button class="ghost-button compact" type="button" onclick={() => copyCarUrl(service)} disabled={!serviceOpenUrl(service)}>
                       {copiedServiceId === service.serviceId ? 'Copied' : 'Copy'}
                     </button>
+                    <button class="ghost-button compact" type="button" onclick={() => issueLink(service)} disabled={!eligibility.canOpen || actionBusy(service, 'issue-link')}>Issue</button>
+                    <button class="ghost-button compact" type="button" onclick={() => revokeLinks(service)} disabled={actionBusy(service, 'revoke-link')}>Revoke</button>
+                    {#if issuedLinks[service.serviceId]}
+                      <code class="issued-link">{issuedLinks[service.serviceId]}</code>
+                    {/if}
                   </div>
                 </td>
                 <td>
@@ -367,6 +634,9 @@
                     <button class="ghost-button compact" type="button" onclick={() => runLifecycle(service, 'start')} disabled={!eligibility.canStart || actionBusy(service, 'start')}>Start</button>
                     <button class="ghost-button compact" type="button" onclick={() => runLifecycle(service, 'stop')} disabled={!eligibility.canStop || actionBusy(service, 'stop')}>Stop</button>
                     <button class="ghost-button compact" type="button" onclick={() => runLifecycle(service, 'restart')} disabled={!eligibility.canRestart || actionBusy(service, 'restart')}>Restart</button>
+                    <button class="ghost-button compact" type="button" onclick={() => runLifecycle(service, 'health')} disabled={actionBusy(service, 'health')}>Health</button>
+                    <button class="ghost-button compact" type="button" onclick={() => toggleAutostart(service)} disabled={actionBusy(service, 'autostart')}>{service.restartPolicy?.auto_start_on_hub_start === true ? 'Autostart on' : 'Autostart off'}</button>
+                    <button class="ghost-button compact" type="button" onclick={() => beginEdit(service)} disabled={service.status === 'running' || service.status === 'healthy' || service.status === 'starting' || service.status === 'unhealthy'}>Edit</button>
                     <button class="ghost-button compact" type="button" onclick={() => viewLogs(service)} disabled={!eligibility.canViewLogs || logsLoadingId === service.serviceId}>Logs</button>
                     <button class="ghost-button compact danger" type="button" onclick={() => runDestructive(service, 'kill')} disabled={!eligibility.canKill || actionBusy(service, 'kill')}>Kill</button>
                     <button class="ghost-button compact danger" type="button" onclick={() => runDestructive(service, 'teardown')} disabled={!eligibility.canTeardown || actionBusy(service, 'teardown')}>Teardown</button>
@@ -386,6 +656,9 @@
           <div>
             <h2>{selectedLogService.name} logs</h2>
             <p>{selectedLogs ? `${selectedLogs.tail} line tail` : 'Loading logs'}</p>
+            {#if selectedLogs?.exitCode !== null && selectedLogs?.exitCode !== undefined}
+              <p>exit {selectedLogs.exitCode}{selectedLogs.exitedAt ? ` at ${selectedLogs.exitedAt}` : ''}{selectedLogs.lastExitReason ? `: ${selectedLogs.lastExitReason}` : ''}</p>
+            {/if}
           </div>
           <div class="row-actions">
             <button class="ghost-button compact" type="button" onclick={() => selectedLogService && viewLogs(selectedLogService)}>Refresh logs</button>
@@ -393,6 +666,40 @@
           </div>
         </div>
         <pre>{selectedLogs?.text || 'No log output recorded.'}</pre>
+        {#if selectedLogs?.events?.length}
+          <div class="events-list">
+            <h3>Recent events</h3>
+            {#each selectedLogs.events as event}
+              <div><code>{String(event.at ?? '')}</code> {String(event.type ?? '')} {String(event.status ?? '')}</div>
+            {/each}
+          </div>
+        {/if}
+      </section>
+    {/if}
+
+    {#if editService}
+      <section class="service-editor" aria-label="Edit service">
+        <div class="editor-head">
+          <h2>Edit {editService.name}</h2>
+          <button class="ghost-button compact" type="button" onclick={() => editService = null}>Close</button>
+        </div>
+        <div class="editor-grid">
+          <label><span>Name</span><input bind:value={editForm.name} /></label>
+          <label><span>Scope</span><input bind:value={editForm.scope} /></label>
+          <label><span>Class</span><select bind:value={editForm.serviceClass}><option value="preview">Preview</option><option value="application">Application</option><option value="infrastructure">Infrastructure</option></select></label>
+          <label><span>Trust</span><select bind:value={editForm.trustLevel}><option value="generated">Generated</option><option value="trusted">Trusted</option><option value="external">External</option></select></label>
+          <label><span>Ownership</span><select bind:value={editForm.ownership}><option value="static">Static</option><option value="car_managed">CAR-managed</option><option value="external">External</option></select></label>
+          {#if editService.kind === 'managed_command'}
+            <label class="wide"><span>Command</span><input bind:value={editForm.command} /></label>
+            <label><span>CWD</span><input bind:value={editForm.cwd} /></label>
+            <label><span>Port</span><input bind:value={editForm.port} /></label>
+            <label><span>Health path</span><input bind:value={editForm.healthPath} /></label>
+            <label><span>Env policy</span><select bind:value={editForm.envPolicy}><option value="minimal">Minimal</option><option value="allowlist">Allowlist</option><option value="inherit_all">Inherit all</option></select></label>
+            <label class="wide"><span>Env overrides</span><textarea bind:value={editForm.env} rows="2"></textarea></label>
+          {/if}
+          <label class="check-row"><input type="checkbox" bind:checked={editForm.autostart} /> <span>Autostart on hub start</span></label>
+        </div>
+        <button class="ghost-button" type="button" onclick={saveEdit} disabled={actionBusy(editService, 'edit')}>Save changes</button>
       </section>
     {/if}
   {/if}
@@ -432,7 +739,8 @@
   }
 
   .services-metrics div,
-  .service-logs {
+  .service-logs,
+  .service-editor {
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-2);
     background: var(--color-surface);
@@ -467,6 +775,70 @@
     align-items: end;
   }
 
+  .service-editor {
+    padding: var(--space-4);
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .editor-head {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+    align-items: center;
+  }
+
+  .editor-head h2,
+  .events-list h3 {
+    margin: 0;
+    font-size: var(--font-size-3);
+    color: var(--color-ink);
+  }
+
+  .mode-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+  }
+
+  .mode-tabs button {
+    min-height: 30px;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-1);
+    background: var(--color-surface-muted);
+    color: var(--color-ink);
+    padding: 0 var(--space-2);
+  }
+
+  .mode-tabs button.active {
+    border-color: var(--color-accent);
+    background: var(--color-accent-soft);
+  }
+
+  .editor-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--space-2);
+    align-items: end;
+  }
+
+  .editor-grid label {
+    display: grid;
+    gap: var(--space-1);
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-0);
+  }
+
+  .editor-grid label.wide {
+    grid-column: span 2;
+  }
+
+  .editor-grid .check-row {
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    color: var(--color-ink);
+  }
+
   .services-filters label {
     display: grid;
     gap: var(--space-1);
@@ -475,7 +847,10 @@
   }
 
   .services-filters input,
-  .services-filters select {
+  .services-filters select,
+  .editor-grid input,
+  .editor-grid select,
+  .editor-grid textarea {
     width: 100%;
     min-height: 36px;
     border: 1px solid var(--color-border);
@@ -484,6 +859,12 @@
     color: var(--color-ink);
     padding: 0 var(--space-3);
     font: inherit;
+  }
+
+  .editor-grid textarea {
+    min-height: 64px;
+    padding: var(--space-2) var(--space-3);
+    resize: vertical;
   }
 
   .services-table-wrap {
@@ -605,6 +986,14 @@
     gap: var(--space-1);
   }
 
+  .issued-link {
+    display: block;
+    max-width: 220px;
+    overflow-wrap: anywhere;
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-0);
+  }
+
   :global(.ghost-button.compact) {
     min-height: 30px;
     padding: 0 var(--space-2);
@@ -640,9 +1029,17 @@
     overflow-wrap: anywhere;
   }
 
+  .events-list {
+    display: grid;
+    gap: var(--space-2);
+    color: var(--color-ink);
+    font-size: var(--font-size-0);
+  }
+
   @media (max-width: 980px) {
     .services-metrics,
-    .services-filters {
+    .services-filters,
+    .editor-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
@@ -658,8 +1055,13 @@
     }
 
     .services-metrics,
-    .services-filters {
+    .services-filters,
+    .editor-grid {
       grid-template-columns: 1fr;
+    }
+
+    .editor-grid label.wide {
+      grid-column: auto;
     }
 
     .services-filters .ghost-button {

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import time
+import webbrowser
 from pathlib import Path
 from typing import Any, Callable, Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urljoin
 
 import httpx
 import typer
@@ -67,6 +69,55 @@ def register_services_commands(
 
     def _json(data: dict[str, Any]) -> None:
         typer.echo(json.dumps(data, indent=2, sort_keys=True))
+
+    def _preview_public_base_url(config: Any) -> Optional[str]:
+        env_value = os.environ.get("CAR_PREVIEW_PUBLIC_BASE_URL")
+        if env_value and env_value.strip():
+            return env_value.strip().rstrip("/")
+        preview_cfg = getattr(config, "preview_services", None)
+        if not isinstance(preview_cfg, dict):
+            raw_cfg = getattr(config, "raw", None)
+            preview_cfg = (
+                raw_cfg.get("preview_services")
+                if isinstance(raw_cfg, dict)
+                else preview_cfg
+            )
+        if isinstance(preview_cfg, dict):
+            for key in ("public_base_url", "publicBaseUrl", "base_url", "baseUrl"):
+                value = preview_cfg.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip().rstrip("/")
+        for attr in ("public_base_url", "server_public_url", "external_url"):
+            value = getattr(config, attr, None)
+            if isinstance(value, str) and value.strip():
+                return value.strip().rstrip("/")
+        return None
+
+    def _absolute_or_relative_preview_url(config: Any, preview_url: str) -> str:
+        if preview_url.startswith(("http://", "https://")):
+            return preview_url
+        base = _preview_public_base_url(config)
+        if not base:
+            return preview_url
+        return urljoin(f"{base}/", preview_url.lstrip("/"))
+
+    def _parse_ttl_seconds(value: str) -> int:
+        raw = value.strip().lower()
+        if not raw:
+            raise_exit("--ttl must be non-empty.")
+        multiplier = 1
+        if raw[-1:] in {"s", "m", "h", "d"}:
+            suffix = raw[-1]
+            raw = raw[:-1]
+            multiplier = {"s": 1, "m": 60, "h": 3600, "d": 86400}[suffix]
+        try:
+            amount = int(raw)
+        except ValueError:
+            raise_exit("--ttl must be an integer duration such as 3600, 10m, or 24h.")
+        ttl_seconds = amount * multiplier
+        if ttl_seconds <= 0:
+            raise_exit("--ttl must be greater than zero.")
+        return ttl_seconds
 
     def _scope_links(scopes: list[str]) -> list[dict[str, str]]:
         links: list[dict[str, str]] = []
@@ -182,6 +233,13 @@ def register_services_commands(
             ),
         ]
         for key, value in fields:
+            if value is not None and value != "":
+                typer.echo(f"{key}: {value}")
+        process = (
+            service.get("process") if isinstance(service.get("process"), dict) else {}
+        )
+        for key in ("exit_code", "exited_at", "last_exit_reason"):
+            value = process.get(key) if isinstance(process, dict) else None
             if value is not None and value != "":
                 typer.echo(f"{key}: {value}")
 
@@ -418,6 +476,86 @@ def register_services_commands(
             return
         _print_action(data, "started")
 
+    @services_app.command(
+        "register-managed",
+        context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+    )
+    def register_managed(
+        ctx: typer.Context,
+        name: str = typer.Option(..., "--name", help="Service display name."),
+        cwd: Path = typer.Option(..., "--cwd", help="Command working directory."),
+        scope: list[str] = typer.Option(
+            [], "--scope", help="Scope link, repeatable; e.g. repo:car."
+        ),
+        port: Optional[int] = typer.Option(
+            None, "--port", help="Exact preferred port."
+        ),
+        auto_port: bool = typer.Option(
+            False, "--auto-port", help="Allocate a port from the preview range."
+        ),
+        env: list[str] = typer.Option(
+            [], "--env", help="Environment pair, repeatable; KEY=VALUE."
+        ),
+        env_policy: str = typer.Option(
+            "minimal",
+            "--env-policy",
+            help="Managed env policy: minimal, allowlist, or inherit_all.",
+        ),
+        health_path: Optional[str] = typer.Option(
+            "/", "--health-path", help="HTTP health path."
+        ),
+        autostart: bool = typer.Option(
+            False, "--autostart", help="Opt into hub-start autostart."
+        ),
+        path: Optional[Path] = typer.Option(
+            None, "--path", help="Hub root or config path."
+        ),
+        base_path: Optional[str] = typer.Option(
+            None, "--base-path", help="Override configured hub base path."
+        ),
+        json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
+    ) -> None:
+        command = [str(item) for item in ctx.args]
+        if command and command[0] == "--":
+            command = command[1:]
+        if not command:
+            raise_exit("register-managed requires a command after --.")
+        if port is not None and auto_port:
+            raise_exit("Use either --port or --auto-port, not both.")
+        port_policy: dict[str, Any] = (
+            {"mode": "auto"}
+            if auto_port or port is None
+            else {"mode": "preferred", "port": port}
+        )
+        payload = {
+            "name": name,
+            "argv": command,
+            "cwd": _client_resolved_path(cwd),
+            "env": _env_pairs(env),
+            "env_policy": env_policy,
+            "port_policy": port_policy,
+            "health_check": (
+                {"type": "http", "path": health_path}
+                if health_path
+                else {"type": "tcp"}
+            ),
+            "scope_links": _scope_links(scope),
+            "created_by": "cli",
+            "auto_start_on_hub_start": autostart,
+            "start": False,
+        }
+        config = _load_config(path)
+        data = _request(
+            "POST",
+            _url(config, "/hub/services/managed", base_path=base_path),
+            config,
+            payload=payload,
+        )
+        if json_output:
+            _json(data)
+            return
+        _print_action(data, "registered")
+
     def _simple_lifecycle(
         service_id: str,
         action: str,
@@ -604,6 +742,12 @@ def register_services_commands(
         follow: bool = typer.Option(
             False, "--follow", help="Poll and print appended logs."
         ),
+        stderr: bool = typer.Option(
+            False, "--stderr", help="Request stderr stream when supported."
+        ),
+        since: Optional[str] = typer.Option(
+            None, "--since", help="Duration or timestamp filter, such as 10m."
+        ),
         path: Optional[Path] = typer.Option(
             None, "--path", help="Hub root or config path."
         ),
@@ -615,7 +759,7 @@ def register_services_commands(
         config = _load_config(path)
         url = _append_query(
             _url(config, f"/hub/services/{service_id}/logs", base_path=base_path),
-            {"tail": tail},
+            {"tail": tail, "stderr": stderr, "since": since},
         )
         if not follow:
             data = _request("GET", url, config)
@@ -638,6 +782,105 @@ def register_services_commands(
                 typer.echo(text, nl=False)
             previous = text
             time.sleep(1.0)
+
+    @services_app.command("open")
+    def open_service(
+        service_id: str,
+        path: Optional[Path] = typer.Option(
+            None, "--path", help="Hub root or config path."
+        ),
+        base_path: Optional[str] = typer.Option(
+            None, "--base-path", help="Override configured hub base path."
+        ),
+        json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
+    ) -> None:
+        config = _load_config(path)
+        data = _request(
+            "GET",
+            _url(config, f"/hub/services/{service_id}", base_path=base_path),
+            config,
+        )
+        raw_service = data.get("read_model")
+        service: dict[str, Any] = (
+            raw_service if isinstance(raw_service, dict) else _service(data)
+        )
+        exposure = service.get("exposure")
+        exposure_map = exposure if isinstance(exposure, dict) else {}
+        preview_url = str(
+            service.get("preview_url")
+            or service.get("previewUrl")
+            or exposure_map.get("car_url")
+            or service.get("car_url")
+            or ""
+        )
+        resolved = _absolute_or_relative_preview_url(config, preview_url)
+        if json_output:
+            _json({"service_id": service_id, "preview_url": resolved})
+            return
+        if resolved.startswith(("http://", "https://")):
+            webbrowser.open(resolved)
+        typer.echo(resolved)
+
+    @services_app.command("issue-link")
+    def issue_link(
+        service_id: str,
+        ttl: str = typer.Option("24h", "--ttl", help="Capability TTL, e.g. 24h."),
+        path: Optional[Path] = typer.Option(
+            None, "--path", help="Hub root or config path."
+        ),
+        base_path: Optional[str] = typer.Option(
+            None, "--base-path", help="Override configured hub base path."
+        ),
+        json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
+    ) -> None:
+        ttl_seconds = _parse_ttl_seconds(ttl)
+        config = _load_config(path)
+        url = _append_query(
+            _url(
+                config,
+                f"/hub/services/{service_id}/preview-token",
+                base_path=base_path,
+            ),
+            {"ttl": ttl_seconds},
+        )
+        data = _request("POST", url, config)
+        preview_url = str(data.get("preview_url") or "")
+        data["preview_url"] = _absolute_or_relative_preview_url(config, preview_url)
+        if json_output:
+            _json(data)
+            return
+        typer.echo(data["preview_url"])
+
+    @services_app.command("revoke-link")
+    def revoke_link(
+        service_id: str,
+        all_links: bool = typer.Option(
+            False, "--all", help="Revoke all active links for the service."
+        ),
+        path: Optional[Path] = typer.Option(
+            None, "--path", help="Hub root or config path."
+        ),
+        base_path: Optional[str] = typer.Option(
+            None, "--base-path", help="Override configured hub base path."
+        ),
+        json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
+    ) -> None:
+        if not all_links:
+            raise_exit("revoke-link currently requires --all.")
+        config = _load_config(path)
+        data = _request(
+            "POST",
+            _url(
+                config,
+                f"/hub/services/{service_id}/preview-token/revoke",
+                base_path=base_path,
+            ),
+            config,
+        )
+        if json_output:
+            _json(data)
+            return
+        typer.echo(f"revoked: {data.get('revoked', 0)}")
 
     @services_app.command("health")
     def health(

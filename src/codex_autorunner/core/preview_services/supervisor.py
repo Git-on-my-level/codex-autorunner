@@ -554,6 +554,20 @@ class PreviewServiceSupervisor:
         changes: dict[str, Any],
     ) -> PreviewServiceRecord:
         with self.service_lock(service_id):
+            current = self._registry.require(service_id)
+            unsafe_running_keys = {
+                "command",
+                "port_policy",
+                "health_check",
+                "network_policy",
+            }
+            if _is_running_managed(current) and unsafe_running_keys.intersection(
+                changes
+            ):
+                raise PreviewServiceSupervisorError(
+                    "Cannot edit managed service runtime config while it is running; "
+                    "stop it before changing command, port, health, or network policy."
+                )
             updated = self._registry.update(service_id, changes)
             self._append_event(service_id, "updated", status=updated.status)
             return updated
@@ -819,8 +833,7 @@ class PreviewServiceSupervisor:
         if status == "exited":
             self.reconcile_service(record.service_id, lock=False)
             raise PreviewServiceSupervisorError(
-                f"Preview service {record.service_id} already exited; "
-                f"cannot {action}"
+                f"Preview service {record.service_id} already exited; cannot {action}"
             )
         orphaned = self._registry.update(
             record.service_id,

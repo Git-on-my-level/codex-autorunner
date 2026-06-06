@@ -190,7 +190,25 @@ export type PreviewServiceDestructiveRequest = {
 export type PreviewServiceLogs = {
   serviceId: string;
   tail: number;
+  stderr?: boolean;
+  since?: string | null;
   text: string;
+  exitCode?: number | null;
+  startedAt?: string | null;
+  exitedAt?: string | null;
+  lastExitReason?: string | null;
+  events?: JsonRecord[];
+};
+
+export type PreviewServiceLink = {
+  serviceId: string;
+  previewUrl: string;
+  expiresAt: number | null;
+};
+
+export type PreviewServiceRevokeLinkResult = {
+  serviceId: string;
+  revoked: number;
 };
 
 export type AutomationScheduleSummary = {
@@ -804,6 +822,55 @@ export class WebApiClient {
       mapResult(await this.getJson<JsonRecord>(`/hub/services/${encodeURIComponent(serviceId)}`), (payload) =>
         mapPreviewServiceReadModel(asRecord(payload.read_model ?? payload.service ?? payload))
       ),
+    registerStaticService: async (request: JsonRecord): Promise<ApiResult<PreviewServiceReadModel>> =>
+      mapResult(
+        await this.requestJson<JsonRecord>('/hub/services/static', {
+          method: 'POST',
+          body: request
+        }),
+        (payload) => mapPreviewServiceReadModel(asRecord(payload.read_model ?? payload.service ?? payload))
+      ),
+    registerLoopbackService: async (request: JsonRecord): Promise<ApiResult<PreviewServiceReadModel>> =>
+      mapResult(
+        await this.requestJson<JsonRecord>('/hub/services/loopback-url', {
+          method: 'POST',
+          body: request
+        }),
+        (payload) => mapPreviewServiceReadModel(asRecord(payload.read_model ?? payload.service ?? payload))
+      ),
+    registerManagedService: async (request: JsonRecord): Promise<ApiResult<PreviewServiceReadModel>> =>
+      mapResult(
+        await this.requestJson<JsonRecord>('/hub/services/managed', {
+          method: 'POST',
+          body: request
+        }),
+        (payload) => mapPreviewServiceReadModel(asRecord(payload.read_model ?? payload.service ?? payload))
+      ),
+    updateService: async (serviceId: string, request: JsonRecord): Promise<ApiResult<PreviewServiceReadModel>> =>
+      mapResult(
+        await this.requestJson<JsonRecord>(`/hub/services/${encodeURIComponent(serviceId)}`, {
+          method: 'PATCH',
+          body: request
+        }),
+        (payload) => mapPreviewServiceReadModel(asRecord(payload.read_model ?? payload.service ?? payload))
+      ),
+    issueServiceLink: async (serviceId: string, ttlSeconds = 86400): Promise<ApiResult<PreviewServiceLink>> =>
+      mapResult(
+        await this.requestJson<JsonRecord>(`/hub/services/${encodeURIComponent(serviceId)}/preview-token?ttl=${encodeURIComponent(String(ttlSeconds))}`, {
+          method: 'POST'
+        }),
+        mapPreviewServiceLink
+      ),
+    revokeServiceLinks: async (serviceId: string): Promise<ApiResult<PreviewServiceRevokeLinkResult>> =>
+      mapResult(
+        await this.requestJson<JsonRecord>(`/hub/services/${encodeURIComponent(serviceId)}/preview-token/revoke`, {
+          method: 'POST'
+        }),
+        (payload) => ({
+          serviceId: stringValue(payload.service_id ?? payload.serviceId, ''),
+          revoked: numberValue(payload.revoked, 0)
+        })
+      ),
     serviceAction: async (
       serviceId: string,
       action: PreviewServiceAction,
@@ -1298,7 +1365,22 @@ function mapPreviewServiceLogs(raw: JsonRecord): PreviewServiceLogs {
   return {
     serviceId: stringValue(raw.service_id ?? raw.serviceId, ''),
     tail: numberValue(raw.tail, 0),
-    text: stringValue(raw.text, '')
+    stderr: raw.stderr === true,
+    since: nullableString(raw.since),
+    text: stringValue(raw.text, ''),
+    exitCode: nullableNumber(raw.exit_code ?? raw.exitCode),
+    startedAt: nullableString(raw.started_at ?? raw.startedAt),
+    exitedAt: nullableString(raw.exited_at ?? raw.exitedAt),
+    lastExitReason: nullableString(raw.last_exit_reason ?? raw.lastExitReason),
+    events: asArray(raw.events).map(asRecord)
+  };
+}
+
+function mapPreviewServiceLink(raw: JsonRecord): PreviewServiceLink {
+  return {
+    serviceId: stringValue(raw.service_id ?? raw.serviceId, ''),
+    previewUrl: stringValue(raw.preview_url ?? raw.previewUrl, ''),
+    expiresAt: nullableNumber(raw.expires_at ?? raw.expiresAt)
   };
 }
 
