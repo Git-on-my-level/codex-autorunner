@@ -141,6 +141,24 @@ class TestResolveConfigPath:
         path = resolve_config_path(str(absolute_path), repo_root, allow_absolute=True)
         assert path.resolve() == absolute_path.resolve()
 
+    def test_can_preserve_final_symlink_for_policy_checks(self, tmp_path):
+        """Parent paths resolve while the final symlink remains inspectable."""
+        repo_root = Path(tmp_path)
+        target = repo_root / "target.html"
+        target.write_text("ok", encoding="utf-8")
+        link = repo_root / "linked.html"
+        link.symlink_to(target)
+
+        path = resolve_config_path(
+            "linked.html",
+            repo_root,
+            follow_final_symlink=False,
+        )
+
+        assert path == link
+        assert path.is_symlink()
+        assert path.resolve() == target
+
     def test_scope_in_error_message(self, tmp_path):
         """Scope is included in error message."""
         repo_root = Path(tmp_path)

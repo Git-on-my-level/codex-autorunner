@@ -766,9 +766,14 @@ def _static_registration_path(
     payload: RegisterStaticServiceRequest,
 ) -> Path:
     if payload.source is None:
-        _reject_static_registration_symlink_target(payload.path)
-        raw_path = _absolute_static_path_from_text(context, payload.path)
-        _require_path_under_allowed_static_roots(context, raw_path)
+        raw_path = _static_path_from_text(
+            context,
+            payload.path,
+            follow_final_symlink=False,
+        )
+        _reject_static_registration_symlink_target(raw_path)
+        resolved_path = raw_path.resolve()
+        _require_path_under_allowed_static_roots(context, resolved_path)
         return raw_path
     source = payload.source
     if source.type != "workspace":
@@ -780,18 +785,24 @@ def _static_registration_path(
     return root / relative
 
 
-def _reject_static_registration_symlink_target(value: str) -> None:
-    raw_value = value.strip()
-    if not raw_value or not _looks_absolute_or_home_path(raw_value):
-        return
+def _reject_static_registration_symlink_target(path: Path) -> None:
     try:
-        if Path(raw_value).expanduser().is_symlink():
+        if path.is_symlink():
             raise ValueError("static path must not be a symlink")
     except OSError as exc:
         raise ValueError("static path cannot be inspected") from exc
 
 
 def _absolute_static_path_from_text(context: HubAppContext, value: str) -> Path:
+    return _static_path_from_text(context, value, follow_final_symlink=True)
+
+
+def _static_path_from_text(
+    context: HubAppContext,
+    value: str,
+    *,
+    follow_final_symlink: bool,
+) -> Path:
     raw_value = value.strip()
     if not raw_value:
         raise ValueError("static path must be non-empty")
@@ -807,6 +818,7 @@ def _absolute_static_path_from_text(context: HubAppContext, value: str) -> Path:
             context.config.root,
             allow_absolute=True,
             allow_home=True,
+            follow_final_symlink=follow_final_symlink,
             scope="preview_services.static.path",
         )
     except ConfigPathError as exc:

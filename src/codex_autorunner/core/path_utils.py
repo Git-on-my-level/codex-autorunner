@@ -38,6 +38,7 @@ def resolve_config_path(
     allow_absolute: bool = False,
     allow_home: bool = False,
     allow_dotdot: bool = False,
+    follow_final_symlink: bool = True,
     scope: Optional[str] = None,
 ) -> Path:
     """
@@ -81,7 +82,7 @@ def resolve_config_path(
 
     if path.is_absolute():
         if allow_absolute:
-            return path.resolve()
+            return path.resolve() if follow_final_symlink else path
         raise ConfigPathError(
             "Absolute paths are not allowed",
             path=value_str,
@@ -101,8 +102,8 @@ def resolve_config_path(
                 path=value_str,
                 scope=scope,
             )
-        resolved = path.expanduser().resolve()
-        return resolved
+        expanded = path.expanduser()
+        return expanded.resolve() if follow_final_symlink else expanded
 
     if not allow_dotdot and ".." in path.parts:
         raise ConfigPathError(
@@ -111,7 +112,11 @@ def resolve_config_path(
             scope=scope,
         )
 
-    resolved = (repo_root / path).resolve()
+    candidate = repo_root / path
+    if follow_final_symlink:
+        resolved = candidate.resolve()
+    else:
+        resolved = candidate.parent.resolve() / candidate.name
 
     if not resolved.is_relative_to(repo_root):
         raise ConfigPathError(
