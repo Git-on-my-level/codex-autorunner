@@ -642,10 +642,17 @@ def register_services_commands(
         health_data = data.get("health")
         result = health_data if isinstance(health_data, dict) else {}
         service = _service(data)
-        typer.echo(
-            f"{service.get('service_id', service_id)} {service.get('status', '')} "
-            f"ok={result.get('ok')} error={result.get('error', '')}".strip()
-        )
+        fields = [
+            str(service.get("service_id", service_id)),
+            str(service.get("status", "")),
+            f"ok={result.get('ok')}",
+            f"type={result.get('type')}",
+        ]
+        if result.get("status_code") is not None:
+            fields.append(f"status_code={result.get('status_code')}")
+        if result.get("error"):
+            fields.append(f"error={result.get('error')}")
+        typer.echo(" ".join(field for field in fields if field).strip())
 
     @services_app.command("set-autostart")
     def set_autostart(

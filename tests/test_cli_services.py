@@ -248,6 +248,35 @@ def test_services_kill_sends_force_payload(tmp_path: Path, monkeypatch) -> None:
     }
 
 
+def test_services_health_prints_hub_health_schema(tmp_path: Path, monkeypatch) -> None:
+    hub_root = _hub_root(tmp_path)
+
+    def _fake_request(method, url, json=None, timeout=None, headers=None, follow_redirects=True):  # type: ignore[no-untyped-def]
+        return _mock_response(
+            {
+                "service": {
+                    "service_id": "svc_abc123",
+                    "name": "Dev",
+                    "kind": "managed_command",
+                    "status": "healthy",
+                },
+                "health": {"ok": True, "type": "http", "status_code": 200},
+            }
+        )
+
+    monkeypatch.setattr("httpx.request", _fake_request)
+
+    result = runner.invoke(
+        app,
+        ["services", "health", "svc_abc123", "--path", str(hub_root)],
+    )
+
+    assert result.exit_code == 0
+    assert (
+        result.output.strip() == "svc_abc123 healthy ok=True type=http status_code=200"
+    )
+
+
 def test_services_list_and_get_against_test_hub_app(
     tmp_path: Path, monkeypatch
 ) -> None:

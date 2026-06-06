@@ -6,9 +6,11 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 from websockets.sync.server import Server, ServerConnection, serve
@@ -19,6 +21,19 @@ from codex_autorunner.core.managed_processes.registry import read_process_record
 from codex_autorunner.core.preview_services import PROCESS_KIND, PreviewServiceRegistry
 from codex_autorunner.core.process_termination import terminate_record
 from codex_autorunner.server import create_hub_app
+from codex_autorunner.surfaces.web.routes import services as services_routes
+
+
+def test_preview_services_disabled_config_does_not_mount_routes(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    _update_hub_config(hub_root, {"preview_services": {"enabled": False}})
+
+    client = TestClient(create_hub_app(hub_root))
+
+    assert client.get("/hub/services").status_code == 404
+    assert client.get("/hub/read-models/services").status_code == 404
+    assert client.get("/preview/services/svc_missing000/").status_code == 404
 
 
 def test_preview_services_static_crud_and_read_model(tmp_path: Path) -> None:
@@ -209,6 +224,24 @@ def test_preview_static_workspace_scope_does_not_expand_allowed_roots(
     assert opened.status_code == 403
 
 
+def test_preview_static_allowed_roots_resolve_relative_to_hub_root(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    context = SimpleNamespace(
+        config=SimpleNamespace(
+            root=hub_root,
+            raw={"preview_services": {"static_allowed_roots": ["allowed-static"]}},
+        ),
+        supervisor=SimpleNamespace(list_repos=lambda use_cache=True: []),
+    )
+
+    assert (hub_root / "allowed-static").resolve() in (
+        services_routes._allowed_static_roots(context, SimpleNamespace())
+    )
+
+
 def test_preview_loopback_http_service_proxies_method_path_query_and_body(
     tmp_path: Path,
 ) -> None:
@@ -327,6 +360,19 @@ def test_preview_loopback_websocket_same_origin_hmr_path_connects(
             assert websocket.receive_text() == "echo:vite-hmr"
     finally:
         upstream.shutdown()
+
+
+def test_preview_websocket_connect_kwargs_omit_unsupported_proxy_arg(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_connect(uri: str, *, additional_headers=None):  # type: ignore[no-untyped-def]
+        raise AssertionError("signature probe only")
+
+    monkeypatch.setattr(services_routes.websockets, "connect", fake_connect)
+
+    kwargs = services_routes._websocket_connect_kwargs({"x-test": "kept"})
+
+    assert kwargs == {"additional_headers": {"x-test": "kept"}}
 
 
 def test_preview_websocket_rejects_unregistered_and_non_loopback_targets(
@@ -689,6 +735,22 @@ def _find_available_port(start: int = 42000) -> int:
                 continue
             return port
     raise RuntimeError("no available test port")
+
+
+def _update_hub_config(hub_root: Path, updates: dict[str, Any]) -> None:
+    config_path = hub_root / ".codex-autorunner" / "config.yml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    _deep_update(config, updates)
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+
+def _deep_update(target: dict[str, Any], updates: dict[str, Any]) -> None:
+    for key, value in updates.items():
+        existing = target.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            _deep_update(existing, value)
+            continue
+        target[key] = value
 
 
 def _wait_for_process(pid: int, *, timeout: float = 5.0) -> bool:

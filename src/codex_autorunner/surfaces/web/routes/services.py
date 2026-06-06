@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Iterable, Optional
@@ -669,6 +670,13 @@ def _allowed_static_roots(
     return resolved
 
 
+def _configured_static_root(context: HubAppContext, value: object) -> Path:
+    path = Path(str(value)).expanduser()
+    if not path.is_absolute():
+        path = context.config.root / path
+    return path
+
+
 def _path_is_under_any(path: Path, roots: Iterable[Path]) -> bool:
     for root in roots:
         try:
@@ -779,12 +787,9 @@ async def _proxy_websocket(
         websocket.url.query,
     )
     headers = _proxy_websocket_request_headers(websocket.headers.items())
+    connect_kwargs = _websocket_connect_kwargs(headers)
     try:
-        async with websockets.connect(
-            target_url,
-            additional_headers=headers or None,
-            proxy=None,
-        ) as upstream:
+        async with websockets.connect(target_url, **connect_kwargs) as upstream:
             await websocket.accept()
             await _relay_websocket_messages(websocket, upstream)
     except (OSError, WebSocketException):
@@ -792,6 +797,13 @@ async def _proxy_websocket(
         if websocket.application_state != WebSocketState.DISCONNECTED:
             await websocket.close(code=1011, reason=reason)
         return
+
+
+def _websocket_connect_kwargs(headers: dict[str, str]) -> dict[str, Any]:
+    connect_kwargs: dict[str, Any] = {"additional_headers": headers or None}
+    if "proxy" in inspect.signature(websockets.connect).parameters:
+        connect_kwargs["proxy"] = None
+    return connect_kwargs
 
 
 async def _relay_websocket_messages(websocket: WebSocket, upstream: Any) -> None:

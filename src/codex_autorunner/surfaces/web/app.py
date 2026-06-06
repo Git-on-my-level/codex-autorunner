@@ -129,7 +129,8 @@ def create_hub_app(
     app.include_router(build_hub_state_routes(context))
     app.include_router(build_chat_surface_event_routes(context))
     app.include_router(build_hub_chat_read_model_router(context))
-    app.include_router(build_services_routes(context))
+    if _preview_services_enabled(context):
+        app.include_router(build_services_routes(context))
 
     app.state.hub_started = False
     app.state.hub_deferred_startup_complete = False
@@ -369,3 +370,14 @@ def create_hub_app(
     asgi_app = SecurityHeadersMiddleware(asgi_app)
 
     return asgi_app
+
+
+def _preview_services_enabled(context: object) -> bool:
+    config = getattr(context, "config", None)
+    raw_config = getattr(config, "raw", {})
+    if not isinstance(raw_config, dict):
+        return True
+    preview_config = raw_config.get("preview_services")
+    if not isinstance(preview_config, dict):
+        return True
+    return preview_config.get("enabled", True) is not False
