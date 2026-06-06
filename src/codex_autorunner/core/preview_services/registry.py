@@ -19,6 +19,15 @@ from .models import (
 _STATE_DIR = ".codex-autorunner"
 _SERVICES_DIR = "services"
 _RECORDS_DIR = "records"
+NEEDS_ATTENTION_STATUSES = frozenset(
+    {
+        PreviewServiceStatus.UNHEALTHY.value,
+        PreviewServiceStatus.FAILED.value,
+        PreviewServiceStatus.EXITED.value,
+        PreviewServiceStatus.ORPHANED.value,
+        PreviewServiceStatus.CONFLICT.value,
+    }
+)
 
 
 class PreviewServiceRegistryError(ValueError):
@@ -309,20 +318,13 @@ def services_read_model(records: list[PreviewServiceRecord]) -> dict[str, Any]:
 
 
 def _service_counts(records: list[dict[str, Any]]) -> dict[str, int]:
-    attention_statuses = {
-        PreviewServiceStatus.UNHEALTHY.value,
-        PreviewServiceStatus.FAILED.value,
-        PreviewServiceStatus.EXITED.value,
-        PreviewServiceStatus.ORPHANED.value,
-        PreviewServiceStatus.CONFLICT.value,
-    }
     return {
         "total": len(records),
         "running": sum(
             1 for record in records if record["status"] in _running_statuses()
         ),
         "attention": sum(
-            1 for record in records if record["status"] in attention_statuses
+            1 for record in records if record["status"] in NEEDS_ATTENTION_STATUSES
         ),
         "managed": sum(
             1

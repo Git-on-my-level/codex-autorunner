@@ -46,6 +46,7 @@ from .port_allocator import (
     reserve_preview_port,
 )
 from .registry import (
+    NEEDS_ATTENTION_STATUSES,
     PreviewServiceNotFoundError,
     PreviewServiceRegistry,
     PreviewServiceRegistryEntry,
@@ -55,6 +56,7 @@ from .registry import (
     services_read_model,
 )
 from .supervisor import (
+    DEFAULT_STARTUP_HEALTH_TIMEOUT_SECONDS,
     PROCESS_KIND,
     PreviewServiceSupervisor,
     PreviewServiceSupervisorError,
@@ -67,8 +69,10 @@ __all__ = [
     "DEFAULT_LOG_MAX_BYTES",
     "DEFAULT_LOG_TAIL_LINES",
     "DEFAULT_PREVIEW_HOST",
+    "DEFAULT_STARTUP_HEALTH_TIMEOUT_SECONDS",
     "HealthCheck",
     "NetworkPolicy",
+    "NEEDS_ATTENTION_STATUSES",
     "PROCESS_KIND",
     "PortPolicy",
     "PreviewServiceHealthError",

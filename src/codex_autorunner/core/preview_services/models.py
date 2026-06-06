@@ -183,12 +183,17 @@ class ProcessMetadata(StrictModel):
     pgid: int | None = Field(default=None, ge=1)
     started_at: str | None = None
     exit_code: int | None = None
+    exited_at: str | None = None
+    last_exit_reason: str | None = None
+    command_fingerprint: str | None = None
+    cwd: str | None = None
+    owner_pid: int | None = Field(default=None, ge=1)
 
-    @field_validator("started_at")
+    @field_validator("started_at", "exited_at")
     @classmethod
     def _validate_started_at(cls, value: str | None) -> str | None:
         if value is not None:
-            parse_iso_timestamp(value, "process.started_at")
+            parse_iso_timestamp(value, "process timestamp")
         return value
 
 

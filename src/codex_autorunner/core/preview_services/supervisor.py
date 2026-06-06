@@ -1,21 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import os
 import subprocess
 import threading
 import time
 from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Iterator, Literal, cast
 from urllib.parse import urlparse
 
 from ..force_attestation import enforce_force_attestation
-from ..locks import process_is_active
+from ..locks import file_lock, process_command_matches, process_is_active
 from ..managed_processes.registry import (
     ProcessRecord,
     delete_process_record,
+    read_process_record,
     write_process_record,
 )
 from ..process_termination import terminate_record
@@ -52,8 +56,13 @@ logger = logging.getLogger("codex_autorunner.preview_services.supervisor")
 PROCESS_KIND = "preview_service"
 DEFAULT_STOP_GRACE_SECONDS = 1.0
 DEFAULT_KILL_SECONDS = 0.2
-DEFAULT_STARTUP_HEALTH_TIMEOUT_SECONDS = 2.0
+DEFAULT_STARTUP_HEALTH_TIMEOUT_SECONDS = 30.0
 DEFAULT_STARTUP_HEALTH_INTERVAL_SECONDS = 0.05
+DEFAULT_EVENT_HISTORY_LIMIT = 200
+_STATE_DIR = ".codex-autorunner"
+_SERVICES_DIR = "services"
+_LOCKS_DIR = "locks"
+_EVENTS_DIR = "events"
 
 
 class PreviewServiceSupervisorError(ValueError):
@@ -69,11 +78,16 @@ class PreviewServiceSupervisor:
         host: str = "127.0.0.1",
         port_range: tuple[int, int] = (39000, 39999),
         log_max_bytes: int = DEFAULT_LOG_MAX_BYTES,
+        startup_health_timeout_seconds: float = DEFAULT_STARTUP_HEALTH_TIMEOUT_SECONDS,
+        event_history_limit: int = DEFAULT_EVENT_HISTORY_LIMIT,
     ) -> None:
         self._hub_root = hub_root.resolve()
         self._durable = durable
         self._host = host
         self._log_max_bytes = log_max_bytes
+        self._startup_health_timeout_seconds = startup_health_timeout_seconds
+        self._event_history_limit = event_history_limit
+        self._processes: dict[str, subprocess.Popen[bytes]] = {}
         self._registry = PreviewServiceRegistry(self._hub_root, durable=durable)
         self._allocator = PreviewPortAllocator(
             self._hub_root,
@@ -85,6 +99,45 @@ class PreviewServiceSupervisor:
     @property
     def registry(self) -> PreviewServiceRegistry:
         return self._registry
+
+    def service_lock_path(self, service_id: str) -> Path:
+        return (
+            self._hub_root
+            / _STATE_DIR
+            / _SERVICES_DIR
+            / _LOCKS_DIR
+            / f"{service_id}.lock"
+        )
+
+    def events_path(self, service_id: str) -> Path:
+        return (
+            self._hub_root
+            / _STATE_DIR
+            / _SERVICES_DIR
+            / _EVENTS_DIR
+            / f"{service_id}.jsonl"
+        )
+
+    @contextmanager
+    def service_lock(self, service_id: str) -> Iterator[None]:
+        with file_lock(self.service_lock_path(service_id)):
+            yield
+
+    def events(self, service_id: str) -> list[dict[str, Any]]:
+        path = self.events_path(service_id)
+        if not path.exists():
+            return []
+        events: list[dict[str, Any]] = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                events.append(payload)
+        return events
 
     def register_static(
         self,
@@ -117,7 +170,7 @@ class PreviewServiceSupervisor:
             raise PreviewServiceSupervisorError("static_file path must be a file")
         if parsed_kind == PreviewServiceKind.STATIC_DIR and not resolved.is_dir():
             raise PreviewServiceSupervisorError("static_dir path must be a directory")
-        return self._registry.create_from_parts(
+        record = self._registry.create_from_parts(
             name=name or resolved.name or "Static preview",
             kind=parsed_kind,
             created_by=created_by,
@@ -133,6 +186,8 @@ class PreviewServiceSupervisor:
             ),
             restart_policy=RestartPolicy().model_dump(mode="json"),
         )
+        self._append_event(record.service_id, "created", status=record.status)
+        return record
 
     def register_loopback_url(
         self,
@@ -153,7 +208,7 @@ class PreviewServiceSupervisor:
             if health_path
             else HealthCheck(type=HealthCheckType.TCP, path=None)
         )
-        return self._registry.create_from_parts(
+        record = self._registry.create_from_parts(
             name=name or url,
             kind=PreviewServiceKind.LOOPBACK_URL,
             created_by=created_by,
@@ -168,6 +223,8 @@ class PreviewServiceSupervisor:
             health_check=health_check.model_dump(mode="json", exclude_none=True),
             restart_policy=RestartPolicy().model_dump(mode="json"),
         )
+        self._append_event(record.service_id, "created", status=record.status)
+        return record
 
     def register_managed_command(
         self,
@@ -193,7 +250,7 @@ class PreviewServiceSupervisor:
         )
         policy = _port_policy(port_policy)
         check = _health_check(health_check)
-        return self._registry.create_from_parts(
+        record = self._registry.create_from_parts(
             name=name,
             kind=PreviewServiceKind.MANAGED_COMMAND,
             status=PreviewServiceStatus.STOPPED,
@@ -212,6 +269,8 @@ class PreviewServiceSupervisor:
                 auto_start_on_hub_start=auto_start_on_hub_start
             ).model_dump(mode="json"),
         )
+        self._append_event(record.service_id, "created", status=record.status)
+        return record
 
     def start_managed_command(
         self,
@@ -248,6 +307,11 @@ class PreviewServiceSupervisor:
         return self.start(record.service_id)
 
     def start(self, service_id: str) -> PreviewServiceRecord:
+        with self.service_lock(service_id):
+            return self._start_locked(service_id)
+
+    def _start_locked(self, service_id: str) -> PreviewServiceRecord:
+        self.reconcile_service(service_id, lock=False)
         record = self._registry.require(service_id)
         if record.kind != PreviewServiceKind.MANAGED_COMMAND.value:
             raise PreviewServiceSupervisorError("Only managed services can be started")
@@ -257,6 +321,7 @@ class PreviewServiceSupervisor:
             raise PreviewServiceSupervisorError("Managed service has no command")
 
         self._registry.update(service_id, {"status": PreviewServiceStatus.STARTING})
+        self._append_event(service_id, "starting", status=PreviewServiceStatus.STARTING)
         process: subprocess.Popen[bytes] | None = None
         pgid: int | None = None
         try:
@@ -292,6 +357,7 @@ class PreviewServiceSupervisor:
                 stderr=subprocess.STDOUT,
                 start_new_session=(os.name != "nt"),
             )
+            self._processes[service_id] = process
             _start_log_pump(
                 process,
                 log_path,
@@ -307,6 +373,8 @@ class PreviewServiceSupervisor:
                     pid=process.pid,
                     pgid=pgid,
                     started_at=started_at,
+                    argv=argv,
+                    cwd=command.cwd,
                     status=PreviewServiceStatus.RUNNING,
                 ),
             )
@@ -322,9 +390,20 @@ class PreviewServiceSupervisor:
                     command=argv,
                     owner_pid=os.getpid(),
                     started_at=started_at,
-                    metadata={"service_id": service_id},
+                    metadata={
+                        "service_id": service_id,
+                        "command_fingerprint": _command_fingerprint(argv, command.cwd),
+                    },
                 ),
                 durable=self._durable,
+            )
+            self._append_event(
+                service_id,
+                "started",
+                status=PreviewServiceStatus.RUNNING,
+                pid=process.pid,
+                pgid=pgid,
+                port=allocation.port,
             )
             return self._verify_startup_health(updated)
         except Exception as exc:
@@ -338,9 +417,16 @@ class PreviewServiceSupervisor:
                     event_prefix="preview_services.start_failed_cleanup",
                 )
                 delete_process_record(self._hub_root, PROCESS_KIND, service_id)
-            self._registry.update(
+                self._processes.pop(service_id, None)
+            failed = self._registry.update(
                 service_id,
                 lambda latest: _record_failed_without_allocation(latest),
+            )
+            self._append_event(
+                service_id,
+                "start_failed",
+                status=failed.status,
+                reason=str(exc),
             )
             raise PreviewServiceSupervisorError(
                 f"Failed to start preview service {service_id}: {exc}"
@@ -352,11 +438,22 @@ class PreviewServiceSupervisor:
         *,
         grace_seconds: float = DEFAULT_STOP_GRACE_SECONDS,
     ) -> PreviewServiceRecord:
+        with self.service_lock(service_id):
+            return self._stop_locked(service_id, grace_seconds=grace_seconds)
+
+    def _stop_locked(
+        self,
+        service_id: str,
+        *,
+        grace_seconds: float = DEFAULT_STOP_GRACE_SECONDS,
+    ) -> PreviewServiceRecord:
+        self.reconcile_service(service_id, lock=False)
         record = self._registry.require(service_id)
         if record.kind != PreviewServiceKind.MANAGED_COMMAND.value:
             raise PreviewServiceSupervisorError("Only managed services can be stopped")
         process = record.process
         if process is not None:
+            self._verify_process_identity_or_orphan(record, action="stop")
             terminate_record(
                 process.pid,
                 process.pgid,
@@ -366,14 +463,18 @@ class PreviewServiceSupervisor:
                 event_prefix="preview_services.stop",
             )
         delete_process_record(self._hub_root, PROCESS_KIND, service_id)
-        return self._registry.update(
+        self._processes.pop(service_id, None)
+        stopped = self._registry.update(
             service_id,
             lambda latest: _record_stopped(latest, PreviewServiceStatus.STOPPED),
         )
+        self._append_event(service_id, "stopped", status=stopped.status)
+        return stopped
 
     def restart(self, service_id: str) -> PreviewServiceRecord:
-        self.stop(service_id)
-        return self.start(service_id)
+        with self.service_lock(service_id):
+            self._stop_locked(service_id)
+            return self._start_locked(service_id)
 
     def kill(
         self,
@@ -390,9 +491,20 @@ class PreviewServiceSupervisor:
             logger=logger,
             action="hub.preview_services.kill",
         )
+        with self.service_lock(service_id):
+            return self._kill_locked(
+                service_id,
+            )
+
+    def _kill_locked(
+        self,
+        service_id: str,
+    ) -> PreviewServiceRecord:
+        self.reconcile_service(service_id, lock=False)
         record = self._registry.require(service_id)
         process = record.process
         if process is not None:
+            self._verify_process_identity_or_orphan(record, action="kill")
             terminate_record(
                 process.pid,
                 process.pgid,
@@ -402,21 +514,175 @@ class PreviewServiceSupervisor:
                 event_prefix="preview_services.kill",
             )
         delete_process_record(self._hub_root, PROCESS_KIND, service_id)
-        return self._registry.update(
+        self._processes.pop(service_id, None)
+        killed = self._registry.update(
             service_id,
             lambda latest: _record_stopped(latest, PreviewServiceStatus.STOPPED),
         )
+        self._append_event(service_id, "killed", status=killed.status)
+        return killed
 
     def check_health(self, service_id: str) -> PreviewServiceHealthResult:
+        with self.service_lock(service_id):
+            self.reconcile_service(service_id, lock=False)
+            record = self._registry.require(service_id)
+            result = check_service_health(record)
+            status = (
+                PreviewServiceStatus.HEALTHY
+                if result.ok
+                else PreviewServiceStatus.UNHEALTHY
+            )
+            updated = self._registry.update(service_id, {"status": status})
+            self._append_event(
+                service_id,
+                "healthy" if result.ok else "health_failed",
+                status=updated.status,
+                detail=_health_result_detail(result),
+            )
+            return result
+
+    def update_service(
+        self,
+        service_id: str,
+        changes: dict[str, Any],
+    ) -> PreviewServiceRecord:
+        with self.service_lock(service_id):
+            updated = self._registry.update(service_id, changes)
+            self._append_event(service_id, "updated", status=updated.status)
+            return updated
+
+    def teardown(
+        self,
+        service_id: str,
+        *,
+        force: bool = False,
+        force_attestation: Mapping[str, object] | None = None,
+    ) -> PreviewServiceRecord:
+        with self.service_lock(service_id):
+            record = self._registry.require(service_id)
+            if _is_running_managed(record):
+                if force:
+                    enforce_force_attestation(
+                        force=True,
+                        force_attestation=force_attestation,
+                        logger=logger,
+                        action="hub.preview_services.teardown",
+                    )
+                    record = self._kill_locked(
+                        service_id,
+                    )
+                else:
+                    record = self._stop_locked(service_id)
+            deleted = self._registry.delete(service_id)
+            if not deleted:
+                raise PreviewServiceSupervisorError(
+                    f"Preview service not found: {service_id}"
+                )
+            self._append_event(service_id, "teardown", status=record.status)
+            return record
+
+    def unlink(
+        self,
+        service_id: str,
+        *,
+        force: bool = False,
+        force_attestation: Mapping[str, object] | None = None,
+    ) -> PreviewServiceRecord:
+        with self.service_lock(service_id):
+            self.reconcile_service(service_id, lock=False)
+            record = self._registry.require(service_id)
+            if _is_running_managed(record) and not force:
+                raise PreviewServiceSupervisorError(
+                    "Cannot unlink a running managed preview service without force; "
+                    "use teardown to stop it first."
+                )
+            if _is_running_managed(record):
+                enforce_force_attestation(
+                    force=True,
+                    force_attestation=force_attestation,
+                    logger=logger,
+                    action="hub.preview_services.unlink_running",
+                )
+                process = record.process
+                logger.warning(
+                    "preview_services.unlink_running_orphans_process",
+                    extra={
+                        "service_id": service_id,
+                        "pid": process.pid if process is not None else None,
+                        "pgid": process.pgid if process is not None else None,
+                    },
+                )
+                self._append_event(
+                    service_id,
+                    "orphaned",
+                    status=PreviewServiceStatus.ORPHANED,
+                    reason="forced unlink left process unmanaged",
+                )
+            deleted = self._registry.delete(service_id)
+            if not deleted:
+                raise PreviewServiceSupervisorError(
+                    f"Preview service not found: {service_id}"
+                )
+            self._append_event(service_id, "unlinked", status=record.status)
+            return record
+
+    def reconcile(self) -> list[PreviewServiceRecord]:
+        records = self._registry.list()
+        reconciled: list[PreviewServiceRecord] = []
+        for record in records:
+            reconciled.append(self.reconcile_service(record.service_id))
+        return reconciled
+
+    def reconcile_service(
+        self,
+        service_id: str,
+        *,
+        lock: bool = True,
+    ) -> PreviewServiceRecord:
+        if lock:
+            with self.service_lock(service_id):
+                return self.reconcile_service(service_id, lock=False)
         record = self._registry.require(service_id)
-        result = check_service_health(record)
-        status = (
-            PreviewServiceStatus.HEALTHY
-            if result.ok
-            else PreviewServiceStatus.UNHEALTHY
-        )
-        self._registry.update(service_id, {"status": status})
-        return result
+        if record.kind != PreviewServiceKind.MANAGED_COMMAND.value:
+            return record
+        if record.process is None:
+            return record
+        identity = _process_identity_status(self._hub_root, record)
+        if identity == "mismatch":
+            orphaned = self._registry.update(
+                service_id,
+                lambda latest: _record_orphaned(
+                    latest,
+                    reason="process identity could not be verified",
+                ),
+            )
+            self._append_event(
+                service_id,
+                "orphaned",
+                status=orphaned.status,
+                reason="process identity could not be verified",
+            )
+            return orphaned
+        if identity == "exited":
+            process_handle = self._processes.pop(service_id, None)
+            exit_code = _collect_exit_code(record.process.pid, process_handle)
+            delete_process_record(self._hub_root, PROCESS_KIND, service_id)
+            exited = self._registry.update(
+                service_id,
+                lambda latest: _record_exited(
+                    latest,
+                    exit_code=exit_code,
+                    reason="process exited",
+                ),
+            )
+            self._append_event(
+                service_id,
+                "exited",
+                status=exited.status,
+                exit_code=exit_code,
+            )
+            return exited
+        return record
 
     def _verify_startup_health(
         self,
@@ -425,15 +691,27 @@ class PreviewServiceSupervisor:
         timeout_seconds: float = DEFAULT_STARTUP_HEALTH_TIMEOUT_SECONDS,
         interval_seconds: float = DEFAULT_STARTUP_HEALTH_INTERVAL_SECONDS,
     ) -> PreviewServiceRecord:
-        deadline = time.monotonic() + timeout_seconds
+        effective_timeout = (
+            self._startup_health_timeout_seconds
+            if timeout_seconds == DEFAULT_STARTUP_HEALTH_TIMEOUT_SECONDS
+            else timeout_seconds
+        )
+        deadline = time.monotonic() + effective_timeout
         latest = record
         while True:
             result = check_service_health(latest)
             if result.ok:
-                return self._registry.update(
+                healthy = self._registry.update(
                     latest.service_id,
                     {"status": PreviewServiceStatus.HEALTHY},
                 )
+                self._append_event(
+                    latest.service_id,
+                    "healthy",
+                    status=healthy.status,
+                    detail=_health_result_detail(result),
+                )
+                return healthy
             process = latest.process
             if (
                 process is not None
@@ -441,18 +719,33 @@ class PreviewServiceSupervisor:
                 and not process_is_active(process.pid)
             ):
                 delete_process_record(self._hub_root, PROCESS_KIND, latest.service_id)
-                return self._registry.update(
+                self._processes.pop(latest.service_id, None)
+                failed = self._registry.update(
                     latest.service_id,
                     lambda current: _record_stopped(
                         current,
                         PreviewServiceStatus.FAILED,
                     ),
                 )
+                self._append_event(
+                    latest.service_id,
+                    "health_failed",
+                    status=failed.status,
+                    detail="process exited during startup health check",
+                )
+                return failed
             if time.monotonic() >= deadline:
-                return self._registry.update(
+                unhealthy = self._registry.update(
                     latest.service_id,
                     {"status": PreviewServiceStatus.UNHEALTHY},
                 )
+                self._append_event(
+                    latest.service_id,
+                    "health_failed",
+                    status=unhealthy.status,
+                    detail=_health_result_detail(result),
+                )
+                return unhealthy
             time.sleep(interval_seconds)
             latest = self._registry.require(latest.service_id)
 
@@ -480,6 +773,65 @@ class PreviewServiceSupervisor:
                     extra={"service_id": record.service_id},
                     exc_info=True,
                 )
+
+    def _append_event(
+        self,
+        service_id: str,
+        event_type: str,
+        **fields: Any,
+    ) -> None:
+        path = self.events_path(service_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        event = {
+            "type": event_type,
+            "service_id": service_id,
+            "at": utc_now_iso(),
+            **{
+                key: (value.value if hasattr(value, "value") else value)
+                for key, value in fields.items()
+                if value is not None
+            },
+        }
+        existing: list[str] = []
+        if path.exists():
+            existing = path.read_text(encoding="utf-8").splitlines()
+        existing.append(json.dumps(event, sort_keys=True))
+        if self._event_history_limit > 0:
+            existing = existing[-self._event_history_limit :]
+        path.write_text("\n".join(existing) + "\n", encoding="utf-8")
+
+    def _verify_process_identity_or_orphan(
+        self,
+        record: PreviewServiceRecord,
+        *,
+        action: str,
+    ) -> None:
+        status = _process_identity_status(self._hub_root, record)
+        if status == "match":
+            return
+        if status == "exited":
+            self.reconcile_service(record.service_id, lock=False)
+            raise PreviewServiceSupervisorError(
+                f"Preview service {record.service_id} already exited; "
+                f"cannot {action}"
+            )
+        orphaned = self._registry.update(
+            record.service_id,
+            lambda latest: _record_orphaned(
+                latest,
+                reason=f"process identity mismatch before {action}",
+            ),
+        )
+        self._append_event(
+            record.service_id,
+            "orphaned",
+            status=orphaned.status,
+            reason=f"process identity mismatch before {action}",
+        )
+        raise PreviewServiceSupervisorError(
+            f"Preview service {record.service_id} process identity could not be "
+            f"verified; refusing to {action} by stale PID"
+        )
 
 
 def _scope_links(
@@ -694,6 +1046,8 @@ def _record_with_process(
     pid: int,
     pgid: int | None,
     started_at: str,
+    argv: Sequence[str],
+    cwd: str,
     status: PreviewServiceStatus,
 ) -> PreviewServiceRecord:
     logs = ServiceLogs(
@@ -709,6 +1063,9 @@ def _record_with_process(
                 pgid=pgid,
                 started_at=started_at,
                 exit_code=None,
+                command_fingerprint=_command_fingerprint(argv, cwd),
+                cwd=cwd,
+                owner_pid=os.getpid(),
             ).model_dump(mode="json", exclude_none=True),
             "logs": logs.model_dump(mode="json", exclude_none=True),
         },
@@ -719,13 +1076,48 @@ def _record_stopped(
     record: PreviewServiceRecord,
     status: PreviewServiceStatus,
 ) -> PreviewServiceRecord:
-    return _record_from_payload(
-        record,
-        {
-            "status": status,
-            "process": None,
-        },
-    )
+    payload = record.to_dict()
+    payload["status"] = status.value if hasattr(status, "value") else status
+    payload["process"] = None
+    if payload.get("port_policy"):
+        payload["port_policy"].pop("allocated_port", None)
+    payload["target"] = None
+    payload["updated_at"] = utc_now_iso()
+    return PreviewServiceRecord.model_validate(payload)
+
+
+def _record_exited(
+    record: PreviewServiceRecord,
+    *,
+    exit_code: int | None,
+    reason: str,
+) -> PreviewServiceRecord:
+    payload = record.to_dict()
+    process = dict(payload.get("process") or {})
+    process["exit_code"] = exit_code
+    process["exited_at"] = utc_now_iso()
+    process["last_exit_reason"] = reason
+    payload["status"] = PreviewServiceStatus.EXITED.value
+    payload["process"] = process
+    if payload.get("port_policy"):
+        payload["port_policy"].pop("allocated_port", None)
+    payload["target"] = None
+    payload["updated_at"] = utc_now_iso()
+    return PreviewServiceRecord.model_validate(payload)
+
+
+def _record_orphaned(
+    record: PreviewServiceRecord,
+    *,
+    reason: str,
+) -> PreviewServiceRecord:
+    payload = record.to_dict()
+    process = dict(payload.get("process") or {})
+    process["last_exit_reason"] = reason
+    payload["status"] = PreviewServiceStatus.ORPHANED.value
+    payload["process"] = process or None
+    payload["updated_at"] = utc_now_iso()
+    return PreviewServiceRecord.model_validate(payload)
 
 
 def _record_failed_without_allocation(
@@ -739,6 +1131,99 @@ def _record_failed_without_allocation(
     payload["target"] = None
     payload["updated_at"] = utc_now_iso()
     return PreviewServiceRecord.model_validate(payload)
+
+
+def _is_running_managed(record: PreviewServiceRecord) -> bool:
+    return bool(
+        record.kind == PreviewServiceKind.MANAGED_COMMAND.value
+        and record.status
+        in {
+            PreviewServiceStatus.STARTING.value,
+            PreviewServiceStatus.RUNNING.value,
+            PreviewServiceStatus.HEALTHY.value,
+            PreviewServiceStatus.UNHEALTHY.value,
+        }
+    )
+
+
+def _health_result_detail(result: PreviewServiceHealthResult) -> str | None:
+    if result.error:
+        return result.error
+    if result.status_code is not None:
+        return f"status={result.status_code}"
+    return result.check_type
+
+
+def _process_identity_status(
+    hub_root: Path,
+    record: PreviewServiceRecord,
+) -> Literal["match", "exited", "mismatch"]:
+    process = record.process
+    if process is None or process.pid is None:
+        return "exited"
+    if not process_is_active(process.pid):
+        return "exited"
+    process_record = read_process_record(hub_root, PROCESS_KIND, record.service_id)
+    if process_record is None:
+        return "mismatch"
+    if process_record.pid != process.pid:
+        return "mismatch"
+    if process.pgid is not None and process_record.pgid != process.pgid:
+        return "mismatch"
+    if process.started_at and process_record.started_at != process.started_at:
+        return "mismatch"
+    expected_fingerprint = process.command_fingerprint
+    actual_fingerprint = process_record.metadata.get("command_fingerprint")
+    if expected_fingerprint and actual_fingerprint != expected_fingerprint:
+        return "mismatch"
+    if process.cwd and record.command is not None:
+        current_command = process_record.command
+        if _command_fingerprint(current_command, process.cwd) != expected_fingerprint:
+            return "mismatch"
+    if record.command is not None:
+        command_match = process_command_matches(
+            process.pid,
+            _identity_command_fragments(process_record.command),
+        )
+        if command_match is False:
+            return "mismatch"
+    return "match"
+
+
+def _identity_command_fragments(argv: Sequence[str]) -> list[str]:
+    return [str(item) for item in argv[:2] if str(item)]
+
+
+def _command_fingerprint(argv: Sequence[str], cwd: str) -> str:
+    payload = json.dumps(
+        {"argv": [str(item) for item in argv], "cwd": str(cwd)},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _collect_exit_code(
+    pid: int | None,
+    process_handle: subprocess.Popen[bytes] | None,
+) -> int | None:
+    if process_handle is not None:
+        return process_handle.poll()
+    if pid is None or os.name == "nt" or not hasattr(os, "waitpid"):
+        return None
+    try:
+        waited_pid, status = os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        return None
+    except OSError:
+        return None
+    if waited_pid == 0:
+        return None
+    if os.WIFEXITED(status):
+        return os.WEXITSTATUS(status)
+    if os.WIFSIGNALED(status):
+        return -os.WTERMSIG(status)
+    return None
 
 
 def _record_from_payload(

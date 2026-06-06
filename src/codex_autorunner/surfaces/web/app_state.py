@@ -47,6 +47,7 @@ from ...core.preview_services import (
     DEFAULT_PORT_RANGE_END,
     DEFAULT_PORT_RANGE_START,
     DEFAULT_PREVIEW_HOST,
+    DEFAULT_STARTUP_HEALTH_TIMEOUT_SECONDS,
     PreviewServiceSupervisor,
 )
 from ...core.runtime import RuntimeContext
@@ -806,12 +807,17 @@ def _build_preview_service_manager(
         preview_config.get("log_max_bytes"),
         default=DEFAULT_LOG_MAX_BYTES,
     )
+    startup_health_timeout_seconds = _coerce_float(
+        preview_config.get("startup_health_timeout_seconds"),
+        default=DEFAULT_STARTUP_HEALTH_TIMEOUT_SECONDS,
+    )
     return PreviewServiceSupervisor(
         hub_root,
         durable=durable_writes,
         host=host,
         port_range=(start, end),
         log_max_bytes=log_max_bytes,
+        startup_health_timeout_seconds=startup_health_timeout_seconds,
     )
 
 
@@ -820,5 +826,14 @@ def _coerce_int(value: object, *, default: int) -> int:
         return default
     try:
         return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_float(value: object, *, default: float) -> float:
+    if not isinstance(value, (str, bytes, bytearray, int, float)):
+        return default
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return default

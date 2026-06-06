@@ -22,11 +22,7 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
 from ....core.config_validation import is_loopback_host
-from ....core.force_attestation import (
-    FORCE_ATTESTATION_REQUIRED_PHRASE,
-    enforce_force_attestation,
-)
-from ....core.logging_utils import log_event
+from ....core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from ....core.path_utils import ConfigPathError, resolve_config_path
 from ....core.preview_services import (
     PreviewPortAllocationError,
@@ -356,7 +352,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             changes["metadata"] = payload.metadata
         try:
             record = await asyncio.to_thread(
-                manager.registry.update, service_id, changes
+                manager.update_service, service_id, changes
             )
         except PreviewServiceNotFoundError as exc:
             raise _not_found(exc) from exc
@@ -591,22 +587,22 @@ async def _teardown(
     service_id: str,
     payload: DestructiveServiceRequest,
 ) -> PreviewServiceRecord:
-    record = await _require_record(manager, service_id)
-    if _is_running_managed(record):
-        if payload.force:
-            record = await asyncio.to_thread(
-                manager.kill,
-                service_id,
-                force=True,
-                force_attestation=_force_attestation(
-                    payload,
-                    target_scope=f"hub.preview_services.teardown:{service_id}",
-                ),
-            )
-        else:
-            record = await asyncio.to_thread(manager.stop, service_id)
-    await asyncio.to_thread(manager.registry.delete, service_id)
-    return record
+    try:
+        return await asyncio.to_thread(
+            manager.teardown,
+            service_id,
+            force=payload.force,
+            force_attestation=_force_attestation(
+                payload,
+                target_scope=f"hub.preview_services.teardown:{service_id}",
+            ),
+        )
+    except PreviewServiceNotFoundError as exc:
+        raise _not_found(exc) from exc
+    except PreviewServiceSupervisorError as exc:
+        raise _supervisor_error(exc) from exc
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
 
 
 async def _unlink(
@@ -614,40 +610,22 @@ async def _unlink(
     service_id: str,
     payload: DestructiveServiceRequest,
 ) -> PreviewServiceRecord:
-    record = await _require_record(manager, service_id)
-    if _is_running_managed(record) and not payload.force:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot unlink a running managed preview service without force; use teardown to stop it first.",
+    try:
+        return await asyncio.to_thread(
+            manager.unlink,
+            service_id,
+            force=payload.force,
+            force_attestation=_force_attestation(
+                payload,
+                target_scope=f"hub.preview_services.unlink_running:{service_id}",
+            ),
         )
-    if _is_running_managed(record):
-        force_attestation = _force_attestation(
-            payload, target_scope=f"hub.preview_services.unlink_running:{service_id}"
-        )
-        try:
-            enforce_force_attestation(
-                force=True,
-                force_attestation=force_attestation,
-                logger=logger,
-                action="hub.preview_services.unlink_running",
-            )
-        except ValueError as exc:
-            raise _bad_request(exc) from exc
-        process = record.process
-        log_event(
-            logger,
-            logging.WARNING,
-            "preview_services.unlink_running_orphans_process",
-            service_id=service_id,
-            pid=process.pid if process is not None else None,
-            pgid=process.pgid if process is not None else None,
-        )
-    deleted = await asyncio.to_thread(manager.registry.delete, service_id)
-    if not deleted:
-        raise HTTPException(
-            status_code=404, detail=f"Preview service not found: {service_id}"
-        )
-    return record
+    except PreviewServiceNotFoundError as exc:
+        raise _not_found(exc) from exc
+    except PreviewServiceSupervisorError as exc:
+        raise _supervisor_error(exc) from exc
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
 
 
 def _service_response(

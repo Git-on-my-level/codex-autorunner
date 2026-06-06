@@ -51,6 +51,7 @@ from .pma.managed_thread_runtime import (
 _DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS = float(
     parse_flow_retention_config(None).sweep_interval_seconds
 )
+_DEFAULT_PREVIEW_SERVICE_RECONCILE_INTERVAL_SECONDS = 5.0
 
 
 class _IdlePrunable(Protocol):
@@ -205,6 +206,7 @@ class HubStartupService:
             tasks.append(asyncio.create_task(self.run_deferred_startup(app)))
             self._register_housekeeping_tasks(app, tasks)
             self._register_prune_tasks(app, tasks)
+            self._register_preview_service_reconciler(app, tasks)
             registered_pma_lane_starter, pma_lane_starter_register = (
                 self._register_pma_lane_starter(app)
             )
@@ -322,6 +324,66 @@ class HubStartupService:
             return True
         enabled = preview_config.get("enabled")
         return True if enabled is None else bool(enabled)
+
+    def _preview_service_reconcile_interval_seconds(self, config: object) -> float:
+        raw_config = getattr(config, "raw", {})
+        if not isinstance(raw_config, dict):
+            return _DEFAULT_PREVIEW_SERVICE_RECONCILE_INTERVAL_SECONDS
+        preview_config = raw_config.get("preview_services")
+        if not isinstance(preview_config, dict):
+            return _DEFAULT_PREVIEW_SERVICE_RECONCILE_INTERVAL_SECONDS
+        raw_interval = preview_config.get("reconcile_interval_seconds")
+        if not isinstance(raw_interval, (int, float)) or raw_interval <= 0:
+            return _DEFAULT_PREVIEW_SERVICE_RECONCILE_INTERVAL_SECONDS
+        return float(raw_interval)
+
+    def _register_preview_service_reconciler(
+        self,
+        app: FastAPI,
+        tasks: list[asyncio.Task],
+    ) -> None:
+        if not self._preview_services_enabled(app.state.config):
+            return
+        manager = getattr(self._context, "preview_service_manager", None)
+        if manager is None:
+            return
+        interval = self._preview_service_reconcile_interval_seconds(app.state.config)
+        tasks.append(
+            asyncio.create_task(
+                self._preview_service_reconciler_loop(
+                    app,
+                    initial_delay=min(interval, 5.0),
+                    interval=interval,
+                )
+            )
+        )
+
+    async def _preview_service_reconciler_loop(
+        self,
+        app: FastAPI,
+        *,
+        initial_delay: float,
+        interval: float,
+    ) -> None:
+        await asyncio.sleep(initial_delay)
+        manager = self._context.preview_service_manager
+        while True:
+            try:
+                await asyncio.to_thread(manager.reconcile)
+            except (
+                OSError,
+                RuntimeError,
+                ValueError,
+                TypeError,
+                AttributeError,
+            ) as exc:  # intentional: background loop must not crash
+                safe_log(
+                    app.state.logger,
+                    logging.WARNING,
+                    "Preview service reconciler failed",
+                    exc,
+                )
+            await asyncio.sleep(interval)
 
     async def _start_autostart_preview_services(
         self, app: FastAPI, log: logging.Logger

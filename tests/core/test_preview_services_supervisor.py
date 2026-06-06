@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import os
+import signal
 import sys
+import threading
 import time
 from pathlib import Path
 from urllib.request import urlopen
@@ -14,6 +18,7 @@ from codex_autorunner.core.force_attestation import (
 from codex_autorunner.core.locks import process_is_active
 from codex_autorunner.core.managed_processes.registry import read_process_record
 from codex_autorunner.core.preview_services import (
+    NEEDS_ATTENTION_STATUSES,
     PROCESS_KIND,
     PreviewServiceKind,
     PreviewServiceStatus,
@@ -247,6 +252,253 @@ def test_close_all_stops_running_managed_services_without_autostarting_stopped(
     assert after_restart.process is None
 
 
+def test_reconciler_records_managed_service_exit_code_and_event(
+    tmp_path: Path,
+) -> None:
+    supervisor = PreviewServiceSupervisor(tmp_path)
+    record = supervisor.start_managed_command(
+        name="Short lived service",
+        argv=[
+            sys.executable,
+            "-u",
+            "-c",
+            "import time; print('ready', flush=True); time.sleep(0.1); raise SystemExit(7)",
+        ],
+        cwd=tmp_path,
+        health_check={"type": "none"},
+    )
+    pid = record.process.pid if record.process else None
+    assert pid is not None
+
+    assert _wait_for_inactive(pid)
+    reconciled = supervisor.reconcile_service(record.service_id)
+
+    assert reconciled.status == PreviewServiceStatus.EXITED.value
+    assert reconciled.process is not None
+    assert reconciled.process.exit_code == 7
+    assert reconciled.process.exited_at is not None
+    assert reconciled.process.last_exit_reason == "process exited"
+    assert read_process_record(tmp_path, PROCESS_KIND, record.service_id) is None
+    assert _event_types(supervisor, record.service_id) == [
+        "created",
+        "starting",
+        "started",
+        "healthy",
+        "exited",
+    ]
+
+
+def test_stale_pid_identity_mismatch_is_orphaned_before_stop_or_kill(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supervisor = PreviewServiceSupervisor(tmp_path)
+    record = supervisor.start_managed_command(
+        name="Identity checked server",
+        argv=[
+            sys.executable,
+            "-u",
+            "-c",
+            "import time; print('ready', flush=True); time.sleep(30)",
+        ],
+        cwd=tmp_path,
+        health_check={"type": "none"},
+    )
+    pid = record.process.pid if record.process else None
+    assert pid is not None
+
+    def fail_terminate(*args, **kwargs):
+        raise AssertionError("mismatched process must not be terminated")
+
+    monkeypatch.setattr(
+        supervisor_module, "_process_identity_status", lambda *_: "mismatch"
+    )
+    monkeypatch.setattr(supervisor_module, "terminate_record", fail_terminate)
+
+    with pytest.raises(PreviewServiceSupervisorError, match="stale PID"):
+        supervisor.stop(record.service_id)
+    orphaned = supervisor.registry.require(record.service_id)
+    assert orphaned.status == PreviewServiceStatus.ORPHANED.value
+    assert process_is_active(pid)
+
+    with pytest.raises(PreviewServiceSupervisorError, match="stale PID"):
+        supervisor.kill(
+            record.service_id,
+            force=True,
+            force_attestation={
+                "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+                "user_request": "test force kill preview service",
+                "target_scope": f"hub.preview_services.kill:{record.service_id}",
+            },
+        )
+    assert process_is_active(pid)
+    os.kill(pid, signal.SIGTERM)
+    assert _wait_for_inactive(pid)
+
+
+def test_concurrent_start_calls_are_serialized_by_service_lock(tmp_path: Path) -> None:
+    supervisor = PreviewServiceSupervisor(tmp_path)
+    record = supervisor.register_managed_command(
+        name="Concurrent start service",
+        argv=[
+            sys.executable,
+            "-u",
+            "-c",
+            "import time; print('ready', flush=True); time.sleep(30)",
+        ],
+        cwd=tmp_path,
+        health_check={"type": "none"},
+    )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(supervisor.start, record.service_id),
+            executor.submit(supervisor.start, record.service_id),
+        ]
+        results = [future.result(timeout=10) for future in futures]
+
+    pids = {item.process.pid for item in results if item.process is not None}
+    assert len(pids) == 1
+    process_records = [
+        read_process_record(tmp_path, PROCESS_KIND, record.service_id),
+    ]
+    assert process_records[0] is not None
+    supervisor.stop(record.service_id)
+
+
+def test_restart_and_kill_wait_for_service_lock_before_mutating(
+    tmp_path: Path,
+) -> None:
+    supervisor = PreviewServiceSupervisor(tmp_path)
+    record = supervisor.start_managed_command(
+        name="Locked restart service",
+        argv=[
+            sys.executable,
+            "-u",
+            "-c",
+            "import time; print('ready', flush=True); time.sleep(30)",
+        ],
+        cwd=tmp_path,
+        health_check={"type": "none"},
+    )
+    restart_entered = threading.Event()
+    kill_entered = threading.Event()
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+
+    def restart_under_lock():
+        restart_entered.set()
+        return supervisor.restart(record.service_id)
+
+    def kill_under_lock():
+        kill_entered.set()
+        return supervisor.kill(
+            record.service_id,
+            force=True,
+            force_attestation={
+                "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+                "user_request": "test force kill preview service",
+                "target_scope": f"hub.preview_services.kill:{record.service_id}",
+            },
+        )
+
+    try:
+        with supervisor.service_lock(record.service_id):
+            restart_future = executor.submit(restart_under_lock)
+            kill_future = executor.submit(kill_under_lock)
+            assert restart_entered.wait(timeout=2)
+            assert kill_entered.wait(timeout=2)
+            time.sleep(0.2)
+            assert not restart_future.done()
+            assert not kill_future.done()
+
+        results = [
+            restart_future.result(timeout=10),
+            kill_future.result(timeout=10),
+        ]
+        assert {result.service_id for result in results} == {record.service_id}
+    finally:
+        executor.shutdown(wait=True)
+        latest = supervisor.registry.require(record.service_id)
+        if latest.process is not None:
+            supervisor.stop(record.service_id)
+
+
+def test_slow_startup_health_uses_realistic_default_timeout(tmp_path: Path) -> None:
+    port = _find_available_port()
+    supervisor = PreviewServiceSupervisor(tmp_path, port_range=(port, port))
+    script = (
+        "import http.server, os, time\n"
+        "time.sleep(0.5)\n"
+        "port=int(os.environ['PORT'])\n"
+        "class H(http.server.BaseHTTPRequestHandler):\n"
+        "    def do_GET(self):\n"
+        "        self.send_response(200)\n"
+        "        self.end_headers()\n"
+        "        self.wfile.write(b'ok')\n"
+        "    def log_message(self, *args):\n"
+        "        return\n"
+        "http.server.ThreadingHTTPServer(('127.0.0.1', port), H).serve_forever()\n"
+    )
+
+    record = supervisor.start_managed_command(
+        name="Slow server",
+        argv=[sys.executable, "-u", "-c", script],
+        cwd=tmp_path,
+        port_policy={"mode": "auto"},
+        health_check={"type": "http", "path": "/", "expected_status": [200]},
+    )
+    try:
+        assert record.status == PreviewServiceStatus.HEALTHY.value
+    finally:
+        supervisor.stop(record.service_id)
+
+
+def test_needs_attention_statuses_are_centralized() -> None:
+    assert {
+        PreviewServiceStatus.FAILED.value,
+        PreviewServiceStatus.UNHEALTHY.value,
+        PreviewServiceStatus.CONFLICT.value,
+        PreviewServiceStatus.ORPHANED.value,
+        PreviewServiceStatus.EXITED.value,
+    } == set(NEEDS_ATTENTION_STATUSES)
+
+
+def test_event_history_records_lifecycle_and_health_failures(tmp_path: Path) -> None:
+    supervisor = PreviewServiceSupervisor(tmp_path, event_history_limit=4)
+    loopback = supervisor.register_loopback_url(
+        "http://127.0.0.1:9/",
+        name="Unhealthy loopback",
+    )
+    supervisor.check_health(loopback.service_id)
+
+    service = supervisor.start_managed_command(
+        name="Eventful service",
+        argv=[
+            sys.executable,
+            "-u",
+            "-c",
+            "import time; print('ready', flush=True); time.sleep(30)",
+        ],
+        cwd=tmp_path,
+        health_check={"type": "none"},
+    )
+    supervisor.stop(service.service_id)
+    restarted = supervisor.start(service.service_id)
+    supervisor.kill(
+        restarted.service_id,
+        force=True,
+        force_attestation={
+            "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+            "user_request": "test force kill preview service",
+            "target_scope": f"hub.preview_services.kill:{restarted.service_id}",
+        },
+    )
+
+    assert "health_failed" in _event_types(supervisor, loopback.service_id)
+    service_events = _event_types(supervisor, service.service_id)
+    assert service_events == ["starting", "started", "healthy", "killed"]
+
+
 def _server_command() -> list[str]:
     script = (
         "import http.server, os\n"
@@ -324,3 +576,10 @@ def _wait_for_inactive(pid: int, *, timeout: float = 5.0) -> bool:
             return True
         time.sleep(0.05)
     return not process_is_active(pid)
+
+
+def _event_types(
+    supervisor: PreviewServiceSupervisor,
+    service_id: str,
+) -> list[str]:
+    return [str(event.get("type")) for event in supervisor.events(service_id)]
