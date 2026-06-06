@@ -182,6 +182,14 @@ PORT=<allocated_port>
 HOST=127.0.0.1
 ```
 
+Those managed-service env values intentionally point at the stable
+`/preview/services/<service_id>` diagnostic route, not at an expiring capability
+URL. In hosted/no-subdomain mode, user-facing links are issued separately as
+`/preview/p/<token>/...`. Frameworks that bake `CAR_PREVIEW_BASE_PATH` into
+assets, router basenames, OAuth callbacks, or HMR clients may therefore need an
+explicit hosted preview-link mode or a service restart if CAR later launches
+them with a capability URL as the public base path.
+
 Framework notes:
 
 - Vite: set `base` to `process.env.CAR_PREVIEW_BASE_PATH + "/"`. Prefer
@@ -211,6 +219,10 @@ same-origin preview JavaScript. In `auth.mode=hosted_bearer`:
 
 - `/hub/*`, read models, lifecycle routes, and other control-plane APIs require
   `Authorization: Bearer <hub_access_token>`.
+- Browser session cookies are not accepted for hub APIs in this mode. The
+  current Web Hub does not provide a full browser-side hosted bearer bootstrap;
+  deploy an outer auth layer or use API/CLI clients that can send the explicit
+  bearer token.
 - Cookies, Basic Auth, and preview capability tokens do not authorize hub APIs.
 - User-facing copied/opened preview links use capability URLs such as
   `/preview/p/<token>/...`.
@@ -231,6 +243,13 @@ to loopback hosts (`127.0.0.1`, `::1`, and `localhost`) and CAR does not proxy
 arbitrary internet URLs. Static previews are restricted to allowed roots and
 reject traversal, symlink escape, hidden files, `.env`, `.git`, and common
 private-key filenames.
+
+Capability URLs are preview credentials. Operators and integrations should keep
+them out of logs, analytics, referrers, service-worker scope expansion, shared
+caches, PMA context, and copied diagnostic output. Prefer the Services page or
+`car services issue-link SERVICE_ID --ttl 24h` for explicit issuance, and revoke
+links with `car services revoke-link SERVICE_ID --all` when a link is shared too
+broadly.
 
 ## Managed Command Operations
 
@@ -264,6 +283,10 @@ CAR_PREVIEW_SERVICE_ID=<service_id>
 PORT=<allocated_port>
 HOST=127.0.0.1
 ```
+
+In hosted/no-subdomain mode these env values are still the authenticated
+diagnostic base path. They are not automatically rewritten to the latest
+capability URL issued by the UI or CLI.
 
 The full CAR process environment is inherited only when `env_policy=inherit_all`
 is explicitly requested. Read models redact configured env values, and service
@@ -299,6 +322,8 @@ The high-risk contract is covered by focused tests:
   `tests/test_cli_services.py`.
 - Opener isolation and no persistent browser token storage:
   `src/codex_autorunner/web_frontend/src/routes/services/page.test.ts`.
+- Frontend issue-link calls and lack of built-in hub bearer injection:
+  `src/codex_autorunner/web_frontend/src/lib/api/client.test.ts`.
 - Process exit reconciliation, stale PID safety, lifecycle lock concurrency,
   event history, and slow startup health timing:
   `tests/core/test_preview_services_supervisor.py`.

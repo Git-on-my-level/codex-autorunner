@@ -442,16 +442,17 @@ def test_services_open_json_uses_absolute_public_base_url(
     tmp_path: Path, monkeypatch
 ) -> None:
     hub_root = _hub_root(tmp_path)
+    calls: list[dict[str, object]] = []
 
     def _fake_request(
         method, url, json=None, timeout=None, headers=None, follow_redirects=True
     ):  # type: ignore[no-untyped-def]
+        calls.append({"method": method, "url": url, "json": json})
         return _mock_response(
             {
-                "read_model": {
-                    "service_id": "svc_abc123",
-                    "preview_url": "/preview/p/tok_123/",
-                }
+                "service_id": "svc_abc123",
+                "preview_url": "/preview/p/tok_123/",
+                "expires_at": 123.0,
             }
         )
 
@@ -468,6 +469,50 @@ def test_services_open_json_uses_absolute_public_base_url(
         json.loads(result.output)["preview_url"]
         == "https://car.example.test/base/preview/p/tok_123/"
     )
+    assert calls[0]["method"] == "POST"
+    assert (
+        urlsplit(str(calls[0]["url"])).path == "/hub/services/svc_abc123/preview-token"
+    )
+
+
+def test_services_open_direct_uses_diagnostic_service_url(
+    tmp_path: Path, monkeypatch
+) -> None:
+    hub_root = _hub_root(tmp_path)
+    calls: list[dict[str, object]] = []
+
+    def _fake_request(
+        method, url, json=None, timeout=None, headers=None, follow_redirects=True
+    ):  # type: ignore[no-untyped-def]
+        calls.append({"method": method, "url": url, "json": json})
+        return _mock_response(
+            {
+                "read_model": {
+                    "service_id": "svc_abc123",
+                    "exposure": {"car_url": "/preview/services/svc_abc123/"},
+                }
+            }
+        )
+
+    monkeypatch.setattr("httpx.request", _fake_request)
+
+    result = runner.invoke(
+        app,
+        [
+            "services",
+            "open",
+            "svc_abc123",
+            "--path",
+            str(hub_root),
+            "--direct",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.output)["preview_url"] == "/preview/services/svc_abc123/"
+    assert calls[0]["method"] == "GET"
+    assert urlsplit(str(calls[0]["url"])).path == "/hub/services/svc_abc123"
 
 
 def test_services_logs_sends_tail_only(tmp_path: Path, monkeypatch) -> None:

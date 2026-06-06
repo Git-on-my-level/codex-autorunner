@@ -821,27 +821,40 @@ def register_services_commands(
         base_path: Optional[str] = typer.Option(
             None, "--base-path", help="Override configured hub base path."
         ),
+        direct: bool = typer.Option(
+            False,
+            "--direct",
+            help="Open the diagnostic /preview/services route instead of issuing a capability link.",
+        ),
         json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
     ) -> None:
         config = _load_config(path)
-        data = _request(
-            "GET",
-            _url(config, f"/hub/services/{service_id}", base_path=base_path),
-            config,
-        )
-        raw_service = data.get("read_model")
-        service: dict[str, Any] = (
-            raw_service if isinstance(raw_service, dict) else _service(data)
-        )
-        exposure = service.get("exposure")
-        exposure_map = exposure if isinstance(exposure, dict) else {}
-        preview_url = str(
-            service.get("preview_url")
-            or service.get("previewUrl")
-            or exposure_map.get("car_url")
-            or service.get("car_url")
-            or ""
-        )
+        if direct:
+            data = _request(
+                "GET",
+                _url(config, f"/hub/services/{service_id}", base_path=base_path),
+                config,
+            )
+            raw_service = data.get("read_model")
+            service: dict[str, Any] = (
+                raw_service if isinstance(raw_service, dict) else _service(data)
+            )
+            exposure = service.get("exposure")
+            exposure_map = exposure if isinstance(exposure, dict) else {}
+            preview_url = str(
+                exposure_map.get("car_url") or service.get("car_url") or ""
+            )
+        else:
+            data = _request(
+                "POST",
+                _url(
+                    config,
+                    f"/hub/services/{service_id}/preview-token",
+                    base_path=base_path,
+                ),
+                config,
+            )
+            preview_url = str(data.get("preview_url") or "")
         resolved = _absolute_or_relative_preview_url(config, preview_url)
         if json_output:
             _json({"service_id": service_id, "preview_url": resolved})

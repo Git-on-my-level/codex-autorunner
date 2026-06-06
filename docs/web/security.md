@@ -69,8 +69,19 @@ CAR also supports a bearer token enforced by middleware when configured:
 - API and CLI requests can use `Authorization: Bearer <token>`.
 - WebSockets accept the token via `Sec-WebSocket-Protocol: car-token-b64.<base64url(token)>`.
   The legacy `?token=...` query string is still accepted for backward compatibility,
-  but base-path redirects strip `token` query parameters to avoid writing bearer
-  tokens into redirect logs.
+  but base-path redirects strip CAR-reserved query parameters such as
+  `car_token`, `car_auth_token`, and `car_preview_token` to avoid writing CAR
+  credentials into redirect logs.
+
+`auth.mode=hosted_bearer` is intended for hosted/no-subdomain deployments where
+same-origin preview JavaScript must not be able to call hub APIs through ambient
+browser cookies. In this mode, browser session cookies are deliberately not
+accepted for hub/control-plane APIs; clients must send an explicit bearer token.
+Do not expose the raw `server.auth_token_env` value to browser JavaScript or
+store hub access tokens in `localStorage`, `sessionStorage`, cookies, or
+IndexedDB. A browser-side hosted bearer bootstrap that mints derived,
+short-lived, in-memory hub tokens is not part of this release unless supplied by
+an outer auth layer.
 
 ## Public endpoints
 
@@ -117,6 +128,14 @@ tokens authorize only preview/proxy access and cannot authorize `/hub/*` APIs.
 
 CAR proxies only registered service records, defaults proxy targets to loopback
 hosts, and does not proxy arbitrary internet URLs.
+
+Preview capability URLs are bearer credentials for their specific preview
+service. Treat `/preview/p/<token>/...` paths as secrets: do not log raw
+capability paths, do not include them in structured events except when returning
+an issued link to the authenticated caller, set preview responses to avoid
+referrer leakage, strip upstream `Referer` forwarding from proxied preview
+requests, strip `Service-Worker-Allowed` from preview responses, and prefer
+private/no-store cache semantics for hosted capability responses.
 
 Keep `preview_services.proxy_allowed_hosts` loopback-only for hosted
 deployments. Add `preview_services.static_allowed_roots` only for directories

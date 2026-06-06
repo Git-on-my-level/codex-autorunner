@@ -175,9 +175,13 @@ def test_hosted_preview_capability_cannot_authorize_hub_apis(
 
     opened = client.get(preview_url)
     assert opened.status_code == 200
+    assert opened.headers["referrer-policy"] == "no-referrer"
+    assert opened.headers["cache-control"] == "no-store, private"
     assert "<h1>Preview</h1>" in opened.text
     asset = client.get(f"{preview_url}index.html")
     assert asset.status_code == 200
+    assert asset.headers["referrer-policy"] == "no-referrer"
+    assert asset.headers["cache-control"] == "no-store, private"
 
     denied_with_preview_token = client.get(
         "/hub/services",
@@ -393,6 +397,27 @@ def test_preview_static_file_under_hidden_ancestor_is_rejected(
     assert opened.status_code == 403
 
 
+def test_preview_static_file_blocks_symlink_target_inside_root(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    public = hub_root / "public"
+    public.mkdir()
+    html = public / "index.html"
+    html.write_text("safe", encoding="utf-8")
+    symlink = public / "linked.html"
+    symlink.symlink_to(html)
+    client = TestClient(create_hub_app(hub_root))
+    created = client.post(
+        "/hub/services/static",
+        json={"path": str(symlink), "name": "Linked file"},
+    )
+
+    assert created.status_code == 400
+    assert "symlink" in created.json()["detail"]
+
+
 def test_preview_static_dir_blocks_symlinked_directory_escape(
     tmp_path: Path,
 ) -> None:
@@ -571,6 +596,7 @@ def test_preview_loopback_http_service_proxies_method_path_query_and_body(
         assert response.status_code == 201
         assert response.headers["x-upstream"] == "seen"
         assert "set-cookie" not in response.headers
+        assert "service-worker-allowed" not in response.headers
         assert response.json() == {
             "method": "POST",
             "path": "/base/nested/path?q=one&token=hub-secret",
@@ -578,6 +604,8 @@ def test_preview_loopback_http_service_proxies_method_path_query_and_body(
             "header": "kept",
             "authorization": None,
             "cookie": None,
+            "referer": None,
+            "service_worker_allowed": None,
             "accept_encoding": "identity",
             "forwarded_host": "testserver",
             "forwarded_proto": "http",
@@ -585,6 +613,49 @@ def test_preview_loopback_http_service_proxies_method_path_query_and_body(
             "forwarded_prefix": f"/preview/services/{service_id}",
             "real_ip": "testclient",
         }
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_preview_capability_proxy_strips_token_leak_headers(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    server, port = _start_loopback_capture_server()
+    client = TestClient(create_hub_app(hub_root))
+    try:
+        created = client.post(
+            "/hub/services/loopback-url",
+            json={"url": f"http://127.0.0.1:{port}/base/", "name": "Loopback"},
+        )
+        assert created.status_code == 200
+        service_id = created.json()["service"]["service_id"]
+        issued = client.post(f"/hub/services/{service_id}/preview-token")
+        assert issued.status_code == 200
+        preview_url = issued.json()["preview_url"]
+        preview_token = preview_url.split("/preview/p/", 1)[1].split("/", 1)[0]
+
+        response = client.post(
+            f"{preview_url}nested/path?token=app-token&car_token=hub-secret",
+            content=b"payload",
+            headers={
+                "Referer": f"http://testserver/preview/p/{preview_token}/index.html",
+                "X-Test-Header": "kept",
+            },
+        )
+
+        assert response.status_code == 201
+        assert response.headers["referrer-policy"] == "no-referrer"
+        assert response.headers["cache-control"] == "no-store, private"
+        assert "service-worker-allowed" not in response.headers
+        payload = response.json()
+        assert payload["path"] == "/base/nested/path?token=app-token"
+        assert payload["referer"] is None
+        assert payload["service_worker_allowed"] is None
+        assert payload["forwarded_prefix"] == "/preview/p/<redacted>"
+        assert preview_token not in payload["forwarded_prefix"]
     finally:
         server.shutdown()
         server.server_close()
@@ -1033,6 +1104,8 @@ def test_preview_services_preview_token_revoke_route(tmp_path: Path) -> None:
     assert preview_url.startswith("/preview/p/")
     opened = client.get(preview_url)
     assert opened.status_code == 200
+    assert opened.headers["referrer-policy"] == "no-referrer"
+    assert opened.headers["cache-control"] == "no-store, private"
 
     revoked = client.post(f"/hub/services/{service_id}/preview-token/revoke")
     assert revoked.status_code == 200
@@ -1246,6 +1319,8 @@ def _start_loopback_capture_server() -> tuple[http.server.ThreadingHTTPServer, i
                 "header": self.headers.get("X-Test-Header"),
                 "authorization": self.headers.get("Authorization"),
                 "cookie": self.headers.get("Cookie"),
+                "referer": self.headers.get("Referer"),
+                "service_worker_allowed": self.headers.get("Service-Worker-Allowed"),
                 "accept_encoding": self.headers.get("Accept-Encoding"),
                 "forwarded_host": self.headers.get("X-Forwarded-Host"),
                 "forwarded_proto": self.headers.get("X-Forwarded-Proto"),
@@ -1259,6 +1334,7 @@ def _start_loopback_capture_server() -> tuple[http.server.ThreadingHTTPServer, i
             self.send_header("Content-Length", str(len(content)))
             self.send_header("X-Upstream", "seen")
             self.send_header("Set-Cookie", "car_session=upstream; Path=/")
+            self.send_header("Service-Worker-Allowed", "/")
             self.end_headers()
             self.wfile.write(content)
 

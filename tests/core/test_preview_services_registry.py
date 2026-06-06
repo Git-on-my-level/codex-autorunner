@@ -283,9 +283,18 @@ def test_read_model_shape_is_stable(tmp_path: Path) -> None:
     } <= set(model["services"][0])
 
 
-def test_read_model_redacts_command_env_values(tmp_path: Path) -> None:
+def test_read_model_redacts_command_env_and_argv_values(tmp_path: Path) -> None:
     registry = PreviewServiceRegistry(tmp_path)
     payload = managed_service_payload()
+    payload["command"]["argv"] = [
+        "python",
+        "server.py",
+        "--api-key",
+        "sk-secret",
+        "--token=abc123",
+        "DATABASE_PASSWORD=hunter2",
+        "https://user:pass@example.test/path",
+    ]
     payload["command"]["env"] = {
         "PORT": "$PORT",
         "OPENAI_API_KEY": "secret",
@@ -299,7 +308,19 @@ def test_read_model_redacts_command_env_values(tmp_path: Path) -> None:
         "PORT": "<redacted>",
         "OPENAI_API_KEY": "<redacted>",
     }
-    assert "secret" not in json.dumps(model)
+    assert command["argv"] == [
+        "python",
+        "server.py",
+        "--api-key",
+        "<redacted>",
+        "--token=<redacted>",
+        "DATABASE_PASSWORD=<redacted>",
+        "https://<redacted>@example.test/path",
+    ]
+    dumped = json.dumps(model)
+    assert "secret" not in dumped
+    assert "hunter2" not in dumped
+    assert "user:pass" not in dumped
 
 
 def test_read_model_capabilities_cover_service_lifecycle_states(tmp_path: Path) -> None:

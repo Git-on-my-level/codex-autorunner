@@ -19,6 +19,25 @@ from .static_assets import security_headers
 
 logger = logging.getLogger("codex_autorunner.web.middleware")
 
+_REDACTED_PREVIEW_TOKEN = "<redacted>"
+_CAR_QUERY_TOKEN_PARAMS = frozenset(
+    {
+        "car_token",
+        "car_auth_token",
+        "car_preview_token",
+    }
+)
+
+
+def redact_preview_capability_tokens(path: str) -> str:
+    if "/preview/p/" not in path:
+        return path
+    parts = path.split("/")
+    for index, part in enumerate(parts):
+        if part == "preview" and index + 2 < len(parts) and parts[index + 1] == "p":
+            parts[index + 2] = _REDACTED_PREVIEW_TOKEN
+    return "/".join(parts)
+
 
 class BasePathRouterMiddleware:
     """
@@ -148,7 +167,7 @@ class BasePathRouterMiddleware:
                     for key, value in parse_qsl(
                         query_string.decode("latin-1"), keep_blank_values=True
                     )
-                    if key.lower() != "token"
+                    if key.lower() not in _CAR_QUERY_TOKEN_PARAMS
                 ]
                 if query_pairs:
                     target_path = f"{target_path}?{urlencode(query_pairs)}"
@@ -631,6 +650,7 @@ class RequestIdMiddleware:
         logger = self._get_logger(scope)
         method = scope.get("method") or "GET"
         path = scope.get("path") or "/"
+        log_path = redact_preview_capability_tokens(path)
         client = scope.get("client")
         client_addr = None
         if client and len(client) >= 2:
@@ -645,7 +665,7 @@ class RequestIdMiddleware:
             logging.INFO,
             "http.request",
             method=method,
-            path=path,
+            path=log_path,
             client=client_addr,
         )
 
@@ -672,7 +692,7 @@ class RequestIdMiddleware:
             duration_ms = (time.monotonic() - start) * 1000
             fields = {
                 "method": method,
-                "path": path,
+                "path": log_path,
                 "status": status_code or 500,
                 "duration_ms": round(duration_ms, 2),
             }
@@ -694,7 +714,7 @@ class RequestIdMiddleware:
                     logging.INFO,
                     "http.response",
                     method=method,
-                    path=path,
+                    path=log_path,
                     status=status_code or 200,
                     duration_ms=round(duration_ms, 2),
                     response_size=response_size,
@@ -705,7 +725,7 @@ class RequestIdMiddleware:
                     logging.INFO,
                     "http.response",
                     method=method,
-                    path=path,
+                    path=log_path,
                     status=status_code or 200,
                     duration_ms=round(duration_ms, 2),
                 )

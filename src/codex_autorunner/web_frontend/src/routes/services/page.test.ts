@@ -10,6 +10,17 @@ describe('services page preview link security', () => {
     expect(pageSource).toContain("window.open(href(url), '_blank', 'noopener,noreferrer')");
   });
 
+  it('issues capability links for open, copy, and explicit issue actions', () => {
+    expect(pageSource).toContain('async function copyCarUrl(service: PreviewServiceReadModel): Promise<void>');
+    expect(pageSource).toContain('async function openCarUrl(service: PreviewServiceReadModel): Promise<void>');
+    expect(pageSource).toContain('async function issueLink(service: PreviewServiceReadModel): Promise<void>');
+    expect(pageSource).toMatch(/copyCarUrl[\s\S]*?const url = await issueServiceUrl\(service\);/);
+    expect(pageSource).toMatch(/openCarUrl[\s\S]*?const url = await issueServiceUrl\(service\);/);
+    expect(pageSource).toMatch(/issueLink[\s\S]*?const url = await issueServiceUrl\(service\);/);
+    expect(pageSource).not.toContain('window.open(href(service.previewUrl)');
+    expect(pageSource).not.toContain('navigator.clipboard.writeText(service.previewUrl)');
+  });
+
   it('does not persist hub access tokens in browser storage', () => {
     const forbidden = [
       /localStorage\.setItem\([^)]*(hub|auth|access).*token/i,

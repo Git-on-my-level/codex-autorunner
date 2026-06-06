@@ -53,6 +53,7 @@ DEFAULT_PROXY_WRITE_TIMEOUT_SECONDS = 60.0
 DEFAULT_PROXY_POOL_TIMEOUT_SECONDS = 5.0
 DEFAULT_PROXY_MAX_GLOBAL_STREAMS = 128
 DEFAULT_PROXY_MAX_SERVICE_STREAMS = 16
+PROXY_STREAM_ACQUIRE_TIMEOUT_SECONDS = 0.1
 
 _GLOBAL_PROXY_SEMAPHORE: asyncio.Semaphore | None = None
 _GLOBAL_PROXY_SEMAPHORE_LIMIT: int | None = None
@@ -593,7 +594,12 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             )
         record = await _require_record(manager, capability.service_id)
         combined_path = _join_capability_path(capability.path_prefix, preview_path)
-        return await _preview_response(context, record, request, combined_path)
+        response = await _preview_response(context, record, request, combined_path)
+        _apply_capability_preview_response_headers(
+            response,
+            preview_prefix=_preview_request_prefix(request, preview_path),
+        )
+        return response
 
     @router.websocket("/preview/services/{service_id}/")
     @router.websocket("/preview/services/{service_id}/{preview_path:path}")
@@ -760,6 +766,7 @@ def _static_registration_path(
     payload: RegisterStaticServiceRequest,
 ) -> Path:
     if payload.source is None:
+        _reject_static_registration_symlink_target(payload.path)
         raw_path = _absolute_static_path_from_text(context, payload.path)
         _require_path_under_allowed_static_roots(context, raw_path)
         return raw_path
@@ -771,6 +778,17 @@ def _static_registration_path(
     relative = _workspace_source_relative_path(source.path)
     root = _workspace_static_root(context, source.workspace_id)
     return root / relative
+
+
+def _reject_static_registration_symlink_target(value: str) -> None:
+    raw_value = value.strip()
+    if not raw_value or not _looks_absolute_or_home_path(raw_value):
+        return
+    try:
+        if Path(raw_value).expanduser().is_symlink():
+            raise ValueError("static path must not be a symlink")
+    except OSError as exc:
+        raise ValueError("static path cannot be inspected") from exc
 
 
 def _absolute_static_path_from_text(context: HubAppContext, value: str) -> Path:
@@ -986,7 +1004,18 @@ def _require_static_target_path(
     target_path = record.target.path if record.target is not None else None
     if not target_path:
         raise HTTPException(status_code=400, detail="Static service has no target path")
-    path = Path(target_path).expanduser().resolve()
+    raw_path = Path(target_path).expanduser()
+    try:
+        if raw_path.is_symlink():
+            raise HTTPException(
+                status_code=403,
+                detail="Static preview target path contains a symlink",
+            )
+    except OSError as exc:
+        raise HTTPException(
+            status_code=403, detail="Static preview target path cannot be inspected"
+        ) from exc
+    path = raw_path.resolve()
     root = _require_allowed_static_root(context, record, path)
     _reject_sensitive_static_path(root, path)
     return path
@@ -1169,23 +1198,7 @@ async def _proxy_http_request(
     )
     timeout = _proxy_timeout(context)
     global_semaphore, service_semaphore = _proxy_stream_semaphores(context, record)
-    if global_semaphore.locked() or service_semaphore.locked():
-        raise HTTPException(
-            status_code=429,
-            detail="Preview proxy stream limit reached",
-        )
-    global_acquired = False
-    try:
-        await asyncio.wait_for(global_semaphore.acquire(), timeout=0.001)
-        global_acquired = True
-        await asyncio.wait_for(service_semaphore.acquire(), timeout=0.001)
-    except TimeoutError as exc:
-        if global_acquired:
-            global_semaphore.release()
-        raise HTTPException(
-            status_code=429,
-            detail="Preview proxy stream limit reached",
-        ) from exc
+    await _acquire_proxy_stream_slots(global_semaphore, service_semaphore)
     client = httpx.AsyncClient(timeout=timeout, follow_redirects=False)
     upstream: httpx.Response | None = None
     try:
@@ -1198,6 +1211,33 @@ async def _proxy_http_request(
             ),
             stream=True,
         )
+        try:
+            response_headers = _proxy_response_headers(
+                upstream.headers.items(),
+                request=request,
+                record=record,
+                preview_prefix=preview_prefix,
+            )
+            return StreamingResponse(
+                upstream.aiter_bytes(),
+                status_code=upstream.status_code,
+                headers=response_headers,
+                background=BackgroundTask(
+                    _close_proxy_response,
+                    upstream,
+                    client,
+                    global_semaphore,
+                    service_semaphore,
+                ),
+            )
+        except Exception:
+            await _close_proxy_response(
+                upstream,
+                client,
+                global_semaphore,
+                service_semaphore,
+            )
+            raise
     except httpx.TimeoutException as exc:
         await client.aclose()
         service_semaphore.release()
@@ -1212,24 +1252,6 @@ async def _proxy_http_request(
         raise HTTPException(
             status_code=502, detail=f"Preview proxy failed: {exc}"
         ) from exc
-    response_headers = _proxy_response_headers(
-        upstream.headers.items(),
-        request=request,
-        record=record,
-        preview_prefix=preview_prefix,
-    )
-    return StreamingResponse(
-        upstream.aiter_bytes(),
-        status_code=upstream.status_code,
-        headers=response_headers,
-        background=BackgroundTask(
-            _close_proxy_response,
-            upstream,
-            client,
-            global_semaphore,
-            service_semaphore,
-        ),
-    )
 
 
 async def _proxy_websocket(
@@ -1261,6 +1283,8 @@ async def _proxy_websocket(
         preview_prefix=preview_prefix,
     )
     connect_kwargs = _websocket_connect_kwargs(headers)
+    global_semaphore, service_semaphore = _proxy_stream_semaphores(context, record)
+    await _acquire_proxy_stream_slots(global_semaphore, service_semaphore)
     try:
         async with websockets.connect(target_url, **connect_kwargs) as upstream:
             await websocket.accept()
@@ -1270,6 +1294,9 @@ async def _proxy_websocket(
         if websocket.application_state != WebSocketState.DISCONNECTED:
             await websocket.close(code=1011, reason=reason)
         return
+    finally:
+        service_semaphore.release()
+        global_semaphore.release()
 
 
 def _websocket_connect_kwargs(headers: dict[str, str]) -> dict[str, Any]:
@@ -1344,6 +1371,30 @@ async def _close_proxy_response(
     finally:
         service_semaphore.release()
         global_semaphore.release()
+
+
+async def _acquire_proxy_stream_slots(
+    global_semaphore: asyncio.Semaphore,
+    service_semaphore: asyncio.Semaphore,
+) -> None:
+    global_acquired = False
+    try:
+        await asyncio.wait_for(
+            global_semaphore.acquire(),
+            timeout=PROXY_STREAM_ACQUIRE_TIMEOUT_SECONDS,
+        )
+        global_acquired = True
+        await asyncio.wait_for(
+            service_semaphore.acquire(),
+            timeout=PROXY_STREAM_ACQUIRE_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError as exc:
+        if global_acquired:
+            global_semaphore.release()
+        raise HTTPException(
+            status_code=429,
+            detail="Preview proxy stream limit reached",
+        ) from exc
 
 
 def _proxy_target_url(
@@ -1441,9 +1492,11 @@ _SENSITIVE_REQUEST_HEADERS = {
     "authorization",
     "cookie",
     "host",
+    "referer",
 }
 
 _SENSITIVE_RESPONSE_HEADERS = {
+    "service-worker-allowed",
     "set-cookie",
 }
 
@@ -1531,7 +1584,51 @@ def _proxy_response_headers(
             )
             continue
         forwarded[key] = value
+    _apply_capability_preview_header_values(forwarded, preview_prefix=preview_prefix)
     return forwarded
+
+
+def _is_capability_preview_prefix(preview_prefix: str) -> bool:
+    clean_prefix = "/" + preview_prefix.strip("/")
+    return clean_prefix == "/preview/p" or clean_prefix.startswith("/preview/p/")
+
+
+def _redact_capability_preview_prefix(preview_prefix: str) -> str:
+    if not _is_capability_preview_prefix(preview_prefix):
+        return preview_prefix
+    parts = preview_prefix.split("/")
+    for index, part in enumerate(parts):
+        if part == "preview" and index + 2 < len(parts) and parts[index + 1] == "p":
+            parts[index + 2] = "<redacted>"
+            return "/".join(parts)
+    return preview_prefix
+
+
+def _apply_capability_preview_header_values(
+    headers: dict[str, str],
+    *,
+    preview_prefix: str,
+) -> None:
+    if not _is_capability_preview_prefix(preview_prefix):
+        return
+    existing = {key.lower() for key in headers}
+    if "referrer-policy" not in existing:
+        headers["Referrer-Policy"] = "no-referrer"
+    if "cache-control" not in existing:
+        headers["Cache-Control"] = "no-store, private"
+
+
+def _apply_capability_preview_response_headers(
+    response: Response,
+    *,
+    preview_prefix: str,
+) -> None:
+    if not _is_capability_preview_prefix(preview_prefix):
+        return
+    if "referrer-policy" not in response.headers:
+        response.headers["Referrer-Policy"] = "no-referrer"
+    if "cache-control" not in response.headers:
+        response.headers["Cache-Control"] = "no-store, private"
 
 
 def _forwarded_headers(
@@ -1546,12 +1643,13 @@ def _forwarded_headers(
     existing = request.headers.get("x-forwarded-for")
     if existing and client_host:
         x_forwarded_for = f"{existing}, {client_host}"
+    safe_preview_prefix = _redact_capability_preview_prefix(preview_prefix)
     return {
         "X-Forwarded-Host": host,
         "X-Forwarded-Proto": request.url.scheme,
         "X-Forwarded-Port": str(port),
         "X-Forwarded-For": x_forwarded_for,
-        "X-Forwarded-Prefix": preview_prefix,
+        "X-Forwarded-Prefix": safe_preview_prefix,
         "X-Real-IP": client_host,
     }
 

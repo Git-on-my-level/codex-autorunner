@@ -155,6 +155,13 @@ class PreviewServiceSupervisor:
         network_policy: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> PreviewServiceRecord:
+        try:
+            if path.expanduser().is_symlink():
+                raise PreviewServiceSupervisorError("static path must not be a symlink")
+        except OSError as exc:
+            raise PreviewServiceSupervisorError(
+                "static path cannot be inspected"
+            ) from exc
         resolved = path.resolve()
         selected_kind = kind or (
             PreviewServiceKind.STATIC_DIR

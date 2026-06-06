@@ -35,10 +35,21 @@ def test_redirects_preserve_query_string():
     assert resp.headers["location"] == "/car/api/ping?foo=bar&nested=1"
 
 
-def test_redirects_drop_token_query_string():
+def test_redirects_preserve_generic_token_query_string():
     app = BasePathRouterMiddleware(_build_app(), "/car")
     client = TestClient(app)
     resp = client.get("/api/ping?foo=bar&token=secret&nested=1", follow_redirects=False)
+    assert resp.status_code == 308
+    assert resp.headers["location"] == "/car/api/ping?foo=bar&token=secret&nested=1"
+
+
+def test_redirects_drop_car_reserved_token_query_string():
+    app = BasePathRouterMiddleware(_build_app(), "/car")
+    client = TestClient(app)
+    resp = client.get(
+        "/api/ping?foo=bar&car_token=secret&car_preview_token=cap&nested=1",
+        follow_redirects=False,
+    )
     assert resp.status_code == 308
     assert resp.headers["location"] == "/car/api/ping?foo=bar&nested=1"
 

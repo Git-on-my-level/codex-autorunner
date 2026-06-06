@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, List
+from urllib.parse import urlsplit, urlunsplit
 
 from ..utils import atomic_write
 from .ids import generate_service_id, validate_service_id
@@ -19,6 +21,21 @@ from .models import (
 _STATE_DIR = ".codex-autorunner"
 _SERVICES_DIR = "services"
 _RECORDS_DIR = "records"
+_REDACTED = "<redacted>"
+_SECRET_ARG_NAMES = frozenset(
+    {
+        "--api-key",
+        "--apikey",
+        "--auth-token",
+        "--client-secret",
+        "--password",
+        "--secret",
+        "--token",
+    }
+)
+_SECRET_KEY_PATTERN = re.compile(
+    r"(API[_-]?KEY|AUTH[_-]?TOKEN|PASSWORD|SECRET|TOKEN)", re.I
+)
 NEEDS_ATTENTION_STATUSES = frozenset(
     {
         PreviewServiceStatus.UNHEALTHY.value,
@@ -286,12 +303,61 @@ def service_read_model(record: PreviewServiceRecord) -> dict[str, Any]:
 def _redact_desired_state(desired_state: dict[str, Any]) -> dict[str, Any]:
     command = desired_state.get("command")
     if isinstance(command, dict):
+        command = dict(command)
         env = command.get("env")
         if isinstance(env, dict):
-            command = dict(command)
-            command["env"] = {str(key): "<redacted>" for key in env}
-            desired_state = {**desired_state, "command": command}
+            command["env"] = {str(key): _REDACTED for key in env}
+        argv = command.get("argv")
+        if isinstance(argv, list):
+            command["argv"] = _redact_argv(argv)
+        cwd = command.get("cwd")
+        if isinstance(cwd, str):
+            command["cwd"] = _redact_shell_token(cwd)
+        desired_state = {**desired_state, "command": command}
     return desired_state
+
+
+def _redact_argv(argv: list[Any]) -> list[str]:
+    redacted: list[str] = []
+    redact_next = False
+    for item in argv:
+        token = str(item)
+        if redact_next:
+            redacted.append(_REDACTED)
+            redact_next = False
+            continue
+        name, separator, value = token.partition("=")
+        lowered = name.lower()
+        if lowered in _SECRET_ARG_NAMES:
+            if separator:
+                redacted.append(f"{name}={_REDACTED}")
+            else:
+                redacted.append(token)
+                redact_next = True
+            continue
+        if _SECRET_KEY_PATTERN.search(name) and separator:
+            redacted.append(f"{name}={_REDACTED}")
+            continue
+        redacted.append(_redact_shell_token(token))
+    return redacted
+
+
+def _redact_shell_token(value: str) -> str:
+    split = urlsplit(value)
+    if split.scheme and split.netloc and "@" in split.netloc:
+        host = split.hostname or ""
+        if split.port is not None:
+            host = f"{host}:{split.port}"
+        return urlunsplit(
+            (
+                split.scheme,
+                f"{_REDACTED}@{host}",
+                split.path,
+                split.query,
+                split.fragment,
+            )
+        )
+    return value
 
 
 def service_capabilities(record: PreviewServiceRecord) -> dict[str, bool]:
