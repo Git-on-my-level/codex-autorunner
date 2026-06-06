@@ -112,8 +112,8 @@ def test_safe_refresh_local_mac_hub_script_bounds_update_snapshots() -> None:
     script = Path("scripts/safe-refresh-local-mac-hub.sh").read_text(encoding="utf-8")
 
     assert "UPDATE_SNAPSHOT_MAX_COUNT" in script
-    assert "UPDATE_SNAPSHOT_MAX_AGE_DAYS" in script
-    assert "UPDATE_SNAPSHOT_MAX_TOTAL_BYTES" in script
     assert "--max-snapshots" in script
-    assert "--max-age-days" in script
-    assert "--max-total-bytes" in script
+    assert "UPDATE_SNAPSHOT_MAX_AGE_DAYS" not in script
+    assert "UPDATE_SNAPSHOT_MAX_TOTAL_BYTES" not in script
+    assert "--max-age-days" not in script
+    assert "--max-total-bytes" not in script

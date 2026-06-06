@@ -198,64 +198,59 @@ def _write_update_snapshot(
     return snapshot_root / run_id
 
 
-def test_prune_update_snapshots_bounds_count_and_age(
+def test_prune_update_snapshots_keeps_one_newest_snapshot(
     tmp_path: Path,
 ) -> None:
     snapshot_root = tmp_path / "update_snapshots"
     _write_update_snapshot(
         snapshot_root, "20260601-000000-1", created_at=100.0, bytes_count=9
     )
-    current = _write_update_snapshot(
+    _write_update_snapshot(
         snapshot_root, "20260602-000000-2", created_at=200.0, bytes_count=9
     )
     _write_update_snapshot(
         snapshot_root, "20260603-000000-3", created_at=300.0, bytes_count=9
     )
+
+    result = prune_update_snapshots(
+        snapshot_root,
+        max_snapshots=1,
+        open_file_checker=lambda _path: False,
+    )
+
+    assert sorted(path.name for path in snapshot_root.iterdir()) == [
+        "20260603-000000-3",
+    ]
+    assert len(result.pruned) == 2
+
+
+def test_prune_update_snapshots_protects_current_run(
+    tmp_path: Path,
+) -> None:
+    snapshot_root = tmp_path / "update_snapshots"
+    current = _write_update_snapshot(
+        snapshot_root, "20260601-000000-1", created_at=100.0, bytes_count=9
+    )
     _write_update_snapshot(
-        snapshot_root, "20260604-000000-4", created_at=400.0, bytes_count=9
+        snapshot_root, "20260602-000000-2", created_at=200.0, bytes_count=9
+    )
+    _write_update_snapshot(
+        snapshot_root, "20260603-000000-3", created_at=300.0, bytes_count=9
     )
 
     result = prune_update_snapshots(
         snapshot_root,
         current_run_id=current.name,
         max_snapshots=1,
-        max_age_seconds=250,
-        max_total_bytes=0,
-        now=500.0,
         open_file_checker=lambda _path: False,
     )
 
     assert current.exists()
     assert sorted(path.name for path in snapshot_root.iterdir()) == [
-        "20260602-000000-2",
-        "20260604-000000-4",
+        "20260601-000000-1",
+        "20260603-000000-3",
     ]
-    assert len(result.pruned) == 2
-
-
-def test_prune_update_snapshots_enforces_total_byte_budget(
-    tmp_path: Path,
-) -> None:
-    snapshot_root = tmp_path / "update_snapshots"
-    oldest = _write_update_snapshot(
-        snapshot_root, "20260601-000000-1", created_at=100.0, bytes_count=10_000
-    )
-    newest = _write_update_snapshot(
-        snapshot_root, "20260602-000000-2", created_at=200.0, bytes_count=10_000
-    )
-
-    result = prune_update_snapshots(
-        snapshot_root,
-        max_snapshots=0,
-        max_age_seconds=0,
-        max_total_bytes=15_000,
-        now=500.0,
-        open_file_checker=lambda _path: False,
-    )
-
-    assert not oldest.exists()
-    assert newest.exists()
-    assert result.pruned == (str(oldest),)
+    assert result.pruned == (str(snapshot_root / "20260602-000000-2"),)
 
 
 def test_prune_update_snapshots_skips_directories_with_open_files(
@@ -272,9 +267,6 @@ def test_prune_update_snapshots_skips_directories_with_open_files(
     result = prune_update_snapshots(
         snapshot_root,
         max_snapshots=1,
-        max_age_seconds=0,
-        max_total_bytes=0,
-        now=500.0,
         open_file_checker=lambda path: path == open_snapshot,
     )
 
@@ -300,8 +292,6 @@ def test_snapshot_orchestration_db_transaction_reports_prune_result(
         snapshot_root=snapshot_root,
         run_id="new-run",
         max_snapshots=1,
-        max_age_seconds=0,
-        max_total_bytes=0,
     )
 
     assert Path(transaction.snapshot.snapshot_dir).exists()

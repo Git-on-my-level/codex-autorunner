@@ -107,13 +107,10 @@ CAR does not install third-party runtimes as part of the state-root contract.
 - macOS safe refresh stores update rollback snapshots under
   `~/.codex-autorunner/update_snapshots/` when `UPDATE_STATUS_PATH` uses the
   global state root.
-- Snapshot pruning runs after every `snapshot-db` update phase. Defaults keep
-  at most 5 snapshot directories, remove snapshots older than 14 days, and
-  enforce a 5 GiB total byte budget.
-- Override with `UPDATE_SNAPSHOT_MAX_COUNT`, `UPDATE_SNAPSHOT_MAX_AGE_DAYS`,
-  and `UPDATE_SNAPSHOT_MAX_TOTAL_BYTES` when running
-  `scripts/safe-refresh-local-mac-hub.sh`. Set a value to `0` to disable that
-  specific bound.
+- Snapshot pruning runs after every `snapshot-db` update phase. The default
+  keeps only the newest snapshot directory needed for rollback.
+- Override with `UPDATE_SNAPSHOT_MAX_COUNT` when running
+  `scripts/safe-refresh-local-mac-hub.sh`. Set it to `0` to disable pruning.
 - Manual inspection and pruning:
 
 ```bash

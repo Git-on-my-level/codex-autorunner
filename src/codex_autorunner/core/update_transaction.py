@@ -28,9 +28,7 @@ _MAX_PHASE_TIMINGS = 24
 
 _ORCHESTRATION_DB_SUFFIXES = ("", "-wal", "-shm")
 _SNAPSHOT_METADATA = "snapshot.json"
-_DEFAULT_MAX_SNAPSHOTS = 5
-_DEFAULT_MAX_AGE_DAYS = 14
-_DEFAULT_MAX_TOTAL_BYTES = 5 * 1024 * 1024 * 1024
+_DEFAULT_MAX_SNAPSHOTS = 1
 
 OpenFileChecker = Callable[[Path], bool]
 
@@ -70,10 +68,6 @@ class UpdateSnapshotPruneResult:
     skipped_open: tuple[str, ...]
     skipped_invalid: tuple[str, ...]
     max_snapshots: int | None
-    max_age_seconds: int | None
-    max_total_bytes: int | None
-    total_bytes_before: int
-    total_bytes_after: int
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -83,7 +77,6 @@ class UpdateSnapshotPruneResult:
 class UpdateSnapshotDirectory:
     path: Path
     created_at: float
-    size_bytes: int
 
 
 @dataclass(frozen=True)
@@ -103,17 +96,6 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     except (OSError, json.JSONDecodeError):
         return None
     return parsed if isinstance(parsed, dict) else None
-
-
-def _directory_size(path: Path) -> int:
-    total = 0
-    for item in path.rglob("*"):
-        try:
-            if item.is_file() or item.is_symlink():
-                total += item.lstat().st_size
-        except OSError:
-            continue
-    return total
 
 
 def _snapshot_created_at(path: Path) -> float:
@@ -168,7 +150,6 @@ def collect_update_snapshots(
                 UpdateSnapshotDirectory(
                     path=child,
                     created_at=_snapshot_created_at(child),
-                    size_bytes=_directory_size(child),
                 )
             )
         except OSError:
@@ -181,21 +162,14 @@ def prune_update_snapshots(
     *,
     current_run_id: str | None = None,
     max_snapshots: int | None = _DEFAULT_MAX_SNAPSHOTS,
-    max_age_seconds: int | None = _DEFAULT_MAX_AGE_DAYS * 24 * 60 * 60,
-    max_total_bytes: int | None = _DEFAULT_MAX_TOTAL_BYTES,
-    now: float | None = None,
     open_file_checker: OpenFileChecker | None = None,
 ) -> UpdateSnapshotPruneResult:
     max_snapshots = _positive_int_or_none(max_snapshots)
-    max_age_seconds = _positive_int_or_none(max_age_seconds)
-    max_total_bytes = _positive_int_or_none(max_total_bytes)
-    now = time.time() if now is None else now
     open_file_checker = (
         _has_open_files if open_file_checker is None else open_file_checker
     )
 
     snapshots, skipped_invalid = collect_update_snapshots(snapshot_root)
-    total_before = sum(snapshot.size_bytes for snapshot in snapshots)
 
     snapshots_by_age = sorted(
         snapshots,
@@ -211,29 +185,8 @@ def prune_update_snapshots(
             if snapshot.path not in protected:
                 prune_paths.add(snapshot.path)
 
-    if max_age_seconds is not None:
-        oldest_allowed = now - max_age_seconds
-        for snapshot in snapshots:
-            if snapshot.created_at < oldest_allowed and snapshot.path not in protected:
-                prune_paths.add(snapshot.path)
-
-    if max_total_bytes is not None:
-        retained_bytes = total_before - sum(
-            snapshot.size_bytes
-            for snapshot in snapshots
-            if snapshot.path in prune_paths
-        )
-        for snapshot in reversed(snapshots_by_age):
-            if retained_bytes <= max_total_bytes:
-                break
-            if snapshot.path in protected or snapshot.path in prune_paths:
-                continue
-            prune_paths.add(snapshot.path)
-            retained_bytes -= snapshot.size_bytes
-
     pruned: list[str] = []
     skipped_open: list[str] = []
-    size_by_path = {snapshot.path: snapshot.size_bytes for snapshot in snapshots}
     for path in sorted(prune_paths):
         if open_file_checker(path):
             skipped_open.append(str(path))
@@ -243,7 +196,6 @@ def prune_update_snapshots(
         kept_paths.discard(path)
 
     kept = tuple(str(path) for path in sorted(kept_paths))
-    total_after = total_before - sum(size_by_path.get(Path(path), 0) for path in pruned)
     return UpdateSnapshotPruneResult(
         snapshot_root=str(snapshot_root),
         kept=kept,
@@ -251,10 +203,6 @@ def prune_update_snapshots(
         skipped_open=tuple(skipped_open),
         skipped_invalid=skipped_invalid,
         max_snapshots=max_snapshots,
-        max_age_seconds=max_age_seconds,
-        max_total_bytes=max_total_bytes,
-        total_bytes_before=total_before,
-        total_bytes_after=total_after,
     )
 
 
@@ -380,8 +328,6 @@ def snapshot_orchestration_db_transaction(
     snapshot_root: Path,
     run_id: str,
     max_snapshots: int | None = _DEFAULT_MAX_SNAPSHOTS,
-    max_age_seconds: int | None = _DEFAULT_MAX_AGE_DAYS * 24 * 60 * 60,
-    max_total_bytes: int | None = _DEFAULT_MAX_TOTAL_BYTES,
 ) -> UpdateSnapshotTransaction:
     snapshot = snapshot_orchestration_db(
         hub_root,
@@ -392,8 +338,6 @@ def snapshot_orchestration_db_transaction(
         snapshot_root,
         current_run_id=run_id,
         max_snapshots=max_snapshots,
-        max_age_seconds=max_age_seconds,
-        max_total_bytes=max_total_bytes,
     )
     return UpdateSnapshotTransaction(snapshot=snapshot, prune=prune)
 
@@ -483,30 +427,10 @@ def _build_parser() -> argparse.ArgumentParser:
             "Use 0 to disable count pruning."
         ),
     )
-    snapshot.add_argument(
-        "--max-age-days",
-        type=float,
-        default=float(_DEFAULT_MAX_AGE_DAYS),
-        help="Maximum snapshot age in days. Use 0 to disable age pruning.",
-    )
-    snapshot.add_argument(
-        "--max-total-bytes",
-        type=int,
-        default=_DEFAULT_MAX_TOTAL_BYTES,
-        help=(
-            "Maximum total bytes under the update snapshot root. "
-            "Use 0 to disable byte-budget pruning."
-        ),
-    )
-
     prune = sub.add_parser("prune-snapshots", help="Prune update snapshot history.")
     prune.add_argument("--snapshot-root", required=True)
     prune.add_argument("--current-run-id")
     prune.add_argument("--max-snapshots", type=int, default=_DEFAULT_MAX_SNAPSHOTS)
-    prune.add_argument(
-        "--max-age-days", type=float, default=float(_DEFAULT_MAX_AGE_DAYS)
-    )
-    prune.add_argument("--max-total-bytes", type=int, default=_DEFAULT_MAX_TOTAL_BYTES)
 
     restore = sub.add_parser("restore-db", help="Restore an orchestration DB snapshot.")
     restore.add_argument("--snapshot-dir", required=True)
@@ -538,34 +462,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "snapshot-db":
-        max_age_seconds = (
-            int(args.max_age_days * 24 * 60 * 60)
-            if args.max_age_days is not None
-            else None
-        )
         transaction = snapshot_orchestration_db_transaction(
             Path(args.hub_root),
             snapshot_root=Path(args.snapshot_root),
             run_id=args.run_id,
             max_snapshots=args.max_snapshots,
-            max_age_seconds=max_age_seconds,
-            max_total_bytes=args.max_total_bytes,
         )
         print(json.dumps(transaction.to_dict(), sort_keys=True))
         return 0
 
     if args.command == "prune-snapshots":
-        max_age_seconds = (
-            int(args.max_age_days * 24 * 60 * 60)
-            if args.max_age_days is not None
-            else None
-        )
         prune = prune_update_snapshots(
             Path(args.snapshot_root),
             current_run_id=args.current_run_id,
             max_snapshots=args.max_snapshots,
-            max_age_seconds=max_age_seconds,
-            max_total_bytes=args.max_total_bytes,
         )
         print(json.dumps(prune.to_dict(), sort_keys=True))
         return 0
