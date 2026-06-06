@@ -10,10 +10,12 @@ from codex_autorunner.core.config_validation import (
     _normalize_ticket_flow_approval_mode,
     _validate_agents_config,
     _validate_app_server_config,
+    _validate_auth_config,
     _validate_collaboration_policy_config,
     _validate_discord_bot_config,
     _validate_housekeeping_config,
     _validate_opencode_config,
+    _validate_preview_services_config,
     _validate_repo_config,
     _validate_server_security,
     _validate_static_assets_config,
@@ -121,6 +123,20 @@ class TestIsStrictInt:
         assert _is_strict_int(3.14) is False
 
 
+class TestValidateAuthConfig:
+    def test_auth_mode_accepts_explicit_modes(self) -> None:
+        _validate_auth_config({"auth": {"mode": "local_trusted_cookie"}})
+        _validate_auth_config({"auth": {"mode": "hosted_bearer"}})
+
+    def test_auth_mode_rejects_invalid_mode(self) -> None:
+        with pytest.raises(ConfigError, match="auth.mode must be one of"):
+            _validate_auth_config({"auth": {"mode": "cookie"}})
+
+    def test_auth_section_must_be_mapping(self) -> None:
+        with pytest.raises(ConfigError, match="auth section must be a mapping"):
+            _validate_auth_config({"auth": "hosted_bearer"})
+
+
 class TestValidateServerSecurity:
     def test_loopback_without_allowed_hosts_ok(self) -> None:
         _validate_server_security({"host": "127.0.0.1"})
@@ -154,6 +170,67 @@ class TestValidateServerSecurity:
     def test_allowed_origins_entries_must_be_strings(self) -> None:
         with pytest.raises(ConfigError, match="must be a list of strings"):
             _validate_server_security({"allowed_origins": [123]})
+
+
+class TestValidatePreviewServicesConfig:
+    def test_defaults_are_valid(self, tmp_path: Path) -> None:
+        _validate_preview_services_config(
+            {
+                "preview_services": {
+                    "enabled": True,
+                    "port_range": {"start": 39000, "end": 39999},
+                    "default_host": "127.0.0.1",
+                    "proxy_allowed_hosts": ["127.0.0.1", "::1", "localhost"],
+                    "static_allowed_roots": [],
+                    "log_max_bytes": 1048576,
+                    "log_tail_default_lines": 200,
+                    "auto_start_on_hub_start_default": False,
+                }
+            },
+            root=tmp_path,
+        )
+
+    def test_invalid_port_range_order_raises(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigError, match="start must be <= .*end"):
+            _validate_preview_services_config(
+                {"preview_services": {"port_range": {"start": 40000, "end": 39999}}},
+                root=tmp_path,
+            )
+
+    def test_invalid_port_range_bounds_raise(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigError, match="between 1 and 65535"):
+            _validate_preview_services_config(
+                {"preview_services": {"port_range": {"start": 0, "end": 39999}}},
+                root=tmp_path,
+            )
+
+    def test_proxy_allowed_hosts_must_be_loopback(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigError, match="entries must be loopback hosts"):
+            _validate_preview_services_config(
+                {"preview_services": {"proxy_allowed_hosts": ["example.com"]}},
+                root=tmp_path,
+            )
+
+    def test_proxy_allowed_hosts_rejects_wildcard(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigError, match="must not include '\\*'"):
+            _validate_preview_services_config(
+                {"preview_services": {"proxy_allowed_hosts": ["*"]}},
+                root=tmp_path,
+            )
+
+    def test_static_allowed_roots_rejects_parent_segments(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigError, match="must not contain '..'"):
+            _validate_preview_services_config(
+                {"preview_services": {"static_allowed_roots": ["../outside"]}},
+                root=tmp_path,
+            )
+
+    def test_static_allowed_roots_rejects_filesystem_root(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigError, match="must not be a filesystem root"):
+            _validate_preview_services_config(
+                {"preview_services": {"static_allowed_roots": ["/"]}},
+                root=tmp_path,
+            )
 
 
 class TestValidateAppServerConfig:

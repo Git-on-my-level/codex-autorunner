@@ -66,6 +66,80 @@ def test_request_logs_exclude_query_string_token() -> None:
         assert payload["path"] == "/api/terminal"
 
 
+def test_request_logs_redact_preview_capability_path_token() -> None:
+    logger, stream, handler = _make_buffer_logger()
+    app = _DummyApp(logger)
+    middleware = RequestIdMiddleware(app)
+
+    async def _run():
+        scope = {
+            "type": "http",
+            "path": "/preview/p/capability-secret/assets/app.js",
+            "query_string": b"",
+            "headers": [],
+            "method": "GET",
+            "scheme": "http",
+            "http_version": "1.1",
+            "client": ("127.0.0.1", 12345),
+            "app": app,
+        }
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            pass
+
+        await middleware(scope, receive, send)
+
+    anyio.run(_run)
+    handler.flush()
+
+    lines = [line for line in stream.getvalue().splitlines() if line.strip()]
+    assert lines
+    for line in lines:
+        assert "capability-secret" not in line
+        payload = json.loads(line)
+        assert payload["path"] == "/preview/p/<redacted>/assets/app.js"
+
+
+def test_request_logs_redact_base_path_preview_capability_path_token() -> None:
+    logger, stream, handler = _make_buffer_logger()
+    app = _DummyApp(logger)
+    middleware = RequestIdMiddleware(app)
+
+    async def _run():
+        scope = {
+            "type": "http",
+            "path": "/car/preview/p/capability-secret/assets/app.js",
+            "query_string": b"",
+            "headers": [],
+            "method": "GET",
+            "scheme": "http",
+            "http_version": "1.1",
+            "client": ("127.0.0.1", 12345),
+            "app": app,
+        }
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            pass
+
+        await middleware(scope, receive, send)
+
+    anyio.run(_run)
+    handler.flush()
+
+    lines = [line for line in stream.getvalue().splitlines() if line.strip()]
+    assert lines
+    for line in lines:
+        assert "capability-secret" not in line
+        payload = json.loads(line)
+        assert payload["path"] == "/car/preview/p/<redacted>/assets/app.js"
+
+
 def test_heavy_endpoint_logs_response_size() -> None:
     logger, stream, handler = _make_buffer_logger()
 

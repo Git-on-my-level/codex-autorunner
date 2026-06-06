@@ -3,7 +3,11 @@ from typing import Optional
 
 import pytest
 
-from codex_autorunner.surfaces.web.middleware import AuthTokenMiddleware
+from codex_autorunner.surfaces.web.middleware import (
+    AuthTokenMiddleware,
+    BasePathRouterMiddleware,
+    SecurityHeadersMiddleware,
+)
 
 
 def _scope(path: str, root_path: str = "") -> dict:
@@ -51,6 +55,30 @@ def test_auth_middleware_respects_base_path() -> None:
     assert middleware._requires_auth(_scope("/car/hub/repos")) is True
 
 
+@pytest.mark.parametrize("path", ["/services", "/preview/p/token/index.html"])
+def test_base_path_router_redirects_preview_and_services_prefixes(path: str) -> None:
+    middleware = BasePathRouterMiddleware(lambda *_: None, base_path="/car")
+
+    assert middleware._should_redirect(path, "") is True
+    assert middleware._should_redirect(f"/car{path}", "") is False
+
+
+def test_security_headers_middleware_classifies_base_path_preview_routes() -> None:
+    middleware = SecurityHeadersMiddleware(lambda *_: None, base_path="/car")
+
+    assert middleware._is_preview_path(_scope("/preview/p/token/index.html")) is True
+    assert (
+        middleware._is_preview_path(_scope("/car/preview/p/token/index.html")) is True
+    )
+    assert (
+        middleware._is_preview_path(
+            _scope("/car/preview/p/token/index.html", root_path="/car")
+        )
+        is True
+    )
+    assert middleware._is_preview_path(_scope("/car/hub/services")) is False
+
+
 def test_auth_middleware_extracts_ws_protocol_token() -> None:
     middleware = AuthTokenMiddleware(lambda *_: None, token="token")
     scope = _ws_scope(
@@ -95,3 +123,41 @@ def test_auth_middleware_accepts_browser_session_cookie() -> None:
     scope["headers"] = [(b"cookie", b"car_session=session-secret")]
     assert middleware._extract_session_cookie(scope) == "session-secret"
     assert middleware.session_validator(middleware._extract_session_cookie(scope))
+
+
+def test_auth_middleware_hosted_mode_ignores_session_cookie() -> None:
+    middleware = AuthTokenMiddleware(
+        lambda *_: None,
+        token="hub-secret",
+        session_validator=lambda token: token == "session-secret",
+        allow_session_auth=False,
+    )
+    scope = _scope("/hub/repos")
+    scope["headers"] = [(b"cookie", b"car_session=session-secret")]
+
+    assert middleware._extract_header_token(scope) is None
+    assert middleware._extract_session_cookie(scope) == "session-secret"
+    assert middleware.allow_session_auth is False
+
+
+def test_auth_middleware_hosted_mode_accepts_session_bearer() -> None:
+    middleware = AuthTokenMiddleware(
+        lambda *_: None,
+        token="hub-secret",
+        session_validator=lambda token: token == "session-secret",
+        allow_session_auth=False,
+        allow_session_bearer=True,
+    )
+    scope = _scope("/hub/repos")
+    scope["headers"] = [(b"authorization", b"Bearer session-secret")]
+
+    assert middleware._extract_header_token(scope) == "session-secret"
+    assert middleware.allow_session_auth is False
+    assert middleware.allow_session_bearer is True
+
+
+def test_auth_middleware_preview_capability_route_is_public() -> None:
+    middleware = AuthTokenMiddleware(lambda *_: None, token="hub-secret")
+
+    assert middleware._requires_auth(_scope("/preview/p/token/index.html")) is False
+    assert middleware._requires_auth(_scope("/preview/services/svc_base123/")) is True

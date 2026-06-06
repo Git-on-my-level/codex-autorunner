@@ -15,6 +15,7 @@
     selectWorktreeSummaries
   } from '$lib/data';
   import { connectionStore, type ConnectionStatus } from '$lib/runtime/connectionStore.svelte';
+  import { consumeHostedBearerFromLocation } from '$lib/runtime/hostedAuth';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import {
     applyThemePreference,
@@ -47,6 +48,7 @@
   );
 
   onMount(() => {
+    consumeHostedBearerFromLocation();
     attachThemeSchemeListener();
     try {
       if (localStorage.getItem(THEME_STORAGE_KEY) === null) {

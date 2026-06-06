@@ -42,6 +42,14 @@ from ...core.managed_thread_identity import ManagedThreadIdentityStore
 from ...core.managed_thread_store import prepare_managed_thread_store
 from ...core.optional_dependencies import require_optional_dependencies
 from ...core.orchestration.sqlite import prepare_hub_orchestration_db_provider
+from ...core.preview_services import (
+    DEFAULT_LOG_MAX_BYTES,
+    DEFAULT_PORT_RANGE_END,
+    DEFAULT_PORT_RANGE_START,
+    DEFAULT_PREVIEW_HOST,
+    DEFAULT_STARTUP_HEALTH_TIMEOUT_SECONDS,
+    PreviewServiceSupervisor,
+)
 from ...core.runtime import RuntimeContext
 from ...core.runtime_services import RuntimeServices
 from ...core.state import load_state
@@ -117,6 +125,7 @@ class HubAppContext:
     opencode_supervisor: Optional[OpenCodeSupervisor]
     opencode_prune_interval: Optional[float]
     runtime_services: RuntimeServices
+    preview_service_manager: PreviewServiceSupervisor
     projection_store: HubProjectionStore
     shared_state_service: HubSharedStateService
     asset_version: str
@@ -716,6 +725,12 @@ def build_hub_context(
         app_server_supervisor=app_server_supervisor,
         opencode_supervisor=opencode_supervisor,
     )
+    preview_service_manager = _build_preview_service_manager(
+        config.root,
+        raw_config=config.raw,
+        durable_writes=durable_writes,
+    )
+    runtime_services.preview_service_manager = preview_service_manager
     projection_store = HubProjectionStore(
         config.root,
         durable=bool(getattr(config, "durable_writes", False)),
@@ -742,6 +757,7 @@ def build_hub_context(
         opencode_supervisor=opencode_supervisor,
         opencode_prune_interval=opencode_prune_interval,
         runtime_services=runtime_services,
+        preview_service_manager=preview_service_manager,
         projection_store=projection_store,
         shared_state_service=shared_state_service,
         asset_version=resolved_asset_version,
@@ -761,7 +777,63 @@ def apply_hub_context(app, context: HubAppContext) -> None:
     app.state.opencode_supervisor = context.opencode_supervisor
     app.state.opencode_prune_interval = context.opencode_prune_interval
     app.state.runtime_services = context.runtime_services
+    app.state.preview_service_manager = context.preview_service_manager
     app.state.hub_projection_store = context.projection_store
     app.state.hub_control_plane_service = context.shared_state_service
     app.state.asset_version = context.asset_version
     app.state.hub_supervisor = context.supervisor
+
+
+def _build_preview_service_manager(
+    hub_root: Path,
+    *,
+    raw_config: Mapping[str, Any],
+    durable_writes: bool,
+) -> PreviewServiceSupervisor:
+    preview_config = raw_config.get("preview_services")
+    preview_config = preview_config if isinstance(preview_config, Mapping) else {}
+    raw_range = preview_config.get("port_range")
+    range_config = raw_range if isinstance(raw_range, Mapping) else {}
+    start = _coerce_int(
+        range_config.get("start"),
+        default=DEFAULT_PORT_RANGE_START,
+    )
+    end = _coerce_int(
+        range_config.get("end"),
+        default=DEFAULT_PORT_RANGE_END,
+    )
+    host = str(preview_config.get("default_host") or DEFAULT_PREVIEW_HOST)
+    log_max_bytes = _coerce_int(
+        preview_config.get("log_max_bytes"),
+        default=DEFAULT_LOG_MAX_BYTES,
+    )
+    startup_health_timeout_seconds = _coerce_float(
+        preview_config.get("startup_health_timeout_seconds"),
+        default=DEFAULT_STARTUP_HEALTH_TIMEOUT_SECONDS,
+    )
+    return PreviewServiceSupervisor(
+        hub_root,
+        durable=durable_writes,
+        host=host,
+        port_range=(start, end),
+        log_max_bytes=log_max_bytes,
+        startup_health_timeout_seconds=startup_health_timeout_seconds,
+    )
+
+
+def _coerce_int(value: object, *, default: int) -> int:
+    if not isinstance(value, (str, bytes, bytearray, int, float)):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_float(value: object, *, default: float) -> float:
+    if not isinstance(value, (str, bytes, bytearray, int, float)):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default

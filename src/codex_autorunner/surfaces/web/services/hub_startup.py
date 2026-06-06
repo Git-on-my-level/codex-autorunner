@@ -34,6 +34,7 @@ from ....core.orchestration.execution_history_maintenance import (
 )
 from ....core.pma_domain.constants import DEFAULT_PMA_LANE_ID
 from ....core.pma_queue import PmaQueue, QueueItemState
+from ....core.preview_services import PreviewServiceKind
 from ....housekeeping import (
     DEFAULT_FLOW_WORKER_REAP_INTERVAL_SECONDS,
     reap_managed_docker_containers,
@@ -50,6 +51,7 @@ from .pma.managed_thread_runtime import (
 _DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS = float(
     parse_flow_retention_config(None).sweep_interval_seconds
 )
+_DEFAULT_PREVIEW_SERVICE_RECONCILE_INTERVAL_SECONDS = 5.0
 
 
 class _IdlePrunable(Protocol):
@@ -204,6 +206,7 @@ class HubStartupService:
             tasks.append(asyncio.create_task(self.run_deferred_startup(app)))
             self._register_housekeeping_tasks(app, tasks)
             self._register_prune_tasks(app, tasks)
+            self._register_preview_service_reconciler(app, tasks)
             registered_pma_lane_starter, pma_lane_starter_register = (
                 self._register_pma_lane_starter(app)
             )
@@ -251,6 +254,7 @@ class HubStartupService:
         await self._restore_managed_threads(app, log)
         self._reap_managed_processes(app, log)
         await self._start_pma_lane_workers(app, log)
+        await self._start_autostart_preview_services(app, log)
         log.info(
             "hub.deferred_startup.phase skipped=start_repo_lifespans "
             "detail=repo_apps_stay_lazy_until_first_request"
@@ -309,6 +313,128 @@ class HubStartupService:
                 logging.WARNING,
                 "Managed process reaper failed at hub startup",
                 exc,
+            )
+
+    def _preview_services_enabled(self, config: object) -> bool:
+        raw_config = getattr(config, "raw", {})
+        if not isinstance(raw_config, dict):
+            return True
+        preview_config = raw_config.get("preview_services")
+        if not isinstance(preview_config, dict):
+            return True
+        enabled = preview_config.get("enabled")
+        return True if enabled is None else bool(enabled)
+
+    def _preview_service_reconcile_interval_seconds(self, config: object) -> float:
+        raw_config = getattr(config, "raw", {})
+        if not isinstance(raw_config, dict):
+            return _DEFAULT_PREVIEW_SERVICE_RECONCILE_INTERVAL_SECONDS
+        preview_config = raw_config.get("preview_services")
+        if not isinstance(preview_config, dict):
+            return _DEFAULT_PREVIEW_SERVICE_RECONCILE_INTERVAL_SECONDS
+        raw_interval = preview_config.get("reconcile_interval_seconds")
+        if not isinstance(raw_interval, (int, float)) or raw_interval <= 0:
+            return _DEFAULT_PREVIEW_SERVICE_RECONCILE_INTERVAL_SECONDS
+        return float(raw_interval)
+
+    def _register_preview_service_reconciler(
+        self,
+        app: FastAPI,
+        tasks: list[asyncio.Task],
+    ) -> None:
+        if not self._preview_services_enabled(app.state.config):
+            return
+        manager = getattr(self._context, "preview_service_manager", None)
+        if manager is None:
+            return
+        interval = self._preview_service_reconcile_interval_seconds(app.state.config)
+        tasks.append(
+            asyncio.create_task(
+                self._preview_service_reconciler_loop(
+                    app,
+                    initial_delay=min(interval, 5.0),
+                    interval=interval,
+                )
+            )
+        )
+
+    async def _preview_service_reconciler_loop(
+        self,
+        app: FastAPI,
+        *,
+        initial_delay: float,
+        interval: float,
+    ) -> None:
+        await asyncio.sleep(initial_delay)
+        manager = self._context.preview_service_manager
+        while True:
+            try:
+                await asyncio.to_thread(manager.reconcile)
+            except (
+                OSError,
+                RuntimeError,
+                ValueError,
+                TypeError,
+                AttributeError,
+            ) as exc:  # intentional: background loop must not crash
+                safe_log(
+                    app.state.logger,
+                    logging.WARNING,
+                    "Preview service reconciler failed",
+                    exc,
+                )
+            await asyncio.sleep(interval)
+
+    async def _start_autostart_preview_services(
+        self, app: FastAPI, log: logging.Logger
+    ) -> None:
+        if not self._preview_services_enabled(app.state.config):
+            return
+        manager = getattr(self._context, "preview_service_manager", None)
+        if manager is None:
+            return
+        t_phase = time.monotonic()
+        started: list[str] = []
+        try:
+            records = await asyncio.to_thread(manager.registry.list)
+            for record in records:
+                if record.kind != PreviewServiceKind.MANAGED_COMMAND.value:
+                    continue
+                if not record.restart_policy.auto_start_on_hub_start:
+                    continue
+                try:
+                    await asyncio.to_thread(manager.start, record.service_id)
+                    started.append(record.service_id)
+                except (
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                    TypeError,
+                ) as exc:  # intentional: best-effort startup
+                    safe_log(
+                        log,
+                        logging.WARNING,
+                        f"Preview service autostart failed for {record.service_id}",
+                        exc,
+                    )
+        except (
+            OSError,
+            RuntimeError,
+            ValueError,
+            TypeError,
+            AttributeError,
+        ) as exc:  # intentional: best-effort startup
+            safe_log(
+                log,
+                logging.WARNING,
+                "Preview service autostart pass failed at hub startup",
+                exc,
+            )
+        else:
+            log.info(
+                "hub.deferred_startup.phase done=preview_service_autostart services=%s elapsed_ms=%.2f",
+                ",".join(started) if started else "-",
+                (time.monotonic() - t_phase) * 1000,
             )
 
     async def _start_pma_lane_workers(self, app: FastAPI, log: logging.Logger) -> None:

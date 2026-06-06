@@ -4,6 +4,7 @@ import {
   type CursorStorage,
   type EventSourceFactory
 } from '$lib/runtime/eventSourceRuntime';
+import { hostedBearerToken } from '$lib/runtime/hostedAuth';
 import type { StreamVisibilityPolicy } from '$lib/runtime/streamVisibilityPolicy';
 import { parseJsonSseFrame, type SseEvent, type StreamSubscription } from '$lib/api/streaming';
 
@@ -40,6 +41,7 @@ export class ReadModelStreamManager<T> implements StreamSubscription {
       reconnectBaseMs: options.reconnectBaseMs,
       reconnectMaxMs: options.reconnectMaxMs,
       withCredentials: options.withCredentials,
+      hubBearerTokenProvider: hostedBearerToken,
       eventSourceFactory: options.eventSourceFactory,
       visibilityPolicy: options.visibilityPolicy,
       onResume: options.onResume,

@@ -19,6 +19,25 @@ from .static_assets import security_headers
 
 logger = logging.getLogger("codex_autorunner.web.middleware")
 
+_REDACTED_PREVIEW_TOKEN = "<redacted>"
+_CAR_QUERY_TOKEN_PARAMS = frozenset(
+    {
+        "car_token",
+        "car_auth_token",
+        "car_preview_token",
+    }
+)
+
+
+def redact_preview_capability_tokens(path: str) -> str:
+    if "/preview/p/" not in path:
+        return path
+    parts = path.split("/")
+    for index, part in enumerate(parts):
+        if part == "preview" and index + 2 < len(parts) and parts[index + 1] == "p":
+            parts[index + 2] = _REDACTED_PREVIEW_TOKEN
+    return "/".join(parts)
+
 
 class BasePathRouterMiddleware:
     """
@@ -39,6 +58,8 @@ class BasePathRouterMiddleware:
                 "/_app",
                 "/api",
                 "/hub",
+                "/preview",
+                "/services",
                 "/chats",
                 "/repos",
                 "/worktrees",
@@ -146,7 +167,7 @@ class BasePathRouterMiddleware:
                     for key, value in parse_qsl(
                         query_string.decode("latin-1"), keep_blank_values=True
                     )
-                    if key.lower() != "token"
+                    if key.lower() not in _CAR_QUERY_TOKEN_PARAMS
                 ]
                 if query_pairs:
                     target_path = f"{target_path}?{urlencode(query_pairs)}"
@@ -168,13 +189,23 @@ class AuthTokenMiddleware:
         *,
         session_cookie_name: str = "car_session",
         session_validator: Optional[Callable[[Optional[str]], bool]] = None,
+        allow_session_auth: bool = True,
+        allow_session_bearer: bool = False,
     ):
         self.app = app
         self.token = token
         self.base_path = normalize_base_path(base_path)
         self.session_cookie_name = session_cookie_name
         self.session_validator = session_validator
-        self.public_prefixes = ("/_app", "/health", "/auth/bootstrap", "/cat")
+        self.allow_session_auth = allow_session_auth
+        self.allow_session_bearer = allow_session_bearer
+        self.public_prefixes = (
+            "/_app",
+            "/health",
+            "/auth/bootstrap",
+            "/cat",
+            "/preview/p",
+        )
 
     def __getattr__(self, name):
         return getattr(self.app, name)
@@ -327,7 +358,15 @@ class AuthTokenMiddleware:
         if token and self.token and hmac.compare_digest(token, self.token):
             return await self.app(scope, receive, send)
 
-        if self.session_validator is not None:
+        if (
+            token
+            and self.allow_session_bearer
+            and self.session_validator is not None
+            and self.session_validator(token)
+        ):
+            return await self.app(scope, receive, send)
+
+        if self.allow_session_auth and self.session_validator is not None:
             session_token = self._extract_session_cookie(scope)
             if self.session_validator(session_token):
                 return await self.app(scope, receive, send)
@@ -528,15 +567,33 @@ class HostOriginMiddleware:
 class SecurityHeadersMiddleware:
     """Attach security headers to HTML responses."""
 
-    def __init__(self, app):
+    def __init__(self, app, base_path: str = ""):
         self.app = app
+        self.base_path = normalize_base_path(base_path)
         self.headers = security_headers()
 
     def __getattr__(self, name):
         return getattr(self.app, name)
 
+    def _classify_path(self, scope) -> str:
+        path = str(scope.get("path") or "")
+        root_path = str(scope.get("root_path") or "")
+        if root_path and path.startswith(root_path):
+            return path[len(root_path) :] or "/"
+        if self.base_path and path.startswith(self.base_path):
+            return path[len(self.base_path) :] or "/"
+        return path
+
+    def _is_preview_path(self, scope) -> bool:
+        path = self._classify_path(scope)
+        if path == "/preview" or path.startswith("/preview/"):
+            return True
+        return False
+
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http":
+            return await self.app(scope, receive, send)
+        if self._is_preview_path(scope):
             return await self.app(scope, receive, send)
 
         async def send_wrapper(message):
@@ -618,6 +675,7 @@ class RequestIdMiddleware:
         logger = self._get_logger(scope)
         method = scope.get("method") or "GET"
         path = scope.get("path") or "/"
+        log_path = redact_preview_capability_tokens(path)
         client = scope.get("client")
         client_addr = None
         if client and len(client) >= 2:
@@ -632,7 +690,7 @@ class RequestIdMiddleware:
             logging.INFO,
             "http.request",
             method=method,
-            path=path,
+            path=log_path,
             client=client_addr,
         )
 
@@ -659,7 +717,7 @@ class RequestIdMiddleware:
             duration_ms = (time.monotonic() - start) * 1000
             fields = {
                 "method": method,
-                "path": path,
+                "path": log_path,
                 "status": status_code or 500,
                 "duration_ms": round(duration_ms, 2),
             }
@@ -681,7 +739,7 @@ class RequestIdMiddleware:
                     logging.INFO,
                     "http.response",
                     method=method,
-                    path=path,
+                    path=log_path,
                     status=status_code or 200,
                     duration_ms=round(duration_ms, 2),
                     response_size=response_size,
@@ -692,7 +750,7 @@ class RequestIdMiddleware:
                     logging.INFO,
                     "http.response",
                     method=method,
-                    path=path,
+                    path=log_path,
                     status=status_code or 200,
                     duration_ms=round(duration_ms, 2),
                 )

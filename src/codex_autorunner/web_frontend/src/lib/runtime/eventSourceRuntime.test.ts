@@ -172,6 +172,62 @@ describe('event source stream runtime', () => {
     vi.useRealTimers();
   });
 
+  it('uses fetch streaming with Authorization when a hub bearer token is available', async () => {
+    const onMessage = vi.fn();
+    const fetcher = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(
+            new TextEncoder().encode(
+              [
+                'id: 8',
+                'event: ignored',
+                'data: {"ignored":true}',
+                '',
+                'id: 9',
+                'event: patch',
+                'data: {"ok":true}',
+                '',
+                ''
+              ].join('\n')
+            )
+          );
+          controller.close();
+        }
+      });
+      return new Response(stream, { status: 200 });
+    });
+    const runtime = new EventSourceStreamRuntime({
+      path: '/events',
+      eventTypes: ['patch'],
+      basePath: '/car',
+      hubBearerTokenProvider: () => 'hub-secret',
+      fetcher: fetcher as unknown as typeof fetch,
+      onMessage
+    });
+
+    runtime.open();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(fetcher).toHaveBeenCalledWith(
+      '/car/events',
+      expect.objectContaining({
+        headers: {
+          accept: 'text/event-stream',
+          authorization: 'Bearer hub-secret'
+        },
+        credentials: 'same-origin'
+      })
+    );
+    expect(onMessage).toHaveBeenCalledOnce();
+    const message = onMessage.mock.calls[0][0] as MessageEvent;
+    expect(message.type).toBe('patch');
+    expect(message.lastEventId).toBe('9');
+    expect(message.data).toBe('{"ok":true}');
+    runtime.close();
+  });
+
   it('waits for async resume work before reconnecting a visible stream', async () => {
     vi.useFakeTimers();
     FakeEventSource.instances = [];

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
@@ -89,6 +91,15 @@ def _bootstrap_html() -> str:
             } catch (parseError) {}
             throw new Error(errorText);
           }
+          var payload = await response.json();
+          if (payload && payload.access_token) {
+            var target = window.location.pathname.replace(/\/auth\/bootstrap\/?$/, '/') || '/';
+            var fragment = new URLSearchParams();
+            fragment.set('car_access_token', payload.access_token);
+            if (payload.expires_at) fragment.set('car_access_token_expires_at', String(payload.expires_at));
+            window.location.replace(target + '#' + fragment.toString());
+            return;
+          }
           window.location.replace(window.location.pathname.replace(/\/auth\/bootstrap\/?$/, '/') || '/');
         } catch (error) {
           status.textContent = 'Bootstrap claim failed.';
@@ -106,6 +117,7 @@ def build_auth_routes(
     cookie_secure: BrowserAuthCookieSecure = "auto",
     *,
     require_secure_claim: bool = False,
+    hosted_bearer_claim: bool = False,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -127,14 +139,31 @@ def build_auth_routes(
         payload: BootstrapClaimRequest, request: Request
     ) -> JSONResponse:
         secure = resolve_cookie_secure(request, cookie_secure)
-        if require_secure_claim and (request.url.scheme != "https" or not secure):
+        if require_secure_claim and (
+            request.url.scheme != "https" or (not hosted_bearer_claim and not secure)
+        ):
             raise HTTPException(
                 status_code=400,
-                detail="Browser bootstrap requires HTTPS and Secure cookies",
+                detail=(
+                    "Hosted browser bootstrap requires HTTPS"
+                    if hosted_bearer_claim
+                    else "Browser bootstrap requires HTTPS and Secure cookies"
+                ),
             )
         claim = store.claim_bootstrap_token(payload.token)
         if claim is None:
             raise HTTPException(status_code=401, detail="Invalid bootstrap token")
+        if hosted_bearer_claim:
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "access_token": claim.session_token,
+                    "token_type": "bearer",
+                    "expires_in": claim.max_age_seconds,
+                    "expires_at": int(time.time() + claim.max_age_seconds),
+                },
+                headers={"Cache-Control": "no-store"},
+            )
         response = JSONResponse({"ok": True})
         response.set_cookie(
             SESSION_COOKIE_NAME,

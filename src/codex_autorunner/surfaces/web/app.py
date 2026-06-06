@@ -41,6 +41,7 @@ from .routes.interactions import build_interaction_routes
 from .routes.pma import build_pma_routes
 from .routes.pma_routes import PmaRuntimeState
 from .routes.scm_webhooks import build_scm_webhook_routes
+from .routes.services import build_services_routes
 from .routes.settings import build_settings_routes
 from .routes.system import build_system_routes
 from .routes.voice import build_voice_routes
@@ -81,9 +82,16 @@ def create_hub_app(
     app.state.web_static_assets_context = web_static_context
     bind_host = endpoint_host or context.config.server_host
     remote_bind = not is_loopback_host(bind_host)
+    auth_mode = _hub_auth_mode(context)
+    hosted_bearer = auth_mode == "hosted_bearer"
     auth_token = resolve_auth_token(context.config.server_auth_token_env)
+    if hosted_bearer and not auth_token:
+        raise RuntimeError(
+            "auth.mode=hosted_bearer requires server.auth_token_env to resolve "
+            "to a non-empty bearer token"
+        )
     browser_auth_store: Optional[BrowserAuthStore] = None
-    if auth_token or remote_bind:
+    if hosted_bearer or auth_token or remote_bind:
         browser_auth_store = BrowserAuthStore(context.config.root)
         browser_auth_store.ensure_bootstrap_token()
         app.state.browser_auth_store = browser_auth_store
@@ -92,6 +100,7 @@ def create_hub_app(
                 browser_auth_store,
                 cookie_secure=context.config.browser_auth.cookie_secure,
                 require_secure_claim=remote_bind,
+                hosted_bearer_claim=hosted_bearer,
             )
         )
     web_app_assets_dir = web_static_dir / "_app"
@@ -128,6 +137,8 @@ def create_hub_app(
     app.include_router(build_hub_state_routes(context))
     app.include_router(build_chat_surface_event_routes(context))
     app.include_router(build_hub_chat_read_model_router(context))
+    if _preview_services_enabled(context):
+        app.include_router(build_services_routes(context))
 
     app.state.hub_started = False
     app.state.hub_deferred_startup_complete = False
@@ -219,6 +230,8 @@ def create_hub_app(
     @app.get("/repos/{repo_id}/tickets/{ticket_id}/", include_in_schema=False)
     @app.get("/tickets", include_in_schema=False)
     @app.get("/tickets/{ticket_id}", include_in_schema=False)
+    @app.get("/services", include_in_schema=False)
+    @app.get("/services/{rest:path}", include_in_schema=False)
     @app.get("/automations", include_in_schema=False)
     @app.get("/automations/{rest:path}", include_in_schema=False)
     @app.get("/settings", include_in_schema=False)
@@ -341,7 +354,7 @@ def create_hub_app(
     allowed_origins = context.config.server_allowed_origins
     app.state.auth_token = auth_token
     asgi_app: ASGIApp = app
-    if auth_token or browser_auth_store is not None:
+    if auth_token or browser_auth_store is not None or hosted_bearer:
         asgi_app = AuthTokenMiddleware(
             asgi_app,
             auth_token,
@@ -352,6 +365,8 @@ def create_hub_app(
                 if browser_auth_store is not None
                 else None
             ),
+            allow_session_auth=not hosted_bearer,
+            allow_session_bearer=hosted_bearer,
         )
     if context.base_path:
         asgi_app = BasePathRouterMiddleware(asgi_app, context.base_path)
@@ -362,6 +377,31 @@ def create_hub_app(
         base_path=context.base_path,
     )
     asgi_app = RequestIdMiddleware(asgi_app)
-    asgi_app = SecurityHeadersMiddleware(asgi_app)
+    asgi_app = SecurityHeadersMiddleware(asgi_app, base_path=context.base_path)
 
     return asgi_app
+
+
+def _preview_services_enabled(context: object) -> bool:
+    config = getattr(context, "config", None)
+    raw_config = getattr(config, "raw", {})
+    if not isinstance(raw_config, dict):
+        return True
+    preview_config = raw_config.get("preview_services")
+    if not isinstance(preview_config, dict):
+        return True
+    return preview_config.get("enabled", True) is not False
+
+
+def _hub_auth_mode(context: object) -> str:
+    config = getattr(context, "config", None)
+    raw_config = getattr(config, "raw", {})
+    if not isinstance(raw_config, dict):
+        return "local_trusted_cookie"
+    auth_config = raw_config.get("auth")
+    if not isinstance(auth_config, dict):
+        return "local_trusted_cookie"
+    mode = str(auth_config.get("mode") or "").strip()
+    if mode in {"hosted_bearer", "local_trusted_cookie"}:
+        return mode
+    return "local_trusted_cookie"

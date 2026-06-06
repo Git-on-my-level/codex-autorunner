@@ -545,6 +545,80 @@ export type TicketDetailPatchEvent = {
   patch: TicketDetailPatch;
 };
 
+export type PreviewServiceKind = 'static_file' | 'static_dir' | 'loopback_url' | 'managed_command';
+export type PreviewServiceClass = 'preview' | 'application' | 'infrastructure';
+export type PreviewServiceTrustLevel = 'trusted' | 'generated' | 'external';
+export type PreviewServiceOwnership = 'static' | 'car_managed' | 'external';
+export type PreviewServiceNetworkPolicy = 'loopback_only' | 'internal_allowlist' | 'explicit_allowlist' | 'workspace_runtime';
+
+export type PreviewServiceStatus =
+  | 'registered'
+  | 'starting'
+  | 'running'
+  | 'healthy'
+  | 'unhealthy'
+  | 'stopped'
+  | 'exited'
+  | 'failed'
+  | 'orphaned'
+  | 'conflict';
+
+export type PreviewServiceScopeLink = {
+  kind: 'hub' | 'repo' | 'worktree' | 'workspace' | 'chat' | 'ticket' | string;
+  id?: string | null;
+  path?: string | null;
+};
+
+export type PreviewServiceReadModel = {
+  serviceId: string;
+  name: string;
+  kind: PreviewServiceKind;
+  serviceClass: PreviewServiceClass;
+  trustLevel: PreviewServiceTrustLevel;
+  ownership: PreviewServiceOwnership;
+  networkPolicy: PreviewServiceNetworkPolicy;
+  status: PreviewServiceStatus;
+  createdBy?: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  scopeLinks: PreviewServiceScopeLink[];
+  scope: string | null;
+  carUrl: string;
+  previewUrl: string | null;
+  previewUrlStatus?: 'not_issued' | 'issued' | string | null;
+  previewUrlExpiresAt: number | null;
+  proxyEnabled: boolean;
+  directUrl: string | null;
+  host: string | null;
+  port: number | null;
+  ownerPid: number | null;
+  healthCheck: Record<string, unknown> | null;
+  restartPolicy: Record<string, unknown>;
+  logs: Record<string, unknown> | null;
+  metadata: Record<string, unknown>;
+  capabilities: Record<string, boolean>;
+  desiredState: Record<string, unknown>;
+  observedState: Record<string, unknown>;
+  raw: Record<string, unknown>;
+};
+
+export type PreviewServicesCounts = {
+  total: number;
+  running: number;
+  attention: number;
+  managed: number;
+  static: number;
+  loopback: number;
+  preview: number;
+  application: number;
+  infrastructure: number;
+};
+
+export type PreviewServicesReadModel = {
+  services: PreviewServiceReadModel[];
+  counts: PreviewServicesCounts;
+};
+
 export type ReadModelSnapshot =
   | ChatIndexSnapshot
   | ChatDetailSnapshot

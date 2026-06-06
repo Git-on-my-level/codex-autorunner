@@ -1,0 +1,483 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from enum import Enum
+from pathlib import PurePosixPath
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from .ids import validate_service_id
+
+
+class PreviewServiceValidationError(ValueError):
+    pass
+
+
+class PreviewServiceKind(str, Enum):
+    STATIC_FILE = "static_file"
+    STATIC_DIR = "static_dir"
+    LOOPBACK_URL = "loopback_url"
+    MANAGED_COMMAND = "managed_command"
+
+
+class PreviewServiceStatus(str, Enum):
+    REGISTERED = "registered"
+    STARTING = "starting"
+    RUNNING = "running"
+    HEALTHY = "healthy"
+    UNHEALTHY = "unhealthy"
+    STOPPED = "stopped"
+    EXITED = "exited"
+    FAILED = "failed"
+    ORPHANED = "orphaned"
+    CONFLICT = "conflict"
+
+
+class PreviewScopeKind(str, Enum):
+    HUB = "hub"
+    REPO = "repo"
+    WORKTREE = "worktree"
+    WORKSPACE = "workspace"
+    CHAT = "chat"
+    TICKET = "ticket"
+
+
+class ServiceClass(str, Enum):
+    PREVIEW = "preview"
+    APPLICATION = "application"
+    INFRASTRUCTURE = "infrastructure"
+
+
+class TrustLevel(str, Enum):
+    TRUSTED = "trusted"
+    GENERATED = "generated"
+    EXTERNAL = "external"
+
+
+class ServiceOwnership(str, Enum):
+    STATIC = "static"
+    CAR_MANAGED = "car_managed"
+    EXTERNAL = "external"
+
+
+class NetworkPolicy(str, Enum):
+    LOOPBACK_ONLY = "loopback_only"
+    INTERNAL_ALLOWLIST = "internal_allowlist"
+    EXPLICIT_ALLOWLIST = "explicit_allowlist"
+    WORKSPACE_RUNTIME = "workspace_runtime"
+
+
+class PortPolicyMode(str, Enum):
+    EXACT = "exact"
+    PREFERRED = "preferred"
+    AUTO = "auto"
+
+
+class HealthCheckType(str, Enum):
+    HTTP = "http"
+    TCP = "tcp"
+    NONE = "none"
+
+
+class RestartOnExit(str, Enum):
+    NEVER = "never"
+
+
+class EnvPolicy(str, Enum):
+    MINIMAL = "minimal"
+    ALLOWLIST = "allowlist"
+    INHERIT_ALL = "inherit_all"
+
+
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", use_enum_values=True)
+
+
+class ScopeLink(StrictModel):
+    kind: PreviewScopeKind
+    id: str | None = None
+    path: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_scope_payload(self) -> "ScopeLink":
+        if self.kind == PreviewScopeKind.HUB:
+            if self.id is not None or self.path is not None:
+                raise ValueError("hub scope must not include id or path")
+            return self
+        if self.kind == PreviewScopeKind.WORKSPACE:
+            if not self.path:
+                raise ValueError("workspace scope requires path")
+            return self
+        if not self.id:
+            raise ValueError(f"{self.kind} scope requires id")
+        return self
+
+
+class ServiceTarget(StrictModel):
+    host: str | None = None
+    port: int | None = Field(default=None, ge=1, le=65535)
+    scheme: Literal["http", "https"] | None = None
+    direct_url: str | None = None
+    path: str | None = None
+
+    @field_validator("path")
+    @classmethod
+    def _validate_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not value.strip():
+            raise ValueError("target.path must be non-empty when set")
+        return value
+
+
+class ServiceExposure(StrictModel):
+    car_url: str
+    proxy_enabled: bool = True
+
+    @field_validator("car_url")
+    @classmethod
+    def _validate_car_url(cls, value: str) -> str:
+        if not value.startswith("/preview/services/"):
+            raise ValueError(
+                "exposure.car_url must use /preview/services/{service_id}/"
+            )
+        return value
+
+
+class PortPolicy(StrictModel):
+    mode: PortPolicyMode
+    port: int | None = Field(default=None, ge=1, le=65535)
+    allocated_port: int | None = Field(default=None, ge=1, le=65535)
+
+    @model_validator(mode="after")
+    def _validate_port_policy(self) -> "PortPolicy":
+        if (
+            self.mode in {PortPolicyMode.EXACT, PortPolicyMode.PREFERRED}
+            and self.port is None
+        ):
+            raise ValueError(f"port_policy.mode={self.mode} requires port")
+        if self.mode == PortPolicyMode.AUTO and self.port is not None:
+            raise ValueError("port_policy.mode=auto must not include port")
+        return self
+
+
+class CommandDefinition(StrictModel):
+    argv: list[str]
+    cwd: str
+    env: dict[str, str] = Field(default_factory=dict)
+    env_policy: EnvPolicy = EnvPolicy.MINIMAL
+
+    @field_validator("argv")
+    @classmethod
+    def _validate_argv(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("command.argv must be a non-empty list")
+        if any(not isinstance(item, str) or not item for item in value):
+            raise ValueError("command.argv must contain only non-empty strings")
+        return value
+
+    @field_validator("cwd")
+    @classmethod
+    def _validate_cwd(cls, value: str) -> str:
+        if not value:
+            raise ValueError("command.cwd must be non-empty")
+        return value
+
+
+class ProcessMetadata(StrictModel):
+    pid: int | None = Field(default=None, ge=1)
+    pgid: int | None = Field(default=None, ge=1)
+    started_at: str | None = None
+    exit_code: int | None = None
+    exited_at: str | None = None
+    last_exit_reason: str | None = None
+    command_fingerprint: str | None = None
+    cwd: str | None = None
+    owner_pid: int | None = Field(default=None, ge=1)
+
+    @field_validator("started_at", "exited_at")
+    @classmethod
+    def _validate_started_at(cls, value: str | None) -> str | None:
+        if value is not None:
+            parse_iso_timestamp(value, "process timestamp")
+        return value
+
+
+class HealthCheck(StrictModel):
+    type: HealthCheckType
+    path: str | None = "/"
+    expected_status: list[int] = Field(
+        default_factory=lambda: [200, 204, 301, 302, 304]
+    )
+
+    @model_validator(mode="after")
+    def _validate_health_check(self) -> "HealthCheck":
+        if self.type in {HealthCheckType.HTTP, HealthCheckType.HTTP.value}:
+            if not self.path or not self.path.startswith("/"):
+                raise ValueError("http health_check requires an absolute path")
+            if not self.expected_status:
+                raise ValueError("http health_check requires expected_status")
+        if self.type in {HealthCheckType.TCP, HealthCheckType.TCP.value}:
+            if self.path not in {None, "", "/"}:
+                raise ValueError("tcp health_check must not include path")
+            self.path = None
+        return self
+
+
+class RestartPolicy(StrictModel):
+    auto_start_on_hub_start: bool = False
+    restart_on_exit: RestartOnExit = RestartOnExit.NEVER
+
+
+class ServiceDesiredState(StrictModel):
+    kind: PreviewServiceKind
+    service_class: ServiceClass
+    trust_level: TrustLevel
+    ownership: ServiceOwnership
+    network_policy: NetworkPolicy
+    scope_links: list[ScopeLink] = Field(default_factory=list)
+    target: ServiceTarget | None = None
+    exposure: ServiceExposure
+    port_policy: PortPolicy | None = None
+    command: CommandDefinition | None = None
+    health_check: HealthCheck | None = None
+    restart_policy: RestartPolicy = Field(default_factory=RestartPolicy)
+    logs: ServiceLogs | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ServiceObservedState(StrictModel):
+    status: PreviewServiceStatus
+    process: ProcessMetadata | None = None
+    target: ServiceTarget | None = None
+    health_check: HealthCheck | None = None
+    updated_at: str
+
+
+class ServiceLogs(StrictModel):
+    path: str
+    tail_url: str | None = None
+
+    @field_validator("path")
+    @classmethod
+    def _validate_log_path(cls, value: str) -> str:
+        if not value:
+            raise ValueError("logs.path must be non-empty")
+        pure = PurePosixPath(value.replace("\\", "/"))
+        if pure.is_absolute() or ".." in pure.parts:
+            raise ValueError(
+                "logs.path must be a relative path without parent traversal"
+            )
+        return value
+
+
+class PreviewServiceRecord(StrictModel):
+    service_id: str
+    name: str
+    kind: PreviewServiceKind
+    service_class: ServiceClass | None = None
+    trust_level: TrustLevel | None = None
+    ownership: ServiceOwnership | None = None
+    network_policy: NetworkPolicy | None = None
+    status: PreviewServiceStatus = PreviewServiceStatus.REGISTERED
+    created_by: str | None = None
+    created_at: str
+    updated_at: str
+    scope_links: list[ScopeLink] = Field(default_factory=list)
+    target: ServiceTarget | None = None
+    exposure: ServiceExposure
+    port_policy: PortPolicy | None = None
+    command: CommandDefinition | None = None
+    process: ProcessMetadata | None = None
+    health_check: HealthCheck | None = None
+    restart_policy: RestartPolicy = Field(default_factory=RestartPolicy)
+    logs: ServiceLogs | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_defaults(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        payload = dict(data)
+        defaults = service_taxonomy_defaults(
+            kind=payload.get("kind"),
+            created_by=payload.get("created_by"),
+            metadata=payload.get("metadata"),
+        )
+        for key, value in defaults.items():
+            payload.setdefault(key, value)
+        return payload
+
+    @field_validator("service_id")
+    @classmethod
+    def _validate_service_id(cls, value: str) -> str:
+        return validate_service_id(value)
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("name must be non-empty")
+        return value
+
+    @field_validator("created_at", "updated_at")
+    @classmethod
+    def _validate_timestamp(cls, value: str, info: Any) -> str:
+        parse_iso_timestamp(value, str(info.field_name))
+        return value
+
+    @model_validator(mode="after")
+    def _validate_record(self) -> "PreviewServiceRecord":
+        expected_url = f"/preview/services/{self.service_id}/"
+        if self.exposure.car_url != expected_url:
+            raise ValueError(f"exposure.car_url must be {expected_url}")
+        if self.kind == PreviewServiceKind.MANAGED_COMMAND and self.command is None:
+            raise ValueError("managed_command service requires command")
+        if self.kind != PreviewServiceKind.MANAGED_COMMAND and self.process is not None:
+            raise ValueError(
+                "process metadata is only valid for managed_command services"
+            )
+        if self.kind != PreviewServiceKind.MANAGED_COMMAND and self.command is not None:
+            raise ValueError("command is only valid for managed_command services")
+        if self.kind in {PreviewServiceKind.STATIC_FILE, PreviewServiceKind.STATIC_DIR}:
+            if self.target is None or self.target.path is None:
+                raise ValueError(f"{self.kind} service requires target.path")
+        if self.kind == PreviewServiceKind.LOOPBACK_URL:
+            if self.target is None or not self.target.direct_url:
+                raise ValueError("loopback_url service requires target.direct_url")
+        return self
+
+    @property
+    def desired_state(self) -> ServiceDesiredState:
+        return ServiceDesiredState(
+            kind=self.kind,
+            service_class=self.service_class or ServiceClass.PREVIEW,
+            trust_level=self.trust_level or TrustLevel.GENERATED,
+            ownership=self.ownership or ServiceOwnership.STATIC,
+            network_policy=self.network_policy or NetworkPolicy.LOOPBACK_ONLY,
+            scope_links=self.scope_links,
+            target=self.target,
+            exposure=self.exposure,
+            port_policy=self.port_policy,
+            command=self.command,
+            health_check=self.health_check,
+            restart_policy=self.restart_policy,
+            logs=self.logs,
+            metadata=self.metadata,
+        )
+
+    @property
+    def observed_state(self) -> ServiceObservedState:
+        return ServiceObservedState(
+            status=self.status,
+            process=self.process,
+            target=self.target,
+            health_check=self.health_check,
+            updated_at=self.updated_at,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.model_dump(mode="json", exclude_none=True)
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def parse_iso_timestamp(value: str, field_name: str) -> datetime:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be an ISO timestamp string")
+    normalized = value.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be an ISO timestamp string") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def service_record_from_dict(data: dict[str, Any]) -> PreviewServiceRecord:
+    try:
+        return PreviewServiceRecord.model_validate(data)
+    except ValueError as exc:
+        raise PreviewServiceValidationError(str(exc)) from exc
+
+
+def service_taxonomy_defaults(
+    *,
+    kind: Any,
+    created_by: Any = None,
+    metadata: Any = None,
+) -> dict[str, str]:
+    raw_kind = _enum_value(kind)
+    raw_created_by = str(created_by or "").lower()
+    metadata_map = metadata if isinstance(metadata, dict) else {}
+    raw_class = str(
+        metadata_map.get("service_class")
+        or metadata_map.get("class")
+        or metadata_map.get("product_class")
+        or ""
+    ).lower()
+    infrastructure = raw_class == ServiceClass.INFRASTRUCTURE.value or any(
+        marker in raw_created_by
+        for marker in (
+            "opencode",
+            "mcp",
+            "daemon",
+            "tunnel",
+            "webhook",
+            "browser",
+            "vector",
+            "codex_bridge",
+        )
+    )
+    if infrastructure:
+        ownership = (
+            ServiceOwnership.CAR_MANAGED.value
+            if raw_kind == PreviewServiceKind.MANAGED_COMMAND.value
+            else ServiceOwnership.EXTERNAL.value
+        )
+        return {
+            "service_class": ServiceClass.INFRASTRUCTURE.value,
+            "trust_level": TrustLevel.TRUSTED.value,
+            "ownership": ownership,
+            "network_policy": NetworkPolicy.LOOPBACK_ONLY.value,
+        }
+    if raw_kind in {
+        PreviewServiceKind.STATIC_FILE.value,
+        PreviewServiceKind.STATIC_DIR.value,
+    }:
+        return {
+            "service_class": ServiceClass.PREVIEW.value,
+            "trust_level": TrustLevel.GENERATED.value,
+            "ownership": ServiceOwnership.STATIC.value,
+            "network_policy": NetworkPolicy.LOOPBACK_ONLY.value,
+        }
+    if raw_kind == PreviewServiceKind.MANAGED_COMMAND.value:
+        return {
+            "service_class": ServiceClass.PREVIEW.value,
+            "trust_level": TrustLevel.GENERATED.value,
+            "ownership": ServiceOwnership.CAR_MANAGED.value,
+            "network_policy": NetworkPolicy.LOOPBACK_ONLY.value,
+        }
+    if raw_kind == PreviewServiceKind.LOOPBACK_URL.value:
+        return {
+            "service_class": ServiceClass.APPLICATION.value,
+            "trust_level": TrustLevel.EXTERNAL.value,
+            "ownership": ServiceOwnership.EXTERNAL.value,
+            "network_policy": NetworkPolicy.LOOPBACK_ONLY.value,
+        }
+    return {
+        "service_class": ServiceClass.PREVIEW.value,
+        "trust_level": TrustLevel.GENERATED.value,
+        "ownership": ServiceOwnership.EXTERNAL.value,
+        "network_policy": NetworkPolicy.LOOPBACK_ONLY.value,
+    }
+
+
+def _enum_value(value: Any) -> str:
+    raw = getattr(value, "value", value)
+    return str(raw or "")

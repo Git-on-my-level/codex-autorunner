@@ -37,6 +37,86 @@ function automationFixture(id: string, overrides: Record<string, unknown> = {}):
 }
 
 describe('API client error handling', () => {
+  it('does not inject hub bearer credentials into JSON requests by default', async () => {
+    const fetcher = vi.fn(async () => Response.json({ ok: true }));
+    const client = new WebApiClient(fetcher as unknown as typeof fetch);
+
+    await client.getJson('/hub/services');
+
+    const [, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.has('authorization')).toBe(false);
+  });
+
+  it('does not inject hub bearer credentials into form uploads by default', async () => {
+    const fetcher = vi.fn(async () => Response.json({ ok: true }));
+    const client = new WebApiClient(fetcher as unknown as typeof fetch);
+
+    await client.uploadForm('/hub/filebox/repo-1', new FormData());
+
+    const [, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.has('authorization')).toBe(false);
+  });
+
+  it('attaches in-memory hub bearer credentials to JSON hub requests when provided', async () => {
+    const fetcher = vi.fn(async () => Response.json({ ok: true }));
+    const client = new WebApiClient(fetcher as unknown as typeof fetch, '', () => 'hub-secret');
+
+    await client.getJson('/hub/services');
+
+    const [, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get('authorization')).toBe('Bearer hub-secret');
+  });
+
+  it('attaches in-memory hub bearer credentials to form uploads when provided', async () => {
+    const fetcher = vi.fn(async () => Response.json({ ok: true }));
+    const client = new WebApiClient(fetcher as unknown as typeof fetch, '', () => 'hub-secret');
+
+    await client.uploadForm('/hub/filebox/repo-1', new FormData());
+
+    const [, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get('authorization')).toBe('Bearer hub-secret');
+  });
+
+  it('does not attach hub bearer credentials to preview capability paths', async () => {
+    const fetcher = vi.fn(async () => Response.json({ ok: true }));
+    const client = new WebApiClient(fetcher as unknown as typeof fetch, '', () => 'hub-secret');
+
+    await client.getJson('/preview/p/cap-token/data.json');
+
+    const [, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.has('authorization')).toBe(false);
+  });
+
+  it('issues preview service capability links through the explicit token endpoint', async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        service_id: 'svc_abc123',
+        preview_url: '/preview/p/cap-token/',
+        expires_at: 123
+      })
+    );
+    const client = new WebApiClient(fetcher as unknown as typeof fetch);
+
+    const result = await client.hub.issueServiceLink('svc_abc123', 3600);
+
+    expect(fetcher).toHaveBeenCalledWith('/hub/services/svc_abc123/preview-token?ttl=3600', expect.any(Object));
+    const [, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.method).toBe('POST');
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        serviceId: 'svc_abc123',
+        previewUrl: '/preview/p/cap-token/',
+        expiresAt: 123
+      }
+    });
+  });
+
   it('normalizes HTTP JSON errors into displayable errors', async () => {
     const fetcher = vi.fn(async () =>
       new Response(JSON.stringify({ detail: 'Missing repo' }), {
@@ -183,6 +263,89 @@ describe('API client error handling', () => {
         lastJob: { jobId: 'job-1', state: 'succeeded' }
       });
     }
+  });
+
+  it('maps preview services read models and lifecycle requests', async () => {
+    const fetcher = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (String(url) === '/hub/read-models/services?scope=repo%3Acar') {
+        return Response.json({
+          services: [
+            {
+              service_id: 'svc_managed123',
+              name: 'Frontend',
+              kind: 'managed_command',
+              service_class: 'preview',
+              trust_level: 'generated',
+              ownership: 'car_managed',
+              network_policy: 'loopback_only',
+              status: 'healthy',
+              created_by: 'pma',
+              created_at: '2026-06-05T00:00:00Z',
+              updated_at: '2026-06-05T00:01:00Z',
+              scope_links: [{ kind: 'repo', id: 'car' }],
+              scope: 'repo:car',
+              car_url: '/preview/services/svc_managed123/',
+              proxy_enabled: true,
+              direct_url: 'http://127.0.0.1:39001/',
+              host: '127.0.0.1',
+              port: 39001,
+              owner_pid: 123,
+              logs: { path: '.codex-autorunner/services/logs/svc_managed123.log' },
+              capabilities: { can_stop: true, can_kill: true, can_view_logs: true },
+              desired_state: { kind: 'managed_command' },
+              observed_state: { status: 'healthy' }
+            }
+          ],
+          counts: { total: 1, running: 1, attention: 0, managed: 1, static: 0, loopback: 0, preview: 1, application: 0, infrastructure: 0 }
+        });
+      }
+      if (String(url) === '/hub/services/svc_managed123/kill') {
+        expect(init?.method).toBe('POST');
+        expect(JSON.parse(String(init?.body))).toEqual({
+          force: true,
+          force_attestation: 'terminate preview'
+        });
+        return Response.json({
+          read_model: {
+            service_id: 'svc_managed123',
+            name: 'Frontend',
+            kind: 'managed_command',
+            status: 'stopped',
+            car_url: '/preview/services/svc_managed123/'
+          }
+        });
+      }
+      return new Response('missing', { status: 404 });
+    }) as unknown as typeof fetch;
+    const client = new WebApiClient(fetcher);
+
+    const listed = await client.hub.getServicesReadModel('repo:car');
+    expect(listed.ok).toBe(true);
+    if (listed.ok) {
+      expect(listed.data.counts.running).toBe(1);
+      expect(listed.data.services[0]).toMatchObject({
+        serviceId: 'svc_managed123',
+        kind: 'managed_command',
+        status: 'healthy',
+        serviceClass: 'preview',
+        trustLevel: 'generated',
+        ownership: 'car_managed',
+        scope: 'repo:car',
+        carUrl: '/preview/services/svc_managed123/',
+        port: 39001,
+        ownerPid: 123,
+        capabilities: { can_stop: true, can_kill: true, can_view_logs: true },
+        desiredState: { kind: 'managed_command' },
+        observedState: { status: 'healthy' }
+      });
+    }
+
+    const killed = await client.hub.serviceAction('svc_managed123', 'kill', {
+      force: true,
+      forceAttestation: 'terminate preview'
+    });
+    expect(killed.ok).toBe(true);
+    if (killed.ok) expect(killed.data.status).toBe('stopped');
   });
 
   it('maps typed automation projections for schedule, message, managed, and diagnostic UI states', async () => {

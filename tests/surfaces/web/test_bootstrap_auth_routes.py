@@ -344,6 +344,57 @@ def test_bearer_token_auth_still_works_with_bootstrap_routes(
     assert (hub_root / BOOTSTRAP_TOKEN_RELATIVE_PATH).exists()
 
 
+def test_hosted_bearer_bootstrap_claim_returns_expiring_header_token(
+    tmp_path: Path, monkeypatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    config_path = hub_root / ".codex-autorunner/config.yml"
+    text = config_path.read_text(encoding="utf-8")
+    config_path.write_text(
+        f"{text}\nauth:\n  mode: hosted_bearer\nserver:\n  auth_token_env: CAR_TEST_TOKEN\n  allowed_hosts:\n    - testserver\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CAR_TEST_TOKEN", "api-secret")
+    client = TestClient(
+        create_hub_app(hub_root, endpoint_host="0.0.0.0"),
+        base_url="https://testserver",
+    )
+
+    denied = client.get("/hub/repos")
+    token = _read_bootstrap_token(hub_root)
+    claim = client.post("/auth/bootstrap/claim", json={"token": token})
+
+    assert denied.status_code == 401
+    assert claim.status_code == 200
+    assert "set-cookie" not in claim.headers
+    payload = claim.json()
+    access_token = payload["access_token"]
+    assert payload["token_type"] == "bearer"
+    assert payload["expires_in"] == SESSION_MAX_AGE_SECONDS
+    assert isinstance(payload["expires_at"], int)
+    assert not (hub_root / BOOTSTRAP_TOKEN_RELATIVE_PATH).exists()
+    assert (
+        client.get(
+            "/hub/repos", headers={"Authorization": f"Bearer {access_token}"}
+        ).status_code
+        == 200
+    )
+    assert (
+        client.get(
+            "/hub/repos",
+            headers={"Cookie": f"{SESSION_COOKIE_NAME}={access_token}"},
+        ).status_code
+        == 401
+    )
+    assert (
+        client.get(
+            "/hub/repos", headers={"Authorization": "Bearer api-secret"}
+        ).status_code
+        == 200
+    )
+
+
 def test_browser_session_validation_enforces_server_side_expiry(
     tmp_path: Path,
 ) -> None:

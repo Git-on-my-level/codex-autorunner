@@ -8,6 +8,8 @@ export type EventSourceStreamStatus = 'connecting' | 'connected' | 'interrupted'
 
 export type EventSourceFactory = (url: string, init?: EventSourceInit) => EventSource;
 
+export type HubBearerTokenProvider = () => string | null | undefined;
+
 export type CursorStorage = {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
@@ -26,17 +28,21 @@ export type EventSourceStreamRuntimeOptions = {
   reconnectBaseMs?: number;
   reconnectMaxMs?: number;
   withCredentials?: boolean;
+  hubBearerTokenProvider?: HubBearerTokenProvider;
+  fetcher?: typeof fetch;
   eventSourceFactory?: EventSourceFactory;
   visibilityPolicy?: StreamVisibilityPolicy | null;
 };
 
 export class EventSourceStreamRuntime {
   private source: EventSource | null = null;
+  private fetchAbortController: AbortController | null = null;
   private closed = true;
   private attempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private unsubscribeVisibility: (() => void) | null = null;
   private resumeSeq = 0;
+  private connectionSeq = 0;
 
   constructor(private readonly options: EventSourceStreamRuntimeOptions) {}
 
@@ -66,6 +72,11 @@ export class EventSourceStreamRuntime {
     if (this.shouldSuspendForHiddenTab()) return;
     this.closeSource();
     this.options.onStatus?.('connecting');
+    const token = this.options.hubBearerTokenProvider?.()?.trim();
+    if (token) {
+      void this.connectFetchStream(token);
+      return;
+    }
     let source: EventSource;
     try {
       source = this.sourceFactory()(this.url(), { withCredentials: this.options.withCredentials });
@@ -93,6 +104,85 @@ export class EventSourceStreamRuntime {
       this.closeSource();
       if (!this.closed) this.scheduleReconnect();
     });
+  }
+
+  private async connectFetchStream(token: string): Promise<void> {
+    const seq = ++this.connectionSeq;
+    const controller = new AbortController();
+    this.fetchAbortController = controller;
+    try {
+      const response = await this.fetcher()(this.url(), {
+        headers: {
+          accept: 'text/event-stream',
+          authorization: `Bearer ${token}`
+        },
+        credentials: this.options.withCredentials ? 'include' : 'same-origin',
+        signal: controller.signal
+      });
+      if (this.closed || seq !== this.connectionSeq) return;
+      if (!response.ok || !response.body) {
+        throw new Error(`Event stream failed with HTTP ${response.status}`);
+      }
+      this.attempt = 0;
+      this.options.onStatus?.('connected');
+      await this.readFetchStream(response.body, seq);
+    } catch (error) {
+      if (this.closed || seq !== this.connectionSeq || controller.signal.aborted) return;
+      this.options.onStatus?.('interrupted');
+      this.options.onError?.(error instanceof Event ? error : new Event('error'));
+      if (!this.closed) this.scheduleReconnect();
+    }
+  }
+
+  private async readFetchStream(stream: ReadableStream<Uint8Array>, seq: number): Promise<void> {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    try {
+      while (!this.closed && seq === this.connectionSeq) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        buffer = this.drainFrames(buffer, seq);
+      }
+      buffer += decoder.decode();
+      this.drainFrames(buffer, seq, true);
+    } finally {
+      reader.releaseLock();
+    }
+    if (!this.closed && seq === this.connectionSeq) {
+      this.options.onStatus?.('interrupted');
+      this.scheduleReconnect();
+    }
+  }
+
+  private drainFrames(buffer: string, seq: number, flush = false): string {
+    let remaining = buffer;
+    while (!this.closed && seq === this.connectionSeq) {
+      const match = /\r?\n\r?\n/.exec(remaining);
+      if (!match) break;
+      const frame = remaining.slice(0, match.index);
+      remaining = remaining.slice(match.index + match[0].length);
+      this.dispatchFetchFrame(frame, seq);
+    }
+    if (flush && remaining.trim()) {
+      this.dispatchFetchFrame(remaining, seq);
+      return '';
+    }
+    return remaining;
+  }
+
+  private dispatchFetchFrame(frame: string, seq: number): void {
+    if (this.closed || seq !== this.connectionSeq) return;
+    const parsed = parseSseFrame(frame);
+    if (!parsed) return;
+    if (parsed.event !== 'message' && !this.options.eventTypes.includes(parsed.event)) return;
+    this.options.onMessage(
+      new MessageEvent(parsed.event, {
+        data: parsed.data,
+        lastEventId: parsed.id
+      })
+    );
   }
 
   private scheduleReconnect(): void {
@@ -145,6 +235,10 @@ export class EventSourceStreamRuntime {
     return this.options.eventSourceFactory ?? ((url, init) => new EventSource(url, init));
   }
 
+  private fetcher(): typeof fetch {
+    return this.options.fetcher ?? fetch;
+  }
+
   private url(): string {
     const path = typeof this.options.path === 'function' ? this.options.path() : this.options.path;
     return withRuntimeBasePath(path, this.options.basePath ?? runtimeBasePath());
@@ -156,9 +250,30 @@ export class EventSourceStreamRuntime {
   }
 
   private closeSource(): void {
+    this.connectionSeq += 1;
+    this.fetchAbortController?.abort();
+    this.fetchAbortController = null;
     this.source?.close();
     this.source = null;
   }
+}
+
+function parseSseFrame(frame: string): { id: string; event: string; data: string } | null {
+  const lines = frame.split(/\r?\n/);
+  let id = '';
+  let event = 'message';
+  const data: string[] = [];
+  for (const line of lines) {
+    if (!line || line.startsWith(':')) continue;
+    const colon = line.indexOf(':');
+    const field = colon === -1 ? line : line.slice(0, colon);
+    const value = colon === -1 ? '' : line.slice(colon + 1).replace(/^ /, '');
+    if (field === 'id') id = value;
+    else if (field === 'event') event = value || 'message';
+    else if (field === 'data') data.push(value);
+  }
+  if (!id && event === 'message' && data.length === 0) return null;
+  return { id, event, data: data.join('\n') };
 }
 
 export function storage(candidate: CursorStorage | null | undefined): CursorStorage {

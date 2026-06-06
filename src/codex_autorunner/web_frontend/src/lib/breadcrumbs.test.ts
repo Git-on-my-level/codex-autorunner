@@ -36,6 +36,7 @@ describe('breadcrumbsForPath', () => {
 
   it('uses primary nav labels for exact top-level routes (no active-route guessing)', () => {
     expect(breadcrumbsForPath('/chats')).toEqual([{ label: 'Chats', href: null }]);
+    expect(breadcrumbsForPath('/services')).toEqual([{ label: 'Services', href: null }]);
     expect(breadcrumbsForPath('/settings')).toEqual([{ label: 'Settings', href: null }]);
   });
 
