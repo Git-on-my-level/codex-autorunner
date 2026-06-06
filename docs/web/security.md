@@ -109,10 +109,14 @@ Config:
 
 ## Preview Services
 
-Preview routes under `/preview/services/<service_id>/` require the same hub
-authentication as the rest of the protected web surface. CAR proxies only
-registered service records, defaults proxy targets to loopback hosts, and does
-not proxy arbitrary internet URLs.
+Local trusted preview routes under `/preview/services/<service_id>/` require the
+same hub authentication as the rest of the protected web surface. In hosted
+bearer mode, hub/control-plane APIs require `Authorization: Bearer <token>` and
+copied preview links use `/preview/p/<capability>/...` URLs. Preview capability
+tokens authorize only preview/proxy access and cannot authorize `/hub/*` APIs.
+
+CAR proxies only registered service records, defaults proxy targets to loopback
+hosts, and does not proxy arbitrary internet URLs.
 
 Keep `preview_services.proxy_allowed_hosts` loopback-only for hosted
 deployments. Add `preview_services.static_allowed_roots` only for directories

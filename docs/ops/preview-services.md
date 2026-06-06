@@ -120,6 +120,36 @@ managed-service logs, and run lifecycle actions.
 Available actions depend on service kind. Static and loopback services can be
 opened, copied, unlinked, or torn down. Managed command services can also be
 started, stopped, restarted, killed with confirmation, and tailed for logs.
+The backend computes the action capabilities in the read model; UI, CLI, and
+PMA should not infer permissions from `kind` or `status` alone.
+
+Preview links opened from the Services page must use a separate browsing
+context with opener isolation (`noopener,noreferrer`). Do not embed untrusted
+same-origin previews in an unsandboxed iframe.
+
+## Service Taxonomy
+
+`kind` describes the implementation substrate:
+
+- `static_file` and `static_dir` serve registered files or directories.
+- `loopback_url` proxies an already-running local service.
+- `managed_command` starts and supervises a CAR-owned subprocess.
+
+Every service also carries product and trust metadata:
+
+- `service_class=preview` for generated artifacts and agent-created dev servers.
+- `service_class=application` for user-registered local apps and APIs.
+- `service_class=infrastructure` for trusted supporting systems such as
+  OpenCode servers, MCP servers, webhook receivers, tunnels, browser automation
+  services, vector stores, and future Codex bridges.
+- `trust_level` is `generated`, `external`, or `trusted`.
+- `ownership` is `static`, `external`, or `car_managed`.
+- `network_policy` defaults to `loopback_only`.
+
+OpenCode and MCP examples should be modeled as infrastructure services in the
+registry, not as side channels outside Preview Services. Codex app-server is not
+CAR's durable service manager; CAR's registry and supervisor remain the source
+of truth for managed infrastructure.
 
 ## HMR Caveats
 
@@ -165,14 +195,115 @@ CAR does not rewrite arbitrary application bundles that hard-code absolute
 server websocket host/client URL to use same-origin behavior, then restart the
 service.
 
-## Hosted Security Model
+## Hosted / No-Subdomain Security Model
 
-Preview routes are authenticated like the hub. A hosted CAR deployment should
-use HTTPS, browser auth or bearer auth, explicit `server.allowed_hosts`, and an
-outer reverse-proxy auth layer when exposed beyond a trusted private network.
+Local trusted deployments may keep `/preview/services/<service_id>/` protected
+by the same browser session or bearer token as the hub.
+
+Hosted or otherwise untrusted deployments that cannot rely on dynamic
+subdomains must not authorize hub APIs with ambient browser credentials from
+same-origin preview JavaScript. In `auth.mode=hosted_bearer`:
+
+- `/hub/*`, read models, lifecycle routes, and other control-plane APIs require
+  `Authorization: Bearer <hub_access_token>`.
+- Cookies, Basic Auth, and preview capability tokens do not authorize hub APIs.
+- User-facing copied/opened preview links use capability URLs such as
+  `/preview/p/<token>/...`.
+- A preview capability token authorizes only preview/proxy access for its
+  service and cannot be used as a hub bearer token.
+- Capability tokens expire and can be revoked per service with
+  `car services revoke-link SERVICE_ID --all`.
+- Authenticated requests to `/preview/services/<service_id>/...` may redirect to
+  a capability URL for local/trusted compatibility, but remote links should use
+  the capability URL.
+
+A hosted CAR deployment should use HTTPS, explicit `server.allowed_hosts`,
+explicit origins, bearer-token hub API auth, and an outer reverse-proxy auth
+layer when exposed beyond a trusted private network.
 
 CAR proxies only registered service IDs. By default, proxy targets are limited
 to loopback hosts (`127.0.0.1`, `::1`, and `localhost`) and CAR does not proxy
 arbitrary internet URLs. Static previews are restricted to allowed roots and
 reject traversal, symlink escape, hidden files, `.env`, `.git`, and common
 private-key filenames.
+
+## Managed Command Operations
+
+Managed services run as subprocesses in process groups, not tmux sessions. CAR
+records pid/pgid, command metadata, bounded logs, health state, event history,
+and observed exits under `.codex-autorunner/services/`.
+
+Lifecycle mutations use per-service locks. Stop is graceful with a timeout; kill
+is destructive and requires `--force --force-attestation TEXT`. Restart is stop
+then start from the stored service definition. Teardown stops a managed service
+and then removes the registry record.
+
+Before stopping or killing a process after a restart or crash, CAR checks process
+identity. If the recorded pid no longer matches the expected process, normal
+termination is refused and the service is marked `orphaned` instead of risking a
+stale-PID kill.
+
+Autostart after hub restart is disabled by default and must be enabled per
+service. Exited, failed, unhealthy, conflict, and orphaned services are marked as
+needing attention for the UI, CLI, and PMA snapshot.
+
+## Environment Policy
+
+Managed commands default to `env_policy=minimal`. They receive explicit
+per-service env overrides plus CAR preview variables:
+
+```text
+CAR_PREVIEW_BASE_PATH=/preview/services/<service_id>
+CAR_PREVIEW_PUBLIC_URL=/preview/services/<service_id>/
+CAR_PREVIEW_SERVICE_ID=<service_id>
+PORT=<allocated_port>
+HOST=127.0.0.1
+```
+
+The full CAR process environment is inherited only when `env_policy=inherit_all`
+is explicitly requested. Read models redact configured env values, and service
+logs should not be copied wholesale into PMA prompts.
+
+## PMA and CLI Context
+
+PMA receives a compact Preview Services snapshot with counts, attention items,
+and a small sample of running links. For details or lifecycle actions, PMA and
+agents should use the CLI:
+
+```bash
+car services list --json
+car services get SERVICE_ID --json
+car services logs SERVICE_ID --tail 200
+car services health SERVICE_ID
+car services issue-link SERVICE_ID --ttl 24h
+car services revoke-link SERVICE_ID --all
+```
+
+CLI path arguments are resolved on the client side before sending them to the
+hub. Use absolute or shell-relative paths normally; avoid sending ambiguous
+relative filesystem paths directly to hub APIs.
+
+## Regression Matrix
+
+The high-risk contract is covered by focused tests:
+
+- Hosted previews cannot call hub APIs without a bearer token:
+  `tests/surfaces/web/test_preview_services_routes.py`.
+- Preview capability issue, expiry, and revocation:
+  `tests/surfaces/web/test_preview_services_routes.py` and
+  `tests/test_cli_services.py`.
+- Opener isolation and no persistent browser token storage:
+  `src/codex_autorunner/web_frontend/src/routes/services/page.test.ts`.
+- Process exit reconciliation, stale PID safety, lifecycle lock concurrency,
+  event history, and slow startup health timing:
+  `tests/core/test_preview_services_supervisor.py`.
+- Static symlink, hidden path, sensitive path, workspace-root, and ambiguous
+  relative path blocking: `tests/surfaces/web/test_preview_services_routes.py`.
+- CLI relative path resolution and destructive force payloads:
+  `tests/test_cli_services.py`.
+- Environment inheritance and read-model redaction:
+  `tests/core/test_preview_services_supervisor.py` and
+  `tests/core/test_preview_services_registry.py`.
+- Proxy compression, redirects, forwarded headers, body limits, streaming, and
+  WebSocket/HMR compatibility:
+  `tests/surfaces/web/test_preview_services_routes.py`.
