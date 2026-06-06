@@ -793,10 +793,6 @@ def _reject_static_registration_symlink_target(path: Path) -> None:
         raise ValueError("static path cannot be inspected") from exc
 
 
-def _absolute_static_path_from_text(context: HubAppContext, value: str) -> Path:
-    return _static_path_from_text(context, value, follow_final_symlink=True)
-
-
 def _static_path_from_text(
     context: HubAppContext,
     value: str,
