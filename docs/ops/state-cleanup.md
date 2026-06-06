@@ -18,6 +18,7 @@ CAR manages state across several retention families:
 | filebox | repo | ephemeral | Inbox/outbox staging |
 | reports | repo | reviewable | Report history files |
 | update_cache | global | cache-only | Update artifacts cache |
+| update_snapshots | global | reviewable | Update rollback snapshots |
 | workspaces | repo/global | ephemeral | App-server workspace directories |
 
 Retention classes determine cleanup behavior:
@@ -84,6 +85,15 @@ Total: deleted=22 bytes=36700160
 | `repo` | worktree_archives, run_archives, logs, uploads, github_context, review_runs, filebox, reports, repo workspaces |
 | `global` | update_cache, logs, global workspaces |
 | `all` | All families |
+
+`update_snapshots` are pruned separately by the update transaction helper after
+macOS safe refresh snapshots the orchestration DB. To inspect or prune them
+directly:
+
+```bash
+python -m codex_autorunner.core.update_transaction prune-snapshots \
+  --snapshot-root ~/.codex-autorunner/update_snapshots
+```
 
 ## Safety Guards
 

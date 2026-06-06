@@ -45,6 +45,11 @@ set -euo pipefail
 #   LAUNCHD_STOP_WAIT_SECONDS seconds to wait after launchctl unload for the old PID to exit before
 #                          SIGKILL (default: 10). Hub/chat can hold DB handles briefly; 5s was tight.
 #   KEEP_OLD_VENVS         how many old next-* venvs to keep (default: 3)
+#   UPDATE_SNAPSHOT_ROOT   directory for update DB rollback snapshots
+#                          (default: dirname(UPDATE_STATUS_PATH)/update_snapshots)
+#   UPDATE_SNAPSHOT_MAX_COUNT maximum update snapshot directories to keep (default: 5)
+#   UPDATE_SNAPSHOT_MAX_AGE_DAYS maximum update snapshot age in days (default: 14; 0 disables)
+#   UPDATE_SNAPSHOT_MAX_TOTAL_BYTES maximum total update snapshot bytes (default: 5368709120; 0 disables)
 #   NVM_BIN                Node bin path to prepend (default: ~/.nvm/versions/node/v22.12.0/bin)
 #   LOCAL_BIN              Local bin path for the `car` wrapper and PATH bootstrap (default: ~/.local/bin)
 #   PY39_BIN               Python bin path to prepend (default: auto-detected from active Python)
@@ -86,6 +91,9 @@ WAIT_HUB_HEALTH_BEFORE_CHAT_RELOAD="${WAIT_HUB_HEALTH_BEFORE_CHAT_RELOAD:-true}"
 LAUNCHD_STOP_WAIT_SECONDS="${LAUNCHD_STOP_WAIT_SECONDS:-10}"
 KEEP_OLD_VENVS="${KEEP_OLD_VENVS:-3}"
 UPDATE_SNAPSHOT_ROOT="${UPDATE_SNAPSHOT_ROOT:-}"
+UPDATE_SNAPSHOT_MAX_COUNT="${UPDATE_SNAPSHOT_MAX_COUNT:-5}"
+UPDATE_SNAPSHOT_MAX_AGE_DAYS="${UPDATE_SNAPSHOT_MAX_AGE_DAYS:-14}"
+UPDATE_SNAPSHOT_MAX_TOTAL_BYTES="${UPDATE_SNAPSHOT_MAX_TOTAL_BYTES:-5368709120}"
 NVM_BIN="${NVM_BIN:-$HOME/.nvm/versions/node/v22.12.0/bin}"
 LOCAL_BIN="${LOCAL_BIN:-$HOME/.local/bin}"
 PY39_BIN="${PY39_BIN:-$HOME/Library/Python/$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/bin}"
@@ -269,7 +277,10 @@ _snapshot_db_phase() {
       snapshot-db \
       --hub-root "${HUB_ROOT}" \
       --snapshot-root "${UPDATE_SNAPSHOT_ROOT}" \
-      --run-id "${update_run_id}"
+      --run-id "${update_run_id}" \
+      --max-snapshots "${UPDATE_SNAPSHOT_MAX_COUNT}" \
+      --max-age-days "${UPDATE_SNAPSHOT_MAX_AGE_DAYS}" \
+      --max-total-bytes "${UPDATE_SNAPSHOT_MAX_TOTAL_BYTES}"
   )" || return
   db_snapshot_dir="$(
     SNAPSHOT_PAYLOAD="${snapshot_payload}" "${HELPER_PYTHON}" - <<'PY'
