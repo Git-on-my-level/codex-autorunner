@@ -4,13 +4,15 @@ import argparse
 import json
 import shutil
 import sqlite3
+import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from .orchestration.migrations import ORCHESTRATION_SCHEMA_VERSION
 from .orchestration.sqlite import resolve_orchestration_sqlite_path
+from .utils import resolve_executable
 
 _PRESERVED_STATUS_KEYS = (
     "notify_chat_id",
@@ -26,6 +28,9 @@ _MAX_PHASE_TIMINGS = 24
 
 _ORCHESTRATION_DB_SUFFIXES = ("", "-wal", "-shm")
 _SNAPSHOT_METADATA = "snapshot.json"
+_DEFAULT_MAX_SNAPSHOTS = 1
+
+OpenFileChecker = Callable[[Path], bool]
 
 
 @dataclass(frozen=True)
@@ -55,12 +60,153 @@ class OrchestrationDbSnapshot:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class UpdateSnapshotPruneResult:
+    snapshot_root: str
+    kept: tuple[str, ...]
+    pruned: tuple[str, ...]
+    skipped_open: tuple[str, ...]
+    skipped_invalid: tuple[str, ...]
+    max_snapshots: int | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class UpdateSnapshotDirectory:
+    path: Path
+    created_at: float
+
+
+@dataclass(frozen=True)
+class UpdateSnapshotTransaction:
+    snapshot: OrchestrationDbSnapshot
+    prune: UpdateSnapshotPruneResult
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = self.snapshot.to_dict()
+        payload["prune"] = self.prune.to_dict()
+        return payload
+
+
 def _read_json(path: Path) -> dict[str, Any] | None:
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def _snapshot_created_at(path: Path) -> float | None:
+    metadata = _read_json(path / "orchestration" / _SNAPSHOT_METADATA)
+    if metadata is None:
+        return None
+    try:
+        created_at = float(metadata.get("created_at") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    return created_at if created_at > 0 else None
+
+
+def _has_open_files(path: Path) -> bool:
+    lsof = resolve_executable("lsof")
+    if lsof is None:
+        return True
+    try:
+        completed = subprocess.run(
+            [lsof, "+D", str(path)],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return True
+    if completed.returncode not in (0, 1):
+        return True
+    return completed.returncode == 0
+
+
+def _positive_int_or_none(value: int | None) -> int | None:
+    return value if value is not None and value > 0 else None
+
+
+def collect_update_snapshots(
+    snapshot_root: Path,
+) -> tuple[list[UpdateSnapshotDirectory], tuple[str, ...]]:
+    if not snapshot_root.exists():
+        return [], ()
+
+    snapshots: list[UpdateSnapshotDirectory] = []
+    skipped_invalid: list[str] = []
+    for child in snapshot_root.iterdir():
+        if not child.is_dir():
+            skipped_invalid.append(str(child))
+            continue
+        try:
+            created_at = _snapshot_created_at(child)
+            if created_at is None:
+                skipped_invalid.append(str(child))
+                continue
+            snapshots.append(
+                UpdateSnapshotDirectory(
+                    path=child,
+                    created_at=created_at,
+                )
+            )
+        except OSError:
+            skipped_invalid.append(str(child))
+    return snapshots, tuple(skipped_invalid)
+
+
+def prune_update_snapshots(
+    snapshot_root: Path,
+    *,
+    current_run_id: str | None = None,
+    max_snapshots: int | None = _DEFAULT_MAX_SNAPSHOTS,
+    open_file_checker: OpenFileChecker | None = None,
+) -> UpdateSnapshotPruneResult:
+    max_snapshots = _positive_int_or_none(max_snapshots)
+    open_file_checker = (
+        _has_open_files if open_file_checker is None else open_file_checker
+    )
+
+    snapshots, skipped_invalid = collect_update_snapshots(snapshot_root)
+
+    snapshots_by_age = sorted(
+        snapshots,
+        key=lambda snapshot: (snapshot.created_at, snapshot.path.name),
+        reverse=True,
+    )
+    kept_paths = {snapshot.path for snapshot in snapshots}
+    protected = {snapshot_root / current_run_id} if current_run_id else set()
+
+    prune_paths: set[Path] = set()
+    if max_snapshots is not None:
+        for snapshot in snapshots_by_age[max_snapshots:]:
+            if snapshot.path not in protected:
+                prune_paths.add(snapshot.path)
+
+    pruned: list[str] = []
+    skipped_open: list[str] = []
+    for path in sorted(prune_paths):
+        if open_file_checker(path):
+            skipped_open.append(str(path))
+            continue
+        shutil.rmtree(path)
+        pruned.append(str(path))
+        kept_paths.discard(path)
+
+    kept = tuple(str(path) for path in sorted(kept_paths))
+    return UpdateSnapshotPruneResult(
+        snapshot_root=str(snapshot_root),
+        kept=kept,
+        pruned=tuple(pruned),
+        skipped_open=tuple(skipped_open),
+        skipped_invalid=skipped_invalid,
+        max_snapshots=max_snapshots,
+    )
 
 
 def write_update_status_projection(
@@ -179,6 +325,26 @@ def snapshot_orchestration_db(
     return snapshot
 
 
+def snapshot_orchestration_db_transaction(
+    hub_root: Path,
+    *,
+    snapshot_root: Path,
+    run_id: str,
+    max_snapshots: int | None = _DEFAULT_MAX_SNAPSHOTS,
+) -> UpdateSnapshotTransaction:
+    snapshot = snapshot_orchestration_db(
+        hub_root,
+        snapshot_root=snapshot_root,
+        run_id=run_id,
+    )
+    prune = prune_update_snapshots(
+        snapshot_root,
+        current_run_id=run_id,
+        max_snapshots=max_snapshots,
+    )
+    return UpdateSnapshotTransaction(snapshot=snapshot, prune=prune)
+
+
 def restore_orchestration_db_snapshot(snapshot_dir: Path) -> OrchestrationDbSnapshot:
     metadata_path = snapshot_dir / _SNAPSHOT_METADATA
     metadata = _read_json(metadata_path)
@@ -255,6 +421,19 @@ def _build_parser() -> argparse.ArgumentParser:
     snapshot.add_argument("--hub-root", required=True)
     snapshot.add_argument("--snapshot-root", required=True)
     snapshot.add_argument("--run-id", required=True)
+    snapshot.add_argument(
+        "--max-snapshots",
+        type=int,
+        default=_DEFAULT_MAX_SNAPSHOTS,
+        help=(
+            "Maximum update snapshot directories to retain. "
+            "Use 0 to disable count pruning."
+        ),
+    )
+    prune = sub.add_parser("prune-snapshots", help="Prune update snapshot history.")
+    prune.add_argument("--snapshot-root", required=True)
+    prune.add_argument("--current-run-id")
+    prune.add_argument("--max-snapshots", type=int, default=_DEFAULT_MAX_SNAPSHOTS)
 
     restore = sub.add_parser("restore-db", help="Restore an orchestration DB snapshot.")
     restore.add_argument("--snapshot-dir", required=True)
@@ -286,12 +465,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "snapshot-db":
-        snapshot = snapshot_orchestration_db(
+        transaction = snapshot_orchestration_db_transaction(
             Path(args.hub_root),
             snapshot_root=Path(args.snapshot_root),
             run_id=args.run_id,
+            max_snapshots=args.max_snapshots,
         )
-        print(json.dumps(snapshot.to_dict(), sort_keys=True))
+        print(json.dumps(transaction.to_dict(), sort_keys=True))
+        return 0
+
+    if args.command == "prune-snapshots":
+        prune = prune_update_snapshots(
+            Path(args.snapshot_root),
+            current_run_id=args.current_run_id,
+            max_snapshots=args.max_snapshots,
+        )
+        print(json.dumps(prune.to_dict(), sort_keys=True))
         return 0
 
     if args.command == "restore-db":

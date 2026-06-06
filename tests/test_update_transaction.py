@@ -11,9 +11,11 @@ from codex_autorunner.core.orchestration.sqlite import (
     resolve_orchestration_sqlite_path,
 )
 from codex_autorunner.core.update_transaction import (
+    prune_update_snapshots,
     read_orchestration_schema_info,
     restore_orchestration_db_snapshot,
     snapshot_orchestration_db,
+    snapshot_orchestration_db_transaction,
     write_update_status_projection,
 )
 
@@ -166,3 +168,166 @@ def test_orchestration_db_snapshot_restore_removes_new_db_when_absent(
     restore_orchestration_db_snapshot(Path(snapshot.snapshot_dir))
 
     assert not db_path.exists()
+
+
+def _write_update_snapshot(
+    snapshot_root: Path,
+    run_id: str,
+    *,
+    created_at: float,
+    bytes_count: int,
+) -> Path:
+    snapshot_dir = snapshot_root / run_id / "orchestration"
+    snapshot_dir.mkdir(parents=True)
+    (snapshot_dir / "orchestration.sqlite3").write_bytes(b"x" * bytes_count)
+    (snapshot_dir / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "snapshot_dir": str(snapshot_dir),
+                "hub_root": "/hub",
+                "db_path": "/hub/.codex-autorunner/orchestration.sqlite3",
+                "db_existed": True,
+                "copied_files": ["orchestration.sqlite3"],
+                "current_schema": 1,
+                "supported_schema": 1,
+                "created_at": created_at,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return snapshot_root / run_id
+
+
+def test_prune_update_snapshots_keeps_one_newest_snapshot(
+    tmp_path: Path,
+) -> None:
+    snapshot_root = tmp_path / "update_snapshots"
+    _write_update_snapshot(
+        snapshot_root, "20260601-000000-1", created_at=100.0, bytes_count=9
+    )
+    _write_update_snapshot(
+        snapshot_root, "20260602-000000-2", created_at=200.0, bytes_count=9
+    )
+    _write_update_snapshot(
+        snapshot_root, "20260603-000000-3", created_at=300.0, bytes_count=9
+    )
+
+    result = prune_update_snapshots(
+        snapshot_root,
+        max_snapshots=1,
+        open_file_checker=lambda _path: False,
+    )
+
+    assert sorted(path.name for path in snapshot_root.iterdir()) == [
+        "20260603-000000-3",
+    ]
+    assert len(result.pruned) == 2
+
+
+def test_prune_update_snapshots_protects_current_run(
+    tmp_path: Path,
+) -> None:
+    snapshot_root = tmp_path / "update_snapshots"
+    current = _write_update_snapshot(
+        snapshot_root, "20260601-000000-1", created_at=100.0, bytes_count=9
+    )
+    _write_update_snapshot(
+        snapshot_root, "20260602-000000-2", created_at=200.0, bytes_count=9
+    )
+    _write_update_snapshot(
+        snapshot_root, "20260603-000000-3", created_at=300.0, bytes_count=9
+    )
+
+    result = prune_update_snapshots(
+        snapshot_root,
+        current_run_id=current.name,
+        max_snapshots=1,
+        open_file_checker=lambda _path: False,
+    )
+
+    assert current.exists()
+    assert sorted(path.name for path in snapshot_root.iterdir()) == [
+        "20260601-000000-1",
+        "20260603-000000-3",
+    ]
+    assert result.pruned == (str(snapshot_root / "20260602-000000-2"),)
+
+
+def test_prune_update_snapshots_skips_directories_with_open_files(
+    tmp_path: Path,
+) -> None:
+    snapshot_root = tmp_path / "update_snapshots"
+    open_snapshot = _write_update_snapshot(
+        snapshot_root, "20260601-000000-1", created_at=100.0, bytes_count=1
+    )
+    _write_update_snapshot(
+        snapshot_root, "20260602-000000-2", created_at=200.0, bytes_count=1
+    )
+
+    result = prune_update_snapshots(
+        snapshot_root,
+        max_snapshots=1,
+        open_file_checker=lambda path: path == open_snapshot,
+    )
+
+    assert open_snapshot.exists()
+    assert result.pruned == ()
+    assert result.skipped_open == (str(open_snapshot),)
+
+
+def test_prune_update_snapshots_requires_snapshot_metadata(
+    tmp_path: Path,
+) -> None:
+    snapshot_root = tmp_path / "update_snapshots"
+    unrelated_state = snapshot_root / "workspaces"
+    unrelated_state.mkdir(parents=True)
+    (unrelated_state / "state.sqlite3").write_text("keep", encoding="utf-8")
+    malformed_snapshot = snapshot_root / "malformed"
+    (malformed_snapshot / "orchestration").mkdir(parents=True)
+    (malformed_snapshot / "orchestration" / "snapshot.json").write_text(
+        '{"created_at": "not-a-number"}',
+        encoding="utf-8",
+    )
+    _write_update_snapshot(
+        snapshot_root, "20260601-000000-1", created_at=100.0, bytes_count=1
+    )
+    _write_update_snapshot(
+        snapshot_root, "20260602-000000-2", created_at=200.0, bytes_count=1
+    )
+
+    result = prune_update_snapshots(
+        snapshot_root,
+        max_snapshots=1,
+        open_file_checker=lambda _path: False,
+    )
+
+    assert unrelated_state.exists()
+    assert malformed_snapshot.exists()
+    assert sorted(Path(path).name for path in result.skipped_invalid) == [
+        "malformed",
+        "workspaces",
+    ]
+    assert result.pruned == (str(snapshot_root / "20260601-000000-1"),)
+
+
+def test_snapshot_orchestration_db_transaction_reports_prune_result(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    db_path = resolve_orchestration_sqlite_path(hub_root)
+    db_path.parent.mkdir(parents=True)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE marker (value TEXT)")
+
+    snapshot_root = tmp_path / "update_snapshots"
+    _write_update_snapshot(snapshot_root, "old-run", created_at=100.0, bytes_count=1)
+
+    transaction = snapshot_orchestration_db_transaction(
+        hub_root,
+        snapshot_root=snapshot_root,
+        run_id="new-run",
+        max_snapshots=1,
+    )
+
+    assert Path(transaction.snapshot.snapshot_dir).exists()
+    assert transaction.prune.pruned == (str(snapshot_root / "old-run"),)

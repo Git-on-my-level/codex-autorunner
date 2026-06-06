@@ -98,8 +98,32 @@ CAR does not install third-party runtimes as part of the state-root contract.
 **Contents**:
 - `update_cache/` - Cached update artifacts
 - `update_status.json` - Update status
+- `update_snapshots/` - Timestamped update rollback snapshots, including
+  orchestration DB copies created by macOS safe refresh
 - `locks/` - Cross-repo locks (e.g., telegram bot lock)
 - `workspaces/` - App-server workspaces (default for non-docker destinations)
+
+**Update snapshot retention**:
+- macOS safe refresh stores update rollback snapshots under
+  `~/.codex-autorunner/update_snapshots/` when `UPDATE_STATUS_PATH` uses the
+  global state root.
+- Snapshot pruning runs after every `snapshot-db` update phase. The default
+  keeps only the newest snapshot directory needed for rollback.
+- Override with `UPDATE_SNAPSHOT_MAX_COUNT` when running
+  `scripts/safe-refresh-local-mac-hub.sh`. Set it to `0` to disable pruning.
+- Manual inspection and pruning:
+
+```bash
+du -sh ~/.codex-autorunner/update_snapshots
+find ~/.codex-autorunner/update_snapshots -maxdepth 1 -mindepth 1 -type d -print
+python -m codex_autorunner.core.update_transaction prune-snapshots \
+  --snapshot-root ~/.codex-autorunner/update_snapshots
+```
+
+The pruning helper only deletes directories with valid
+`orchestration/snapshot.json` metadata, skips the current update run when
+provided, and skips candidate directories when `lsof` reports open files inside
+them or cannot prove they are closed.
 
 **Docker destination override**:
 - When a repo/worktree runs with effective destination `docker`, supervisor state root is forced to:

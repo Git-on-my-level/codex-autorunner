@@ -23,7 +23,7 @@ def test_safe_refresh_local_mac_hub_voice_provider_prefers_config_over_env(
         encoding="utf-8",
     )
     (car_dir / "config.yml").write_text(
-        "repo_defaults:\n" "  voice:\n" "    provider: mlx_whisper\n",
+        "repo_defaults:\n  voice:\n    provider: mlx_whisper\n",
         encoding="utf-8",
     )
 
@@ -106,3 +106,14 @@ def test_safe_refresh_local_mac_hub_script_uses_pip_cache_for_dependencies() -> 
         "\n}\n", 1
     )[0]
     assert "--no-cache-dir" not in install_function
+
+
+def test_safe_refresh_local_mac_hub_script_bounds_update_snapshots() -> None:
+    script = Path("scripts/safe-refresh-local-mac-hub.sh").read_text(encoding="utf-8")
+
+    assert "UPDATE_SNAPSHOT_MAX_COUNT" in script
+    assert "--max-snapshots" in script
+    assert "UPDATE_SNAPSHOT_MAX_AGE_DAYS" not in script
+    assert "UPDATE_SNAPSHOT_MAX_TOTAL_BYTES" not in script
+    assert "--max-age-days" not in script
+    assert "--max-total-bytes" not in script
