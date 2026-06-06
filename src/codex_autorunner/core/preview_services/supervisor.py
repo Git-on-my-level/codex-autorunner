@@ -526,8 +526,19 @@ class PreviewServiceSupervisor:
         self,
         service_id: str,
     ) -> PreviewServiceRecord:
-        self.reconcile_service(service_id, lock=False)
-        record = self._registry.require(service_id)
+        record = self.reconcile_service(service_id, lock=False)
+        if record.status in {
+            PreviewServiceStatus.EXITED.value,
+            PreviewServiceStatus.STOPPED.value,
+        }:
+            delete_process_record(self._hub_root, PROCESS_KIND, service_id)
+            self._processes.pop(service_id, None)
+            killed = self._registry.update(
+                service_id,
+                lambda latest: _record_stopped(latest, PreviewServiceStatus.STOPPED),
+            )
+            self._append_event(service_id, "killed", status=killed.status)
+            return killed
         process = record.process
         if process is not None:
             self._verify_process_identity_or_orphan(record, action="kill")

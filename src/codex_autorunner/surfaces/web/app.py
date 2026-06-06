@@ -91,7 +91,7 @@ def create_hub_app(
             "to a non-empty bearer token"
         )
     browser_auth_store: Optional[BrowserAuthStore] = None
-    if (auth_token or remote_bind) and not hosted_bearer:
+    if hosted_bearer or auth_token or remote_bind:
         browser_auth_store = BrowserAuthStore(context.config.root)
         browser_auth_store.ensure_bootstrap_token()
         app.state.browser_auth_store = browser_auth_store
@@ -100,6 +100,7 @@ def create_hub_app(
                 browser_auth_store,
                 cookie_secure=context.config.browser_auth.cookie_secure,
                 require_secure_claim=remote_bind,
+                hosted_bearer_claim=hosted_bearer,
             )
         )
     web_app_assets_dir = web_static_dir / "_app"
@@ -365,6 +366,7 @@ def create_hub_app(
                 else None
             ),
             allow_session_auth=not hosted_bearer,
+            allow_session_bearer=hosted_bearer,
         )
     if context.base_path:
         asgi_app = BasePathRouterMiddleware(asgi_app, context.base_path)
@@ -375,7 +377,7 @@ def create_hub_app(
         base_path=context.base_path,
     )
     asgi_app = RequestIdMiddleware(asgi_app)
-    asgi_app = SecurityHeadersMiddleware(asgi_app)
+    asgi_app = SecurityHeadersMiddleware(asgi_app, base_path=context.base_path)
 
     return asgi_app
 

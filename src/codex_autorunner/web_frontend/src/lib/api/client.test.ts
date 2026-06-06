@@ -59,6 +59,39 @@ describe('API client error handling', () => {
     expect(headers.has('authorization')).toBe(false);
   });
 
+  it('attaches in-memory hub bearer credentials to JSON hub requests when provided', async () => {
+    const fetcher = vi.fn(async () => Response.json({ ok: true }));
+    const client = new WebApiClient(fetcher as unknown as typeof fetch, '', () => 'hub-secret');
+
+    await client.getJson('/hub/services');
+
+    const [, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get('authorization')).toBe('Bearer hub-secret');
+  });
+
+  it('attaches in-memory hub bearer credentials to form uploads when provided', async () => {
+    const fetcher = vi.fn(async () => Response.json({ ok: true }));
+    const client = new WebApiClient(fetcher as unknown as typeof fetch, '', () => 'hub-secret');
+
+    await client.uploadForm('/hub/filebox/repo-1', new FormData());
+
+    const [, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get('authorization')).toBe('Bearer hub-secret');
+  });
+
+  it('does not attach hub bearer credentials to preview capability paths', async () => {
+    const fetcher = vi.fn(async () => Response.json({ ok: true }));
+    const client = new WebApiClient(fetcher as unknown as typeof fetch, '', () => 'hub-secret');
+
+    await client.getJson('/preview/p/cap-token/data.json');
+
+    const [, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.has('authorization')).toBe(false);
+  });
+
   it('issues preview service capability links through the explicit token endpoint', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({

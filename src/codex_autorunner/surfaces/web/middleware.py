@@ -190,6 +190,7 @@ class AuthTokenMiddleware:
         session_cookie_name: str = "car_session",
         session_validator: Optional[Callable[[Optional[str]], bool]] = None,
         allow_session_auth: bool = True,
+        allow_session_bearer: bool = False,
     ):
         self.app = app
         self.token = token
@@ -197,6 +198,7 @@ class AuthTokenMiddleware:
         self.session_cookie_name = session_cookie_name
         self.session_validator = session_validator
         self.allow_session_auth = allow_session_auth
+        self.allow_session_bearer = allow_session_bearer
         self.public_prefixes = (
             "/_app",
             "/health",
@@ -354,6 +356,14 @@ class AuthTokenMiddleware:
             token = token or self._extract_query_token(scope)
 
         if token and self.token and hmac.compare_digest(token, self.token):
+            return await self.app(scope, receive, send)
+
+        if (
+            token
+            and self.allow_session_bearer
+            and self.session_validator is not None
+            and self.session_validator(token)
+        ):
             return await self.app(scope, receive, send)
 
         if self.allow_session_auth and self.session_validator is not None:
@@ -557,18 +567,33 @@ class HostOriginMiddleware:
 class SecurityHeadersMiddleware:
     """Attach security headers to HTML responses."""
 
-    def __init__(self, app):
+    def __init__(self, app, base_path: str = ""):
         self.app = app
+        self.base_path = normalize_base_path(base_path)
         self.headers = security_headers()
 
     def __getattr__(self, name):
         return getattr(self.app, name)
 
+    def _classify_path(self, scope) -> str:
+        path = str(scope.get("path") or "")
+        root_path = str(scope.get("root_path") or "")
+        if root_path and path.startswith(root_path):
+            return path[len(root_path) :] or "/"
+        if self.base_path and path.startswith(self.base_path):
+            return path[len(self.base_path) :] or "/"
+        return path
+
+    def _is_preview_path(self, scope) -> bool:
+        path = self._classify_path(scope)
+        if path == "/preview" or path.startswith("/preview/"):
+            return True
+        return False
+
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http":
             return await self.app(scope, receive, send)
-        path = str(scope.get("path") or "")
-        if path == "/preview" or path.startswith("/preview/"):
+        if self._is_preview_path(scope):
             return await self.app(scope, receive, send)
 
         async def send_wrapper(message):

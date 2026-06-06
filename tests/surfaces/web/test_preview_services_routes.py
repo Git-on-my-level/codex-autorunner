@@ -661,6 +661,53 @@ def test_preview_capability_proxy_strips_token_leak_headers(
         server.server_close()
 
 
+def test_preview_capability_proxy_headers_are_hardened_under_base_path(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    server, port = _start_loopback_capture_server()
+    client = TestClient(create_hub_app(hub_root, base_path="/car"))
+    try:
+        created = client.post(
+            "/car/hub/services/loopback-url",
+            json={"url": f"http://127.0.0.1:{port}/base/", "name": "Loopback"},
+        )
+        assert created.status_code == 200
+        service_id = created.json()["service"]["service_id"]
+        issued = client.post(f"/car/hub/services/{service_id}/preview-token")
+        assert issued.status_code == 200
+        preview_url = issued.json()["preview_url"]
+        preview_token = preview_url.split("/preview/p/", 1)[1].split("/", 1)[0]
+
+        response = client.post(
+            f"/car{preview_url}nested/path?token=app-token&car_token=hub-secret",
+            content=b"payload",
+            headers={
+                "Referer": (
+                    f"http://testserver/car/preview/p/{preview_token}/index.html"
+                ),
+                "X-Test-Header": "kept",
+            },
+        )
+
+        assert response.status_code == 201
+        assert response.headers["referrer-policy"] == "no-referrer"
+        assert response.headers["cache-control"] == "no-store, private"
+        assert "content-security-policy" not in response.headers
+        assert "x-frame-options" not in response.headers
+        assert "service-worker-allowed" not in response.headers
+        payload = response.json()
+        assert payload["path"] == "/base/nested/path?token=app-token"
+        assert payload["referer"] is None
+        assert payload["service_worker_allowed"] is None
+        assert payload["forwarded_prefix"] == "/car/preview/p/<redacted>"
+        assert preview_token not in payload["forwarded_prefix"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_preview_loopback_http_strips_stale_encoded_response_headers(
     tmp_path: Path,
 ) -> None:

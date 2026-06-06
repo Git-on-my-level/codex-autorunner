@@ -38,6 +38,7 @@ import {
 } from '$lib/viewModels/domain';
 import { mapChatTranscriptSnapshot, type ChatTranscriptSnapshot } from '$lib/viewModels/chat';
 import { runtimeBasePath, withRuntimeBasePath } from '$lib/runtime/basePath';
+import { hostedBearerToken } from '$lib/runtime/hostedAuth';
 
 export type ApiErrorKind = 'http' | 'network' | 'parse' | 'aborted';
 
@@ -419,6 +420,8 @@ export type RequestOptions = Omit<RequestInit, 'body'> & {
   body?: unknown;
 };
 
+export type HubBearerTokenProvider = () => string | null | undefined;
+
 const defaultHeaders = {
   accept: 'application/json'
 };
@@ -503,16 +506,26 @@ function fileBoxRoute(scope: ChatFileBoxScope): string {
   return '/hub/pma/files';
 }
 
+function isHubControlPath(path: string): boolean {
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  if (cleanPath === '/hub' || cleanPath.startsWith('/hub/')) return true;
+  if (cleanPath === '/api' || cleanPath.startsWith('/api/')) return true;
+  const parts = cleanPath.split('/');
+  return parts.length >= 4 && parts[1] === 'repos' && parts[3] === 'api';
+}
+
 export class WebApiClient {
   constructor(
     private readonly fetcher: typeof fetch = fetch,
-    private readonly basePath = runtimeBasePath()
+    private readonly basePath = runtimeBasePath(),
+    private readonly hubBearerTokenProvider?: HubBearerTokenProvider
   ) {}
 
   async requestJson<T>(path: string, options: RequestOptions = {}): Promise<ApiResult<T>> {
     const headers = new Headers(defaultHeaders);
     if (options.body !== undefined) headers.set('content-type', 'application/json');
     new Headers(options.headers).forEach((value, key) => headers.set(key, value));
+    this.attachHubBearer(path, headers);
 
     try {
       const response = await this.fetcher(this.url(path), {
@@ -549,11 +562,13 @@ export class WebApiClient {
   }
 
   async uploadForm<T>(path: string, body: FormData): Promise<ApiResult<T>> {
+    const headers = new Headers({ accept: 'application/json' });
+    this.attachHubBearer(path, headers);
     try {
       const response = await this.fetcher(this.url(path), {
         method: 'POST',
         body,
-        headers: { accept: 'application/json' }
+        headers
       });
       if (!response.ok) {
         return { ok: false, error: await parseApiErrorResponse(response) };
@@ -566,6 +581,14 @@ export class WebApiClient {
 
   url(path: string): string {
     return withRuntimeBasePath(path, this.basePath);
+  }
+
+  private attachHubBearer(path: string, headers: Headers): void {
+    if (headers.has('authorization')) return;
+    if (!isHubControlPath(path)) return;
+    const token = this.hubBearerTokenProvider?.()?.trim();
+    if (!token) return;
+    headers.set('authorization', `Bearer ${token}`);
   }
 
   filebox = {
@@ -1820,4 +1843,4 @@ function isStandardPmaDoc(name: string): boolean {
   );
 }
 
-export const webApi = new WebApiClient();
+export const webApi = new WebApiClient(fetch, runtimeBasePath(), hostedBearerToken);

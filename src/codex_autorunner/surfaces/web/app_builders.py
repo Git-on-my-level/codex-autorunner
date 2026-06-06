@@ -393,7 +393,7 @@ def _add_shared_repo_middlewares(
         base_path=context.base_path if include_base_path_router else "",
     )
     app.add_middleware(RequestIdMiddleware)
-    app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware, base_path=context.base_path)
 
 
 def create_repo_app(

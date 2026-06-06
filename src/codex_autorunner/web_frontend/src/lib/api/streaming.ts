@@ -1,5 +1,6 @@
-import { runtimeBasePath, withRuntimeBasePath } from '$lib/runtime/basePath';
-import { EventSourceStreamRuntime } from '$lib/runtime/eventSourceRuntime';
+import { runtimeBasePath } from '$lib/runtime/basePath';
+import { EventSourceStreamRuntime, type HubBearerTokenProvider } from '$lib/runtime/eventSourceRuntime';
+import { hostedBearerToken } from '$lib/runtime/hostedAuth';
 
 export type SseEvent<T = unknown> = {
   id: string | null;
@@ -39,6 +40,7 @@ export type TranscriptStreamOptions = {
   sinceEventId?: string | number | null;
   sinceManagedTurnId?: string | null;
   withCredentials?: boolean;
+  hubBearerTokenProvider?: HubBearerTokenProvider;
 };
 
 export type ChatTranscriptStreamUseState = {
@@ -50,6 +52,7 @@ export type ChatStreamOptions = {
   onEvent: (event: ChatStreamEvent) => void;
   onError?: (error: Event) => void;
   withCredentials?: boolean;
+  hubBearerTokenProvider?: HubBearerTokenProvider;
 };
 
 export type ChatSurfaceStreamOptions = {
@@ -57,6 +60,7 @@ export type ChatSurfaceStreamOptions = {
   onError?: (error: Event) => void;
   onStatus?: (status: 'connecting' | 'connected' | 'interrupted' | 'closed') => void;
   withCredentials?: boolean;
+  hubBearerTokenProvider?: HubBearerTokenProvider;
 };
 
 export function parseSseFrame(frame: string): SseEvent<string> | null {
@@ -154,6 +158,7 @@ export function openChatTranscriptEventSource(
     eventTypes: ['transcript.snapshot', 'transcript.append', 'transcript.patch'],
     basePath,
     withCredentials: options.withCredentials,
+    hubBearerTokenProvider: options.hubBearerTokenProvider ?? hostedBearerToken,
     onStatus: options.onStatus,
     onError: options.onError,
     onMessage: handle
@@ -177,9 +182,6 @@ export function openChatEventSource(
   options: ChatStreamOptions,
   basePath = runtimeBasePath()
 ): StreamSubscription {
-  const source = new EventSource(withRuntimeBasePath('/hub/pma/events', basePath), {
-    withCredentials: options.withCredentials
-  });
   const handle = (message: MessageEvent) => {
     options.onEvent(
       normalizeChatStreamEvent({
@@ -190,10 +192,17 @@ export function openChatEventSource(
       })
     );
   };
-  source.addEventListener('chat_snapshot', handle);
-  source.addEventListener('message', handle);
-  source.addEventListener('error', (event) => options.onError?.(event));
-  return { close: () => source.close() };
+  const runtime = new EventSourceStreamRuntime({
+    path: '/hub/pma/events',
+    eventTypes: ['chat_snapshot'],
+    basePath,
+    withCredentials: options.withCredentials,
+    hubBearerTokenProvider: options.hubBearerTokenProvider ?? hostedBearerToken,
+    onError: options.onError,
+    onMessage: handle
+  });
+  runtime.open();
+  return { close: () => runtime.close() };
 }
 
 export function openChatSurfaceEventSource(
@@ -223,6 +232,7 @@ export function openChatSurfaceEventSource(
     eventTypes: ['chat.snapshot', 'chat.event'],
     basePath,
     withCredentials: options.withCredentials,
+    hubBearerTokenProvider: options.hubBearerTokenProvider ?? hostedBearerToken,
     onStatus: options.onStatus,
     onError: options.onError,
     onBeforeReconnect: () => {
@@ -243,6 +253,7 @@ export function openFlowRunEventSource(
     onEvent: (event: FlowRunStreamEvent) => void;
     onError?: (error: Event) => void;
     withCredentials?: boolean;
+    hubBearerTokenProvider?: HubBearerTokenProvider;
   },
   basePath = runtimeBasePath()
 ): StreamSubscription {
@@ -259,6 +270,7 @@ export function openFlowRunEventSource(
     eventTypes: [],
     basePath,
     withCredentials: options.withCredentials,
+    hubBearerTokenProvider: options.hubBearerTokenProvider ?? hostedBearerToken,
     onError: options.onError,
     onMessage: (message) => {
       if (message.lastEventId) rememberCursor(storageKey, message.lastEventId);

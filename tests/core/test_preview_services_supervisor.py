@@ -380,6 +380,74 @@ def test_stop_exited_service_is_idempotent(tmp_path: Path) -> None:
     assert stopped.process is None
 
 
+def test_kill_stopped_service_is_idempotent(tmp_path: Path) -> None:
+    supervisor = PreviewServiceSupervisor(tmp_path)
+    record = supervisor.start_managed_command(
+        name="Stopped kill service",
+        argv=[
+            sys.executable,
+            "-u",
+            "-c",
+            "import time; print('ready', flush=True); time.sleep(30)",
+        ],
+        cwd=tmp_path,
+        health_check={"type": "none"},
+    )
+
+    stopped = supervisor.stop(record.service_id)
+    assert stopped.status == PreviewServiceStatus.STOPPED.value
+
+    killed = supervisor.kill(
+        record.service_id,
+        force=True,
+        force_attestation={
+            "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+            "user_request": "test idempotent force kill stopped preview service",
+            "target_scope": f"hub.preview_services.kill:{record.service_id}",
+        },
+    )
+
+    assert killed.status == PreviewServiceStatus.STOPPED.value
+    assert killed.process is None
+    assert read_process_record(tmp_path, PROCESS_KIND, record.service_id) is None
+
+
+def test_kill_exited_service_is_idempotent(tmp_path: Path) -> None:
+    supervisor = PreviewServiceSupervisor(tmp_path)
+    record = supervisor.start_managed_command(
+        name="Exited kill service",
+        argv=[
+            sys.executable,
+            "-u",
+            "-c",
+            "import time; print('ready', flush=True); time.sleep(0.1)",
+        ],
+        cwd=tmp_path,
+        health_check={"type": "none"},
+    )
+    first_pid = record.process.pid if record.process else None
+    assert first_pid is not None
+    assert _wait_for_inactive(first_pid)
+
+    exited = supervisor.reconcile_service(record.service_id)
+    assert exited.status == PreviewServiceStatus.EXITED.value
+    assert exited.process is not None
+
+    killed = supervisor.kill(
+        record.service_id,
+        force=True,
+        force_attestation={
+            "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+            "user_request": "test idempotent force kill exited preview service",
+            "target_scope": f"hub.preview_services.kill:{record.service_id}",
+        },
+    )
+
+    assert killed.status == PreviewServiceStatus.STOPPED.value
+    assert killed.process is None
+    assert read_process_record(tmp_path, PROCESS_KIND, record.service_id) is None
+
+
 def test_restart_exited_service_starts_directly(tmp_path: Path) -> None:
     port = _find_available_port()
     supervisor = PreviewServiceSupervisor(tmp_path, port_range=(port, port))

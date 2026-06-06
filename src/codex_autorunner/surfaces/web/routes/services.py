@@ -1597,8 +1597,11 @@ def _proxy_response_headers(
 
 
 def _is_capability_preview_prefix(preview_prefix: str) -> bool:
-    clean_prefix = "/" + preview_prefix.strip("/")
-    return clean_prefix == "/preview/p" or clean_prefix.startswith("/preview/p/")
+    parts = [part for part in preview_prefix.split("/") if part]
+    for index, part in enumerate(parts):
+        if part == "preview" and index + 1 < len(parts) and parts[index + 1] == "p":
+            return True
+    return False
 
 
 def _redact_capability_preview_prefix(preview_prefix: str) -> str:
