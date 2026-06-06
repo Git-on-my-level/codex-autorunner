@@ -131,7 +131,7 @@ def _snapshot_created_at(path: Path) -> float:
 def _has_open_files(path: Path) -> bool:
     lsof = resolve_executable("lsof")
     if lsof is None:
-        return False
+        return True
     try:
         completed = subprocess.run(
             [lsof, "+D", str(path)],
@@ -141,6 +141,8 @@ def _has_open_files(path: Path) -> bool:
             timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired):
+        return True
+    if completed.returncode not in (0, 1):
         return True
     return completed.returncode == 0
 
