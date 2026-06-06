@@ -670,13 +670,6 @@ def _allowed_static_roots(
     return resolved
 
 
-def _configured_static_root(context: HubAppContext, value: object) -> Path:
-    path = Path(str(value)).expanduser()
-    if not path.is_absolute():
-        path = context.config.root / path
-    return path
-
-
 def _path_is_under_any(path: Path, roots: Iterable[Path]) -> bool:
     for root in roots:
         try:
