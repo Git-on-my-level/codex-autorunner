@@ -777,11 +777,8 @@ def _static_registration_path(
     payload: RegisterStaticServiceRequest,
 ) -> Path:
     if payload.source is None:
-        raw_path = Path(payload.path).expanduser()
-        if not raw_path.is_absolute():
-            raise ValueError(
-                "static path must be absolute unless source.type=workspace is used"
-            )
+        raw_path = _absolute_static_path_from_text(payload.path)
+        _require_path_under_allowed_static_roots(context, raw_path)
         return raw_path
     source = payload.source
     if source.type != "workspace":
@@ -791,6 +788,37 @@ def _static_registration_path(
     relative = _workspace_source_relative_path(source.path)
     root = _workspace_static_root(context, source.workspace_id)
     return root / relative
+
+
+def _absolute_static_path_from_text(value: str) -> Path:
+    raw_value = value.strip()
+    if not raw_value:
+        raise ValueError("static path must be non-empty")
+    if raw_value.startswith("~"):
+        raw_path = Path(raw_value).expanduser()
+    else:
+        raw_path = Path(raw_value)
+        if not raw_path.is_absolute():
+            raise ValueError(
+                "static path must be absolute unless source.type=workspace is used"
+            )
+    if ".." in raw_path.parts:
+        raise ValueError("static path must not contain parent traversal")
+    return raw_path.resolve()
+
+
+def _require_path_under_allowed_static_roots(
+    context: HubAppContext,
+    path: Path,
+) -> None:
+    roots = _allowed_static_roots(context, None)
+    for root in roots:
+        try:
+            path.relative_to(root)
+            return
+        except ValueError:
+            continue
+    raise ValueError("static preview target is outside allowed roots")
 
 
 def _static_source_metadata(payload: RegisterStaticServiceRequest) -> dict[str, Any]:
@@ -993,7 +1021,7 @@ def _require_allowed_static_root(
 
 def _allowed_static_roots(
     context: HubAppContext,
-    record: PreviewServiceRecord,
+    record: PreviewServiceRecord | None,
 ) -> list[Path]:
     roots: list[Path] = [context.config.root]
     for snapshot in context.supervisor.list_repos(use_cache=True):

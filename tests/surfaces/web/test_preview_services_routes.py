@@ -43,7 +43,7 @@ def test_preview_services_disabled_config_does_not_mount_routes(tmp_path: Path) 
 def test_preview_services_static_crud_and_read_model(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     seed_hub_files(hub_root, force=True)
-    html = tmp_path / "index.html"
+    html = hub_root / "index.html"
     html.write_text("<h1>Preview</h1>", encoding="utf-8")
     client = TestClient(create_hub_app(hub_root))
 
@@ -417,11 +417,9 @@ def test_preview_static_target_must_be_under_allowed_root(tmp_path: Path) -> Non
         "/hub/services/static",
         json={"path": str(outside), "name": "Outside"},
     )
-    service_id = created.json()["service"]["service_id"]
 
-    opened = client.get(f"/preview/services/{service_id}/")
-
-    assert opened.status_code == 403
+    assert created.status_code == 400
+    assert "outside allowed roots" in created.json()["detail"]
 
 
 def test_preview_static_registration_rejects_ambiguous_relative_hub_path(
@@ -471,7 +469,7 @@ def test_preview_static_workspace_source_registers_workspace_artifact(
     assert opened.text == "workspace artifact"
 
 
-def test_preview_static_workspace_scope_does_not_expand_allowed_roots(
+def test_preview_static_workspace_scope_does_not_expand_registration_roots(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
@@ -489,12 +487,8 @@ def test_preview_static_workspace_scope_does_not_expand_allowed_roots(
             "scope_links": [{"kind": "workspace", "path": str(outside_root)}],
         },
     )
-    assert created.status_code == 200
-    service_id = created.json()["service"]["service_id"]
-
-    opened = client.get(f"/preview/services/{service_id}/")
-
-    assert opened.status_code == 403
+    assert created.status_code == 400
+    assert "outside allowed roots" in created.json()["detail"]
 
 
 def test_preview_static_allowed_roots_resolve_relative_to_hub_root(
