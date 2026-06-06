@@ -275,6 +275,41 @@ def test_prune_update_snapshots_skips_directories_with_open_files(
     assert result.skipped_open == (str(open_snapshot),)
 
 
+def test_prune_update_snapshots_requires_snapshot_metadata(
+    tmp_path: Path,
+) -> None:
+    snapshot_root = tmp_path / "update_snapshots"
+    unrelated_state = snapshot_root / "workspaces"
+    unrelated_state.mkdir(parents=True)
+    (unrelated_state / "state.sqlite3").write_text("keep", encoding="utf-8")
+    malformed_snapshot = snapshot_root / "malformed"
+    (malformed_snapshot / "orchestration").mkdir(parents=True)
+    (malformed_snapshot / "orchestration" / "snapshot.json").write_text(
+        '{"created_at": "not-a-number"}',
+        encoding="utf-8",
+    )
+    _write_update_snapshot(
+        snapshot_root, "20260601-000000-1", created_at=100.0, bytes_count=1
+    )
+    _write_update_snapshot(
+        snapshot_root, "20260602-000000-2", created_at=200.0, bytes_count=1
+    )
+
+    result = prune_update_snapshots(
+        snapshot_root,
+        max_snapshots=1,
+        open_file_checker=lambda _path: False,
+    )
+
+    assert unrelated_state.exists()
+    assert malformed_snapshot.exists()
+    assert sorted(Path(path).name for path in result.skipped_invalid) == [
+        "malformed",
+        "workspaces",
+    ]
+    assert result.pruned == (str(snapshot_root / "20260601-000000-1"),)
+
+
 def test_snapshot_orchestration_db_transaction_reports_prune_result(
     tmp_path: Path,
 ) -> None:

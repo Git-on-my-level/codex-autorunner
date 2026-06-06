@@ -120,8 +120,10 @@ python -m codex_autorunner.core.update_transaction prune-snapshots \
   --snapshot-root ~/.codex-autorunner/update_snapshots
 ```
 
-The pruning helper skips the current update run when provided and skips
-candidate directories when `lsof` reports open files inside them.
+The pruning helper only deletes directories with valid
+`orchestration/snapshot.json` metadata, skips the current update run when
+provided, and skips candidate directories when `lsof` reports open files inside
+them or cannot prove they are closed.
 
 **Docker destination override**:
 - When a repo/worktree runs with effective destination `docker`, supervisor state root is forced to:

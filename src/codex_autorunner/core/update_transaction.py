@@ -98,16 +98,15 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def _snapshot_created_at(path: Path) -> float:
+def _snapshot_created_at(path: Path) -> float | None:
     metadata = _read_json(path / "orchestration" / _SNAPSHOT_METADATA)
-    if metadata is not None:
-        try:
-            created_at = float(metadata.get("created_at") or 0.0)
-        except (TypeError, ValueError):
-            created_at = 0.0
-        if created_at > 0:
-            return created_at
-    return path.stat().st_mtime
+    if metadata is None:
+        return None
+    try:
+        created_at = float(metadata.get("created_at") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    return created_at if created_at > 0 else None
 
 
 def _has_open_files(path: Path) -> bool:
@@ -146,10 +145,14 @@ def collect_update_snapshots(
             skipped_invalid.append(str(child))
             continue
         try:
+            created_at = _snapshot_created_at(child)
+            if created_at is None:
+                skipped_invalid.append(str(child))
+                continue
             snapshots.append(
                 UpdateSnapshotDirectory(
                     path=child,
-                    created_at=_snapshot_created_at(child),
+                    created_at=created_at,
                 )
             )
         except OSError:
