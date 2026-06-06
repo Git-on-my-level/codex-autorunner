@@ -249,6 +249,8 @@ def service_read_model(record: PreviewServiceRecord) -> dict[str, Any]:
     port_policy = data.get("port_policy") or {}
     process = data.get("process") or {}
     capabilities = service_capabilities(record)
+    desired_state = record.desired_state.model_dump(mode="json", exclude_none=True)
+    desired_state = _redact_desired_state(desired_state)
     return {
         "service_id": data["service_id"],
         "name": data["name"],
@@ -274,13 +276,22 @@ def service_read_model(record: PreviewServiceRecord) -> dict[str, Any]:
         "logs": data.get("logs"),
         "metadata": data.get("metadata") or {},
         "capabilities": capabilities,
-        "desired_state": record.desired_state.model_dump(
-            mode="json", exclude_none=True
-        ),
+        "desired_state": desired_state,
         "observed_state": record.observed_state.model_dump(
             mode="json", exclude_none=True
         ),
     }
+
+
+def _redact_desired_state(desired_state: dict[str, Any]) -> dict[str, Any]:
+    command = desired_state.get("command")
+    if isinstance(command, dict):
+        env = command.get("env")
+        if isinstance(env, dict):
+            command = dict(command)
+            command["env"] = {str(key): "<redacted>" for key in env}
+            desired_state = {**desired_state, "command": command}
+    return desired_state
 
 
 def service_capabilities(record: PreviewServiceRecord) -> dict[str, bool]:

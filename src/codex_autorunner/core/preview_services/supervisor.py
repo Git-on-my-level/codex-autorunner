@@ -34,6 +34,7 @@ from .logs import (
 )
 from .models import (
     CommandDefinition,
+    EnvPolicy,
     HealthCheck,
     HealthCheckType,
     PortPolicy,
@@ -151,6 +152,7 @@ class PreviewServiceSupervisor:
         trust_level: str | None = None,
         ownership: str | None = None,
         network_policy: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> PreviewServiceRecord:
         resolved = path.resolve()
         selected_kind = kind or (
@@ -185,6 +187,7 @@ class PreviewServiceSupervisor:
                 mode="json", exclude_none=True
             ),
             restart_policy=RestartPolicy().model_dump(mode="json"),
+            metadata=dict(metadata or {}),
         )
         self._append_event(record.service_id, "created", status=record.status)
         return record
@@ -233,6 +236,7 @@ class PreviewServiceSupervisor:
         argv: Sequence[str],
         cwd: Path,
         env: Mapping[str, str] | None = None,
+        env_policy: EnvPolicy | str = EnvPolicy.MINIMAL,
         port_policy: PortPolicy | dict[str, object] | None = None,
         health_check: HealthCheck | dict[str, object] | None = None,
         scope_links: Sequence[ScopeLink | dict[str, object]] | None = None,
@@ -247,6 +251,7 @@ class PreviewServiceSupervisor:
             argv=[str(item) for item in argv],
             cwd=str(cwd.resolve()),
             env={str(key): str(value) for key, value in (env or {}).items()},
+            env_policy=EnvPolicy(env_policy),
         )
         policy = _port_policy(port_policy)
         check = _health_check(health_check)
@@ -279,6 +284,7 @@ class PreviewServiceSupervisor:
         argv: Sequence[str],
         cwd: Path,
         env: Mapping[str, str] | None = None,
+        env_policy: EnvPolicy | str = EnvPolicy.MINIMAL,
         port_policy: PortPolicy | dict[str, object] | None = None,
         health_check: HealthCheck | dict[str, object] | None = None,
         scope_links: Sequence[ScopeLink | dict[str, object]] | None = None,
@@ -294,6 +300,7 @@ class PreviewServiceSupervisor:
             argv=argv,
             cwd=cwd,
             env=env,
+            env_policy=env_policy,
             port_policy=port_policy,
             health_check=health_check,
             scope_links=scope_links,
@@ -912,7 +919,7 @@ def _subprocess_env(
 ) -> dict[str, str]:
     public_url = car_url
     base_path = car_url.rstrip("/") or "/"
-    env = dict(os.environ)
+    env = _base_subprocess_env(command.env_policy)
     env.update(
         _substitute_env(
             command.env,
@@ -933,6 +940,25 @@ def _subprocess_env(
         }
     )
     return env
+
+
+def _base_subprocess_env(env_policy: str) -> dict[str, str]:
+    if env_policy == EnvPolicy.INHERIT_ALL.value:
+        return dict(os.environ)
+    allowlist = {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "SYSTEMROOT",
+        "COMSPEC",
+        "PATHEXT",
+    }
+    return {key: value for key, value in os.environ.items() if key.upper() in allowlist}
 
 
 def _substitute_env(

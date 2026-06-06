@@ -118,7 +118,7 @@ def test_services_register_static_payload_normalizes_kind_and_scope(
     assert calls[0]["method"] == "POST"
     assert urlsplit(str(calls[0]["url"])).path == "/hub/services/static"
     assert calls[0]["json"] == {
-        "path": str(static_file),
+        "path": str(static_file.resolve()),
         "name": "Site",
         "kind": "static_file",
         "scope_links": [
@@ -184,6 +184,7 @@ def test_services_start_managed_payload_includes_command_port_env_and_start(
         "argv": ["npm", "run", "dev"],
         "cwd": str(tmp_path),
         "env": {"HOST": "127.0.0.1"},
+        "env_policy": "minimal",
         "port_policy": {"mode": "preferred", "port": 5173},
         "health_check": {"type": "http", "path": "/"},
         "scope_links": [{"kind": "ticket", "id": "tkt_1"}],
@@ -191,6 +192,72 @@ def test_services_start_managed_payload_includes_command_port_env_and_start(
         "auto_start_on_hub_start": False,
         "start": True,
     }
+
+
+def test_services_resolves_relative_static_and_cwd_paths_client_side(
+    tmp_path: Path, monkeypatch
+) -> None:
+    hub_root = _hub_root(tmp_path)
+    shell_cwd = tmp_path / "shell"
+    static_dir = shell_cwd / "dist"
+    static_dir.mkdir(parents=True)
+    (static_dir / "index.html").write_text("ok", encoding="utf-8")
+    calls: list[dict[str, object]] = []
+
+    def _fake_request(method, url, json=None, timeout=None, headers=None, follow_redirects=True):  # type: ignore[no-untyped-def]
+        calls.append({"method": method, "url": url, "json": json})
+        return _mock_response(
+            {
+                "service": {
+                    "service_id": "svc_static1",
+                    "name": "Site",
+                    "kind": "static_dir",
+                    "status": "registered",
+                    "exposure": {"car_url": "/preview/services/svc_static1/"},
+                }
+            }
+        )
+
+    monkeypatch.setattr("httpx.request", _fake_request)
+    monkeypatch.chdir(shell_cwd)
+
+    result = runner.invoke(
+        app,
+        [
+            "services",
+            "register-static",
+            "./dist",
+            "--path",
+            str(hub_root),
+            "--name",
+            "Site",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls[0]["json"]["path"] == str(static_dir.resolve())
+
+    calls.clear()
+    result = runner.invoke(
+        app,
+        [
+            "services",
+            "start-managed",
+            "--path",
+            str(hub_root),
+            "--name",
+            "Dev",
+            "--cwd",
+            ".",
+            "--",
+            "python",
+            "-m",
+            "http.server",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls[0]["json"]["cwd"] == str(shell_cwd.resolve())
 
 
 def test_services_kill_requires_force_attestation(tmp_path: Path) -> None:

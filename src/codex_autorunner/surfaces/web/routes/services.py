@@ -37,6 +37,7 @@ from ....core.preview_services import (
 from ....core.preview_services import (
     services_read_model as build_services_read_model,
 )
+from ....core.state_roots import resolve_hub_state_root
 from ..app_state import HubAppContext
 from ..services.preview_capabilities import (
     DEFAULT_PREVIEW_CAPABILITY_TTL_SECONDS,
@@ -66,10 +67,22 @@ class ServiceScopeLinkPayload(BaseModel):
     path: Optional[str] = None
 
 
+class StaticSourcePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    type: str
+    workspace_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("workspace_id", "workspaceId"),
+    )
+    path: str
+
+
 class RegisterStaticServiceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     path: str
+    source: Optional[StaticSourcePayload] = None
     name: Optional[str] = None
     kind: Optional[str] = None
     scope_links: list[ServiceScopeLinkPayload] = Field(
@@ -134,6 +147,10 @@ class RegisterManagedServiceRequest(BaseModel):
     argv: list[str] = Field(default_factory=list)
     cwd: str
     env: dict[str, str] = Field(default_factory=dict)
+    env_policy: str = Field(
+        default="minimal",
+        validation_alias=AliasChoices("env_policy", "envPolicy"),
+    )
     port_policy: Optional[dict[str, Any]] = Field(
         default=None,
         validation_alias=AliasChoices("port_policy", "portPolicy"),
@@ -269,7 +286,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
         try:
             record = await asyncio.to_thread(
                 manager.register_static,
-                Path(payload.path),
+                _static_registration_path(context, payload),
                 name=payload.name,
                 kind=payload.kind,
                 scope_links=_scope_payloads(payload.scope_links),
@@ -278,6 +295,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
                 trust_level=payload.trust_level,
                 ownership=payload.ownership,
                 network_policy=payload.network_policy,
+                metadata=_static_source_metadata(payload),
             )
         except (OSError, ValueError) as exc:
             raise _bad_request(exc) from exc
@@ -320,6 +338,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
                 argv=payload.argv,
                 cwd=Path(payload.cwd),
                 env=payload.env,
+                env_policy=payload.env_policy,
                 port_policy=payload.port_policy,
                 health_check=payload.health_check,
                 scope_links=_scope_payloads(payload.scope_links),
@@ -693,6 +712,56 @@ def _scope_payloads(scope_links: list[ServiceScopeLinkPayload]) -> list[dict[str
     return [link.model_dump(mode="json", exclude_none=True) for link in scope_links]
 
 
+def _static_registration_path(
+    context: HubAppContext,
+    payload: RegisterStaticServiceRequest,
+) -> Path:
+    if payload.source is None:
+        raw_path = Path(payload.path).expanduser()
+        if not raw_path.is_absolute():
+            raise ValueError(
+                "static path must be absolute unless source.type=workspace is used"
+            )
+        return raw_path
+    source = payload.source
+    if source.type != "workspace":
+        raise ValueError(f"Unsupported static source type: {source.type}")
+    if not source.workspace_id:
+        raise ValueError("workspace static source requires workspace_id")
+    relative = _workspace_source_relative_path(source.path)
+    root = _workspace_static_root(context, source.workspace_id)
+    return root / relative
+
+
+def _static_source_metadata(payload: RegisterStaticServiceRequest) -> dict[str, Any]:
+    if payload.source is None:
+        return {}
+    return {
+        "source": payload.source.model_dump(
+            mode="json",
+            by_alias=False,
+            exclude_none=True,
+        )
+    }
+
+
+def _workspace_source_relative_path(path: str) -> Path:
+    value = path.strip()
+    if not value:
+        raise ValueError("workspace static source path must be non-empty")
+    pure = PurePosixPath(value)
+    if pure.is_absolute() or any(part in {"", ".", ".."} for part in pure.parts):
+        raise ValueError("workspace static source path must be relative")
+    return Path(*pure.parts)
+
+
+def _workspace_static_root(context: HubAppContext, workspace_id: str) -> Path:
+    clean_id = workspace_id.strip()
+    if not clean_id or any(part in clean_id for part in ("/", "\\", "..")):
+        raise ValueError("workspace_id must be a path-safe identifier")
+    return resolve_hub_state_root(context.config.root) / "workspaces" / clean_id
+
+
 def _force_attestation(
     payload: DestructiveServiceRequest,
     *,
@@ -793,7 +862,8 @@ def _static_file_response(
     safe_path = _validate_preview_path(preview_path)
     if safe_path not in {"", target.name}:
         raise HTTPException(status_code=404, detail="Static preview file not found")
-    _reject_sensitive_static_path(target, relative_parts=(target.name,))
+    root = _require_allowed_static_root(context, record, target)
+    _reject_sensitive_static_path(root, target)
     if not target.is_file():
         raise HTTPException(status_code=404, detail="Static preview file not found")
     if method == "HEAD":
@@ -816,22 +886,10 @@ def _static_dir_response(
     if not relative:
         relative = "index.html"
     relative_parts = PurePosixPath(relative).parts
-    _reject_sensitive_static_path(root, relative_parts=relative_parts)
-    target = (root / Path(*relative_parts)).resolve()
-    try:
-        target.relative_to(root)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=403, detail="Static preview path escapes root"
-        ) from exc
+    _reject_sensitive_requested_parts(relative_parts)
+    target = _resolve_static_child(root, relative_parts)
     if target.is_dir():
-        target = (target / "index.html").resolve()
-        try:
-            target.relative_to(root)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=403, detail="Static preview path escapes root"
-            ) from exc
+        target = _resolve_static_child(root, (*relative_parts, "index.html"))
     if not target.is_file():
         raise HTTPException(status_code=404, detail="Static preview file not found")
     if method == "HEAD":
@@ -847,12 +905,30 @@ def _require_static_target_path(
     if not target_path:
         raise HTTPException(status_code=400, detail="Static service has no target path")
     path = Path(target_path).expanduser().resolve()
-    if not _path_is_under_any(path, _allowed_static_roots(context, record)):
+    root = _require_allowed_static_root(context, record, path)
+    _reject_sensitive_static_path(root, path)
+    return path
+
+
+def _require_allowed_static_root(
+    context: HubAppContext,
+    record: PreviewServiceRecord,
+    path: Path,
+) -> Path:
+    roots = _allowed_static_roots(context, record)
+    matches: list[Path] = []
+    for root in roots:
+        try:
+            path.relative_to(root)
+            matches.append(root)
+        except ValueError:
+            continue
+    if not matches:
         raise HTTPException(
             status_code=403,
             detail="Static preview target is outside allowed roots",
         )
-    return path
+    return max(matches, key=lambda item: len(item.parts))
 
 
 def _allowed_static_roots(
@@ -883,6 +959,15 @@ def _allowed_static_roots(
                 )
             except ConfigPathError:
                 continue
+    metadata = getattr(record, "metadata", None)
+    source = (metadata or {}).get("source") if isinstance(metadata, dict) else None
+    if isinstance(source, dict) and source.get("type") == "workspace":
+        workspace_id = str(source.get("workspace_id") or "").strip()
+        if workspace_id:
+            try:
+                roots.append(_workspace_static_root(context, workspace_id))
+            except ValueError:
+                pass
     resolved: list[Path] = []
     for root in roots:
         try:
@@ -912,11 +997,37 @@ def _validate_preview_path(preview_path: str) -> str:
     return pure.as_posix()
 
 
-def _reject_sensitive_static_path(
-    root: Path, *, relative_parts: tuple[str, ...]
-) -> None:
+def _reject_sensitive_requested_parts(relative_parts: tuple[str, ...]) -> None:
+    for part in relative_parts:
+        _reject_sensitive_static_part(part)
+
+
+def _reject_sensitive_static_path(root: Path, target: Path) -> None:
+    try:
+        relative_parts = target.relative_to(root).parts
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=403, detail="Static preview path escapes root"
+        ) from exc
+    for index, part in enumerate(relative_parts):
+        _reject_sensitive_static_part(part)
+        raw_component = root.joinpath(*relative_parts[: index + 1])
+        try:
+            if raw_component.is_symlink():
+                raise HTTPException(
+                    status_code=403,
+                    detail="Static preview path contains a symlink",
+                )
+        except OSError as exc:
+            raise HTTPException(
+                status_code=403, detail="Static preview path cannot be inspected"
+            ) from exc
+
+
+def _reject_sensitive_static_part(part: str) -> None:
     sensitive_names = {
         ".git",
+        ".codex-autorunner",
         ".env",
         ".env.local",
         ".env.development",
@@ -926,23 +1037,43 @@ def _reject_sensitive_static_path(
         "id_ecdsa",
         "id_ed25519",
     }
-    for part in relative_parts:
-        lowered = part.lower()
-        if part.startswith(".") or lowered in sensitive_names:
-            raise HTTPException(
-                status_code=403, detail="Static preview file is hidden or sensitive"
-            )
-        if lowered.endswith((".pem", ".key", ".p12", ".pfx")):
-            raise HTTPException(
-                status_code=403, detail="Static preview file is hidden or sensitive"
-            )
-    target = (root / Path(*relative_parts)).resolve() if relative_parts else root
+    lowered = part.lower()
+    if part.startswith(".") or lowered in sensitive_names:
+        raise HTTPException(
+            status_code=403, detail="Static preview file is hidden or sensitive"
+        )
+    if lowered.endswith((".pem", ".key", ".p12", ".pfx")):
+        raise HTTPException(
+            status_code=403, detail="Static preview file is hidden or sensitive"
+        )
+    if any(token in lowered for token in ("secret", "private_key", "api_key")):
+        raise HTTPException(
+            status_code=403, detail="Static preview file is hidden or sensitive"
+        )
+
+
+def _resolve_static_child(root: Path, relative_parts: tuple[str, ...]) -> Path:
+    target = (root / Path(*relative_parts)).resolve()
     try:
         target.relative_to(root)
     except ValueError as exc:
         raise HTTPException(
             status_code=403, detail="Static preview path escapes root"
         ) from exc
+    _reject_sensitive_static_path(root, target)
+    if relative_parts:
+        raw = root.joinpath(*relative_parts)
+        try:
+            if raw.is_symlink():
+                raise HTTPException(
+                    status_code=403,
+                    detail="Static preview path contains a symlink",
+                )
+        except OSError as exc:
+            raise HTTPException(
+                status_code=403, detail="Static preview path cannot be inspected"
+            ) from exc
+    return target
 
 
 async def _proxy_http_request(

@@ -96,6 +96,9 @@ def register_services_commands(
             env[key] = value
         return env
 
+    def _client_resolved_path(path_value: Path) -> str:
+        return str(path_value.expanduser().resolve())
+
     def _service(data: dict[str, Any]) -> dict[str, Any]:
         service = data.get("service")
         return service if isinstance(service, dict) else data
@@ -278,7 +281,7 @@ def register_services_commands(
     ) -> None:
         kind_value = kind.replace("-", "_") if kind else None
         payload = {
-            "path": str(static_path),
+            "path": _client_resolved_path(static_path),
             "name": name,
             "kind": kind_value,
             "scope_links": _scope_links(scope),
@@ -355,6 +358,11 @@ def register_services_commands(
         env: list[str] = typer.Option(
             [], "--env", help="Environment pair, repeatable; KEY=VALUE."
         ),
+        env_policy: str = typer.Option(
+            "minimal",
+            "--env-policy",
+            help="Managed env policy: minimal, allowlist, or inherit_all.",
+        ),
         health_path: Optional[str] = typer.Option(
             "/", "--health-path", help="HTTP health path."
         ),
@@ -384,8 +392,9 @@ def register_services_commands(
         payload = {
             "name": name,
             "argv": command,
-            "cwd": str(cwd),
+            "cwd": _client_resolved_path(cwd),
             "env": _env_pairs(env),
+            "env_policy": env_policy,
             "port_policy": port_policy,
             "health_check": (
                 {"type": "http", "path": health_path}

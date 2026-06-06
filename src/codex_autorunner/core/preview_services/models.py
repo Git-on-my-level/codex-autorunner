@@ -84,6 +84,12 @@ class RestartOnExit(str, Enum):
     NEVER = "never"
 
 
+class EnvPolicy(str, Enum):
+    MINIMAL = "minimal"
+    ALLOWLIST = "allowlist"
+    INHERIT_ALL = "inherit_all"
+
+
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", use_enum_values=True)
 
@@ -160,6 +166,7 @@ class CommandDefinition(StrictModel):
     argv: list[str]
     cwd: str
     env: dict[str, str] = Field(default_factory=dict)
+    env_policy: EnvPolicy = EnvPolicy.MINIMAL
 
     @field_validator("argv")
     @classmethod

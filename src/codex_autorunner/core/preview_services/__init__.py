@@ -16,6 +16,7 @@ from .logs import (
 )
 from .models import (
     CommandDefinition,
+    EnvPolicy,
     HealthCheck,
     NetworkPolicy,
     PortPolicy,
@@ -64,6 +65,7 @@ from .supervisor import (
 
 __all__ = [
     "CommandDefinition",
+    "EnvPolicy",
     "DEFAULT_PORT_RANGE_END",
     "DEFAULT_PORT_RANGE_START",
     "DEFAULT_LOG_MAX_BYTES",

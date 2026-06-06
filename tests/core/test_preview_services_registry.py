@@ -283,6 +283,25 @@ def test_read_model_shape_is_stable(tmp_path: Path) -> None:
     } <= set(model["services"][0])
 
 
+def test_read_model_redacts_command_env_values(tmp_path: Path) -> None:
+    registry = PreviewServiceRegistry(tmp_path)
+    payload = managed_service_payload()
+    payload["command"]["env"] = {
+        "PORT": "$PORT",
+        "OPENAI_API_KEY": "secret",
+    }
+    managed = registry.create(payload)
+
+    model = services_read_model([managed])
+    command = model["services"][0]["desired_state"]["command"]
+
+    assert command["env"] == {
+        "PORT": "<redacted>",
+        "OPENAI_API_KEY": "<redacted>",
+    }
+    assert "secret" not in json.dumps(model)
+
+
 def test_read_model_capabilities_cover_service_lifecycle_states(tmp_path: Path) -> None:
     registry = PreviewServiceRegistry(tmp_path)
     static = registry.create(static_service_payload("svc_static124"))

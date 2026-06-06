@@ -291,6 +291,15 @@ def test_preview_static_security_rejects_unsafe_paths(tmp_path: Path) -> None:
     git_dir = static_dir / ".git"
     git_dir.mkdir()
     (git_dir / "config").write_text("config", encoding="utf-8")
+    codex_dir = static_dir / ".codex-autorunner" / "artifact"
+    codex_dir.mkdir(parents=True)
+    (codex_dir / "index.html").write_text("secret", encoding="utf-8")
+    hidden_dir = static_dir / "public" / ".hidden-parent"
+    hidden_dir.mkdir(parents=True)
+    (hidden_dir / "index.html").write_text("hidden ancestor", encoding="utf-8")
+    secrets_dir = static_dir / "safe" / "secrets"
+    secrets_dir.mkdir(parents=True)
+    (secrets_dir / "index.html").write_text("secret ancestor", encoding="utf-8")
     outside = hub_root / "outside.txt"
     outside.write_text("outside", encoding="utf-8")
     symlink = static_dir / "outside-link"
@@ -307,6 +316,9 @@ def test_preview_static_security_rejects_unsafe_paths(tmp_path: Path) -> None:
         ".env",
         ".hidden",
         ".git/config",
+        ".codex-autorunner/artifact/index.html",
+        "public/.hidden-parent/index.html",
+        "safe/secrets/index.html",
         "id_rsa",
         "private.pem",
         "outside-link",
@@ -317,6 +329,51 @@ def test_preview_static_security_rejects_unsafe_paths(tmp_path: Path) -> None:
             assert response.status_code in {403, 404}, path
         else:
             assert response.status_code == 403, path
+
+
+def test_preview_static_file_under_hidden_ancestor_is_rejected(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    hidden_dir = hub_root / "public" / ".generated"
+    hidden_dir.mkdir(parents=True)
+    html = hidden_dir / "index.html"
+    html.write_text("hidden", encoding="utf-8")
+    client = TestClient(create_hub_app(hub_root))
+    created = client.post(
+        "/hub/services/static",
+        json={"path": str(html), "name": "Hidden file"},
+    )
+    service_id = created.json()["service"]["service_id"]
+
+    opened = client.get(f"/preview/services/{service_id}/")
+
+    assert opened.status_code == 403
+
+
+def test_preview_static_dir_blocks_symlinked_directory_escape(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    static_dir = hub_root / "site"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("home", encoding="utf-8")
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    (outside_dir / "index.html").write_text("secret", encoding="utf-8")
+    (static_dir / "linked").symlink_to(outside_dir, target_is_directory=True)
+    client = TestClient(create_hub_app(hub_root))
+    created = client.post(
+        "/hub/services/static",
+        json={"path": str(static_dir), "kind": "static_dir", "name": "Site"},
+    )
+    service_id = created.json()["service"]["service_id"]
+
+    opened = client.get(f"/preview/services/{service_id}/linked/index.html")
+
+    assert opened.status_code == 403
 
 
 def test_preview_static_target_must_be_under_allowed_root(tmp_path: Path) -> None:
@@ -334,6 +391,53 @@ def test_preview_static_target_must_be_under_allowed_root(tmp_path: Path) -> Non
     opened = client.get(f"/preview/services/{service_id}/")
 
     assert opened.status_code == 403
+
+
+def test_preview_static_registration_rejects_ambiguous_relative_hub_path(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    client = TestClient(create_hub_app(hub_root))
+
+    created = client.post(
+        "/hub/services/static",
+        json={"path": "./dist", "name": "Relative"},
+    )
+
+    assert created.status_code == 400
+
+
+def test_preview_static_workspace_source_registers_workspace_artifact(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    workspace_root = hub_root / ".codex-autorunner" / "workspaces" / "ws_demo123"
+    dist = workspace_root / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("workspace artifact", encoding="utf-8")
+    client = TestClient(create_hub_app(hub_root))
+
+    created = client.post(
+        "/hub/services/static",
+        json={
+            "path": "ignored-for-workspace-source",
+            "source": {
+                "type": "workspace",
+                "workspace_id": "ws_demo123",
+                "path": "dist",
+            },
+            "kind": "static_dir",
+            "name": "Workspace artifact",
+        },
+    )
+
+    assert created.status_code == 200
+    service_id = created.json()["service"]["service_id"]
+    opened = client.get(f"/preview/services/{service_id}/")
+    assert opened.status_code == 200
+    assert opened.text == "workspace artifact"
 
 
 def test_preview_static_workspace_scope_does_not_expand_allowed_roots(

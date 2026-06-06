@@ -220,6 +220,73 @@ def test_managed_service_logs_are_bounded_while_process_runs(tmp_path: Path) -> 
         supervisor.stop(record.service_id)
 
 
+def test_managed_service_env_policy_excludes_secrets_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-secret")
+    monkeypatch.setenv("GITHUB_TOKEN", "github-secret")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+    monkeypatch.setenv("DATABASE_URL", "postgres://secret")
+    monkeypatch.setenv("SESSION_SECRET", "session-secret")
+    supervisor = PreviewServiceSupervisor(tmp_path)
+    script = (
+        "import os, time\n"
+        "for key in ['OPENAI_API_KEY','GITHUB_TOKEN','ANTHROPIC_API_KEY','DATABASE_URL','SESSION_SECRET']:\n"
+        "    print(key + '=' + str(key in os.environ), flush=True)\n"
+        "print('CUSTOM_ENV=' + os.environ.get('CUSTOM_ENV', ''), flush=True)\n"
+        "time.sleep(30)\n"
+    )
+
+    record = supervisor.start_managed_command(
+        name="Minimal env service",
+        argv=[sys.executable, "-u", "-c", script],
+        cwd=tmp_path,
+        env={"CUSTOM_ENV": "allowed"},
+        health_check={"type": "none"},
+    )
+    try:
+        log_text = _wait_for_log(supervisor, record.service_id, "CUSTOM_ENV=allowed")
+        assert "OPENAI_API_KEY=False" in log_text
+        assert "GITHUB_TOKEN=False" in log_text
+        assert "ANTHROPIC_API_KEY=False" in log_text
+        assert "DATABASE_URL=False" in log_text
+        assert "SESSION_SECRET=False" in log_text
+        assert "CUSTOM_ENV=allowed" in log_text
+    finally:
+        supervisor.stop(record.service_id)
+
+
+def test_managed_service_env_policy_inherit_all_is_explicit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-secret")
+    supervisor = PreviewServiceSupervisor(tmp_path)
+    script = (
+        "import os, time\n"
+        "print('OPENAI_API_KEY=' + os.environ.get('OPENAI_API_KEY', ''), flush=True)\n"
+        "time.sleep(30)\n"
+    )
+
+    record = supervisor.start_managed_command(
+        name="Inherited env service",
+        argv=[sys.executable, "-u", "-c", script],
+        cwd=tmp_path,
+        env_policy="inherit_all",
+        health_check={"type": "none"},
+    )
+    try:
+        log_text = _wait_for_log(
+            supervisor,
+            record.service_id,
+            "OPENAI_API_KEY=openai-secret",
+        )
+        assert "OPENAI_API_KEY=openai-secret" in log_text
+    finally:
+        supervisor.stop(record.service_id)
+
+
 def test_close_all_stops_running_managed_services_without_autostarting_stopped(
     tmp_path: Path,
 ) -> None:
