@@ -353,12 +353,15 @@
       restart_policy: { auto_start_on_hub_start: editForm.autostart, restart_on_exit: 'never' }
     };
     if (editService.kind === 'managed_command') {
-      payload.command = {
+      const commandPayload: Record<string, unknown> = {
         argv: shellWords(editForm.command),
         cwd: editForm.cwd.trim(),
-        env: envPairs(editForm.env),
         env_policy: editForm.envPolicy
       };
+      if (editForm.env.trim()) {
+        commandPayload.env = envPairs(editForm.env);
+      }
+      payload.command = commandPayload;
       payload.port_policy = portPolicy(editForm.port);
       payload.health_check = editForm.healthPath.trim()
         ? { type: 'http', path: editForm.healthPath.trim() }
@@ -695,7 +698,7 @@
             <label><span>Port</span><input bind:value={editForm.port} /></label>
             <label><span>Health path</span><input bind:value={editForm.healthPath} /></label>
             <label><span>Env policy</span><select bind:value={editForm.envPolicy}><option value="minimal">Minimal</option><option value="allowlist">Allowlist</option><option value="inherit_all">Inherit all</option></select></label>
-            <label class="wide"><span>Env overrides</span><textarea bind:value={editForm.env} rows="2"></textarea></label>
+            <label class="wide"><span>Env overrides</span><textarea bind:value={editForm.env} rows="2" placeholder="Leave blank to keep existing overrides"></textarea></label>
           {/if}
           <label class="check-row"><input type="checkbox" bind:checked={editForm.autostart} /> <span>Autostart on hub start</span></label>
         </div>

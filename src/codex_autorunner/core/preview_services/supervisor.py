@@ -1206,6 +1206,12 @@ def _process_identity_status(
         return "exited"
     if not process_is_active(process.pid):
         return "exited"
+    if process.pgid is not None and os.name != "nt" and hasattr(os, "getpgid"):
+        try:
+            if os.getpgid(process.pid) != process.pgid:
+                return "mismatch"
+        except OSError:
+            return "exited"
     process_record = read_process_record(hub_root, PROCESS_KIND, record.service_id)
     if process_record is None:
         return "mismatch"
@@ -1234,7 +1240,7 @@ def _process_identity_status(
 
 
 def _identity_command_fragments(argv: Sequence[str]) -> list[str]:
-    return [str(item) for item in argv[:2] if str(item)]
+    return [str(item) for item in argv if str(item)]
 
 
 def _command_fingerprint(argv: Sequence[str], cwd: str) -> str:

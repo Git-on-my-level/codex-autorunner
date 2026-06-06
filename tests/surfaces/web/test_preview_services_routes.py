@@ -191,6 +191,26 @@ def test_hosted_preview_capability_cannot_authorize_hub_apis(
     assert allowed.status_code == 200
 
 
+def test_hosted_bearer_without_token_rejects_hub_routes(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    _update_hub_config(
+        hub_root,
+        {
+            "auth": {"mode": "hosted_bearer"},
+            "server": {
+                "auth_token_env": "CAR_TEST_MISSING_TOKEN",
+                "allowed_hosts": ["testserver"],
+            },
+        },
+    )
+    client = TestClient(create_hub_app(hub_root, endpoint_host="0.0.0.0"))
+
+    denied = client.get("/hub/services")
+
+    assert denied.status_code == 401
+
+
 def test_hosted_direct_preview_services_redirects_to_capability_url(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -229,6 +249,17 @@ def test_hosted_direct_preview_services_redirects_to_capability_url(
     )
     assert redirected.status_code == 307
     assert "/preview/p/" in redirected.headers["location"]
+    nested_redirect = client.get(
+        f"/preview/services/{service_id}/index.html",
+        headers={"Authorization": "Bearer hub-secret"},
+        follow_redirects=False,
+    )
+    assert nested_redirect.status_code == 307
+    nested_location = nested_redirect.headers["location"]
+    assert nested_location.endswith("/index.html")
+    nested_opened = client.get(nested_location)
+    assert nested_opened.status_code == 200
+    assert nested_opened.text == "<h1>Preview</h1>"
 
 
 def test_preview_capability_store_expiry_and_service_revocation(
@@ -955,7 +986,7 @@ def test_preview_services_managed_lifecycle_logs_and_force_semantics(
 def test_preview_services_preview_token_revoke_route(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     seed_hub_files(hub_root, force=True)
-    html = tmp_path / "index.html"
+    html = hub_root / "index.html"
     html.write_text("<h1>Preview</h1>", encoding="utf-8")
     client = TestClient(create_hub_app(hub_root))
     created = client.post(
@@ -968,12 +999,17 @@ def test_preview_services_preview_token_revoke_route(tmp_path: Path) -> None:
         f"/hub/services/{service_id}/preview-token", params={"ttl": 60}
     )
     assert issued.status_code == 200
-    assert issued.json()["preview_url"].startswith("/preview/p/")
+    preview_url = issued.json()["preview_url"]
+    assert preview_url.startswith("/preview/p/")
+    opened = client.get(preview_url)
+    assert opened.status_code == 200
 
     revoked = client.post(f"/hub/services/{service_id}/preview-token/revoke")
     assert revoked.status_code == 200
     assert revoked.json()["service_id"] == service_id
     assert revoked.json()["revoked"] >= 1
+    denied = client.get(preview_url)
+    assert denied.status_code == 403
 
 
 def test_preview_services_rejects_running_managed_runtime_config_edit(

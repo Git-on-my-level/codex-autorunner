@@ -29,4 +29,10 @@ describe('services page preview link security', () => {
     expect(pageSource).toContain('toggleAutostart(service)');
     expect(pageSource).toContain('beginEdit(service)');
   });
+
+  it('does not clear redacted managed env overrides on ordinary edits', () => {
+    expect(pageSource).not.toContain('env: envPairs(editForm.env)');
+    expect(pageSource).toContain('commandPayload.env = envPairs(editForm.env)');
+    expect(pageSource).toContain('Leave blank to keep existing overrides');
+  });
 });

@@ -101,6 +101,21 @@ def register_services_commands(
             return preview_url
         return urljoin(f"{base}/", preview_url.lstrip("/"))
 
+    def _with_absolute_preview_urls(config: Any, data: Any) -> Any:
+        if isinstance(data, list):
+            return [_with_absolute_preview_urls(config, item) for item in data]
+        if not isinstance(data, dict):
+            return data
+        normalized: dict[str, Any] = {
+            key: _with_absolute_preview_urls(config, value)
+            for key, value in data.items()
+        }
+        for key in ("preview_url", "car_url"):
+            value = normalized.get(key)
+            if isinstance(value, str) and value.startswith("/"):
+                normalized[key] = _absolute_or_relative_preview_url(config, value)
+        return normalized
+
     def _parse_ttl_seconds(value: str) -> int:
         raw = value.strip().lower()
         if not raw:
@@ -286,7 +301,7 @@ def register_services_commands(
         )
         data = _request("GET", url, config)
         if json_output:
-            _json(data)
+            _json(_with_absolute_preview_urls(config, data))
             return
         services = _service_models(data)
         if not services:
@@ -313,7 +328,7 @@ def register_services_commands(
             config,
         )
         if json_output:
-            _json(data)
+            _json(_with_absolute_preview_urls(config, data))
             return
         _print_service_detail(_service(data))
 
@@ -742,12 +757,6 @@ def register_services_commands(
         follow: bool = typer.Option(
             False, "--follow", help="Poll and print appended logs."
         ),
-        stderr: bool = typer.Option(
-            False, "--stderr", help="Request stderr stream when supported."
-        ),
-        since: Optional[str] = typer.Option(
-            None, "--since", help="Duration or timestamp filter, such as 10m."
-        ),
         path: Optional[Path] = typer.Option(
             None, "--path", help="Hub root or config path."
         ),
@@ -759,7 +768,7 @@ def register_services_commands(
         config = _load_config(path)
         url = _append_query(
             _url(config, f"/hub/services/{service_id}/logs", base_path=base_path),
-            {"tail": tail, "stderr": stderr, "since": since},
+            {"tail": tail},
         )
         if not follow:
             data = _request("GET", url, config)

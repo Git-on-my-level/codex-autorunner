@@ -403,6 +403,43 @@ def test_stale_pid_identity_mismatch_is_orphaned_before_stop_or_kill(
     assert _wait_for_inactive(pid)
 
 
+def test_live_pgid_mismatch_marks_orphaned_without_kill(tmp_path: Path) -> None:
+    supervisor = PreviewServiceSupervisor(tmp_path)
+    record = supervisor.start_managed_command(
+        name="PGID checked server",
+        argv=[
+            sys.executable,
+            "-u",
+            "-c",
+            "import time; print('ready', flush=True); time.sleep(30)",
+        ],
+        cwd=tmp_path,
+        health_check={"type": "none"},
+    )
+    pid = record.process.pid if record.process else None
+    pgid = record.process.pgid if record.process else None
+    assert pid is not None
+    assert pgid is not None
+    supervisor.registry.update(
+        record.service_id,
+        lambda latest: latest.model_copy(
+            update={
+                "process": latest.process.model_copy(update={"pgid": pgid + 1}),
+                "updated_at": latest.updated_at,
+            }
+        ),
+    )
+
+    with pytest.raises(PreviewServiceSupervisorError, match="stale PID"):
+        supervisor.stop(record.service_id)
+
+    orphaned = supervisor.registry.require(record.service_id)
+    assert orphaned.status == PreviewServiceStatus.ORPHANED.value
+    assert process_is_active(pid)
+    os.kill(pid, signal.SIGTERM)
+    assert _wait_for_inactive(pid)
+
+
 def test_concurrent_start_calls_are_serialized_by_service_lock(tmp_path: Path) -> None:
     supervisor = PreviewServiceSupervisor(tmp_path)
     record = supervisor.register_managed_command(

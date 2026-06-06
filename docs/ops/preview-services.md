@@ -1,6 +1,7 @@
 # Preview Services
 
-Preview Services expose local preview resources through authenticated CAR URLs:
+Preview Services expose local preview resources through CAR URLs. Local/trusted
+authenticated service routes use:
 
 ```text
 /preview/services/<service_id>/
@@ -9,6 +10,10 @@ Preview Services expose local preview resources through authenticated CAR URLs:
 Use CAR preview URLs for user-facing links. Direct `localhost` URLs are kept only
 as diagnostics because they do not work reliably from mobile chat clients,
 remote browser sessions, or hosted CAR deployments.
+
+Hosted/no-subdomain deployments copy and open preview capability URLs such as
+`/preview/p/<token>/`; those tokens authorize preview access only and do not
+grant hub API access.
 
 ## Configuration
 

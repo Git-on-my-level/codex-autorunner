@@ -567,10 +567,12 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             capability = await asyncio.to_thread(
                 capability_store.issue,
                 service_id,
-                path_prefix=preview_path,
             )
             return RedirectResponse(
-                _request_url_for_path(request, capability.url),
+                _request_url_for_path(
+                    request,
+                    _join_url_path(capability.url, preview_path),
+                ),
                 status_code=307,
             )
         return await _preview_response(context, record, request, preview_path)
@@ -1158,8 +1160,18 @@ async def _proxy_http_request(
             status_code=429,
             detail="Preview proxy stream limit reached",
         )
-    await global_semaphore.acquire()
-    await service_semaphore.acquire()
+    global_acquired = False
+    try:
+        await asyncio.wait_for(global_semaphore.acquire(), timeout=0.001)
+        global_acquired = True
+        await asyncio.wait_for(service_semaphore.acquire(), timeout=0.001)
+    except TimeoutError as exc:
+        if global_acquired:
+            global_semaphore.release()
+        raise HTTPException(
+            status_code=429,
+            detail="Preview proxy stream limit reached",
+        ) from exc
     client = httpx.AsyncClient(timeout=timeout, follow_redirects=False)
     upstream: httpx.Response | None = None
     try:

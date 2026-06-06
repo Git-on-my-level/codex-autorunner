@@ -468,7 +468,7 @@ def test_services_open_json_uses_absolute_public_base_url(
     )
 
 
-def test_services_logs_sends_filters(tmp_path: Path, monkeypatch) -> None:
+def test_services_logs_sends_tail_only(tmp_path: Path, monkeypatch) -> None:
     hub_root = _hub_root(tmp_path)
     calls: list[dict[str, object]] = []
 
@@ -490,14 +490,11 @@ def test_services_logs_sends_filters(tmp_path: Path, monkeypatch) -> None:
             str(hub_root),
             "--tail",
             "50",
-            "--stderr",
-            "--since",
-            "10m",
         ],
     )
 
     assert result.exit_code == 0
-    assert urlsplit(str(calls[0]["url"])).query == "tail=50&stderr=True&since=10m"
+    assert urlsplit(str(calls[0]["url"])).query == "tail=50"
 
 
 def test_services_health_prints_hub_health_schema(tmp_path: Path, monkeypatch) -> None:
@@ -556,13 +553,22 @@ def test_services_list_and_get_against_test_hub_app(
         )
 
     monkeypatch.setattr("httpx.request", _fake_request)
+    monkeypatch.setenv("CAR_PREVIEW_PUBLIC_BASE_URL", "https://car.example.test/base")
 
     listed = runner.invoke(app, ["services", "list", "--path", str(hub_root), "--json"])
     assert listed.exit_code == 0
-    assert json.loads(listed.output)["services"][0]["service_id"] == service_id
+    listed_payload = json.loads(listed.output)
+    assert listed_payload["services"][0]["service_id"] == service_id
+    assert listed_payload["read_model"]["services"][0]["preview_url"].startswith(
+        "https://car.example.test/base/preview/p/"
+    )
 
     detail = runner.invoke(
         app, ["services", "get", service_id, "--path", str(hub_root), "--json"]
     )
     assert detail.exit_code == 0
-    assert json.loads(detail.output)["service"]["name"] == "Static preview"
+    detail_payload = json.loads(detail.output)
+    assert detail_payload["service"]["name"] == "Static preview"
+    assert detail_payload["read_model"]["preview_url"].startswith(
+        "https://car.example.test/base/preview/p/"
+    )

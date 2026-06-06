@@ -348,7 +348,7 @@ def create_hub_app(
     allowed_origins = context.config.server_allowed_origins
     app.state.auth_token = auth_token
     asgi_app: ASGIApp = app
-    if auth_token or browser_auth_store is not None:
+    if auth_token or browser_auth_store is not None or hosted_bearer:
         asgi_app = AuthTokenMiddleware(
             asgi_app,
             auth_token,
