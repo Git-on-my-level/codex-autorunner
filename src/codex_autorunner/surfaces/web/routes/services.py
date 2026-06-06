@@ -777,7 +777,7 @@ def _static_registration_path(
     payload: RegisterStaticServiceRequest,
 ) -> Path:
     if payload.source is None:
-        raw_path = _absolute_static_path_from_text(payload.path)
+        raw_path = _absolute_static_path_from_text(context, payload.path)
         _require_path_under_allowed_static_roots(context, raw_path)
         return raw_path
     source = payload.source
@@ -790,23 +790,32 @@ def _static_registration_path(
     return root / relative
 
 
-def _absolute_static_path_from_text(value: str) -> Path:
+def _absolute_static_path_from_text(context: HubAppContext, value: str) -> Path:
     raw_value = value.strip()
     if not raw_value:
         raise ValueError("static path must be non-empty")
-    if raw_value.startswith("~"):
-        # CodeQL: the caller checks the resolved path against allowed static roots.
-        raw_path = Path(raw_value).expanduser()  # lgtm[py/path-injection]
-    else:
-        raw_path = Path(raw_value)
-        if not raw_path.is_absolute():
-            raise ValueError(
-                "static path must be absolute unless source.type=workspace is used"
-            )
-    if ".." in raw_path.parts:
+    if not _looks_absolute_or_home_path(raw_value):
+        raise ValueError(
+            "static path must be absolute unless source.type=workspace is used"
+        )
+    if ".." in raw_value.replace("\\", "/").split("/"):
         raise ValueError("static path must not contain parent traversal")
-    # CodeQL: the caller checks the resolved path against allowed static roots.
-    return raw_path.resolve()  # lgtm[py/path-injection]
+    try:
+        return resolve_config_path(
+            raw_value,
+            context.config.root,
+            allow_absolute=True,
+            allow_home=True,
+            scope="preview_services.static.path",
+        )
+    except ConfigPathError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def _looks_absolute_or_home_path(value: str) -> bool:
+    if value.startswith(("/", "~")):
+        return True
+    return len(value) >= 3 and value[1] == ":" and value[2] in {"/", "\\"}
 
 
 def _require_path_under_allowed_static_roots(
