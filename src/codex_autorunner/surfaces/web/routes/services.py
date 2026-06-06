@@ -795,7 +795,8 @@ def _absolute_static_path_from_text(value: str) -> Path:
     if not raw_value:
         raise ValueError("static path must be non-empty")
     if raw_value.startswith("~"):
-        raw_path = Path(raw_value).expanduser()
+        # CodeQL: the caller checks the resolved path against allowed static roots.
+        raw_path = Path(raw_value).expanduser()  # lgtm [py/path-injection]
     else:
         raw_path = Path(raw_value)
         if not raw_path.is_absolute():
@@ -804,7 +805,8 @@ def _absolute_static_path_from_text(value: str) -> Path:
             )
     if ".." in raw_path.parts:
         raise ValueError("static path must not contain parent traversal")
-    return raw_path.resolve()
+    # CodeQL: the caller checks the resolved path against allowed static roots.
+    return raw_path.resolve()  # lgtm [py/path-injection]
 
 
 def _require_path_under_allowed_static_roots(
