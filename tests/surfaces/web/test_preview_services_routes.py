@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import http.server
 import logging
 import sys
@@ -415,10 +416,132 @@ def test_preview_loopback_http_service_proxies_method_path_query_and_body(
             "header": "kept",
             "authorization": None,
             "cookie": None,
+            "accept_encoding": "identity",
+            "forwarded_host": "testserver",
+            "forwarded_proto": "http",
+            "forwarded_port": "80",
+            "forwarded_prefix": f"/preview/services/{service_id}",
+            "real_ip": "testclient",
         }
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_preview_loopback_http_strips_stale_encoded_response_headers(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    server, port = _start_loopback_gzip_server()
+    client = TestClient(create_hub_app(hub_root))
+    try:
+        created = client.post(
+            "/hub/services/loopback-url",
+            json={"url": f"http://127.0.0.1:{port}/", "name": "Gzip"},
+        )
+        service_id = created.json()["service"]["service_id"]
+
+        response = client.get(
+            f"/preview/services/{service_id}/encoded",
+            headers={"Accept-Encoding": "identity"},
+        )
+
+        assert response.status_code == 200
+        assert response.content == b"compressed payload"
+        assert "content-encoding" not in response.headers
+        assert "content-length" not in response.headers
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_preview_loopback_http_rewrites_redirect_locations(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    server, port = _start_loopback_redirect_server()
+    client = TestClient(create_hub_app(hub_root))
+    try:
+        created = client.post(
+            "/hub/services/loopback-url",
+            json={"url": f"http://127.0.0.1:{port}/base/", "name": "Redirects"},
+        )
+        service_id = created.json()["service"]["service_id"]
+        prefix = f"http://testserver/preview/services/{service_id}"
+
+        root_redirect = client.get(
+            f"/preview/services/{service_id}/root-redirect",
+            follow_redirects=False,
+        )
+        assert root_redirect.status_code == 302
+        assert root_redirect.headers["location"] == f"{prefix}/login"
+
+        absolute_redirect = client.get(
+            f"/preview/services/{service_id}/absolute-redirect",
+            follow_redirects=False,
+        )
+        assert absolute_redirect.status_code == 302
+        assert absolute_redirect.headers["location"] == f"{prefix}/path?next=1"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_preview_proxy_request_body_limit_returns_413(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    _update_hub_config(
+        hub_root,
+        {"preview_services": {"proxy_max_body_bytes": 4}},
+    )
+    server, port = _start_loopback_capture_server()
+    client = TestClient(create_hub_app(hub_root))
+    try:
+        created = client.post(
+            "/hub/services/loopback-url",
+            json={"url": f"http://127.0.0.1:{port}/", "name": "Limit"},
+        )
+        service_id = created.json()["service"]["service_id"]
+
+        response = client.post(
+            f"/preview/services/{service_id}/too-large",
+            content=b"payload",
+        )
+
+        assert response.status_code == 413
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_preview_proxy_timeout_config_builds_finite_httpx_timeout(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    _update_hub_config(
+        hub_root,
+        {
+            "preview_services": {
+                "proxy_connect_timeout_seconds": 0.5,
+                "proxy_read_timeout_seconds": 1.5,
+                "proxy_write_timeout_seconds": 2.5,
+                "proxy_pool_timeout_seconds": 3.5,
+            }
+        },
+    )
+    app = create_hub_app(hub_root)
+
+    context = SimpleNamespace(config=app.state.config)
+
+    timeout = services_routes._proxy_timeout(context)
+
+    assert timeout.connect == 0.5
+    assert timeout.read == 1.5
+    assert timeout.write == 2.5
+    assert timeout.pool == 3.5
 
 
 def test_preview_loopback_http_streaming_response_stays_incremental(
@@ -512,6 +635,19 @@ def test_preview_websocket_connect_kwargs_omit_unsupported_proxy_arg(
     assert kwargs == {"additional_headers": {"x-test": "kept"}}
 
 
+def test_preview_websocket_connect_kwargs_support_legacy_extra_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_connect(uri: str, *, extra_headers=None):  # type: ignore[no-untyped-def]
+        raise AssertionError("signature probe only")
+
+    monkeypatch.setattr(services_routes.websockets, "connect", fake_connect)
+
+    kwargs = services_routes._websocket_connect_kwargs({"x-test": "kept"})
+
+    assert kwargs == {"extra_headers": {"x-test": "kept"}}
+
+
 def test_preview_websocket_rejects_unregistered_and_non_loopback_targets(
     tmp_path: Path,
 ) -> None:
@@ -565,6 +701,42 @@ def test_preview_managed_command_proxies_after_start(tmp_path: Path) -> None:
         opened = client.get(f"/preview/services/{service_id}/")
         assert opened.status_code == 200
         assert opened.text == "ok"
+    finally:
+        if process_is_active(pid):
+            client.post(f"/hub/services/{service_id}/teardown")
+
+
+def test_preview_managed_command_receives_preview_env(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    client = TestClient(create_hub_app(hub_root))
+    port = _find_available_port()
+    created = client.post(
+        "/hub/services/managed",
+        json={
+            "name": "Managed preview env",
+            "argv": _env_server_command(),
+            "cwd": str(tmp_path),
+            "port_policy": {"mode": "exact", "port": port},
+            "health_check": {"type": "tcp", "path": None},
+            "start": True,
+        },
+    )
+    assert created.status_code == 200
+    service = created.json()["service"]
+    service_id = service["service_id"]
+    pid = service["process"]["pid"]
+    try:
+        assert _wait_for_route_health(client, service_id)
+        opened = client.get(f"/preview/services/{service_id}/")
+        assert opened.status_code == 200
+        assert opened.json() == {
+            "PORT": str(port),
+            "HOST": "127.0.0.1",
+            "CAR_PREVIEW_SERVICE_ID": service_id,
+            "CAR_PREVIEW_BASE_PATH": f"/preview/services/{service_id}",
+            "CAR_PREVIEW_PUBLIC_URL": f"/preview/services/{service_id}/",
+        }
     finally:
         if process_is_active(pid):
             client.post(f"/hub/services/{service_id}/teardown")
@@ -794,6 +966,33 @@ def _server_command() -> list[str]:
     return [sys.executable, "-u", "-c", script]
 
 
+def _env_server_command() -> list[str]:
+    script = (
+        "import http.server, json, os\n"
+        "port=int(os.environ['PORT'])\n"
+        "keys = [\n"
+        "    'PORT',\n"
+        "    'HOST',\n"
+        "    'CAR_PREVIEW_SERVICE_ID',\n"
+        "    'CAR_PREVIEW_BASE_PATH',\n"
+        "    'CAR_PREVIEW_PUBLIC_URL',\n"
+        "]\n"
+        "class H(http.server.BaseHTTPRequestHandler):\n"
+        "    def do_GET(self):\n"
+        "        body=json.dumps({key: os.environ.get(key) for key in keys}).encode()\n"
+        "        self.send_response(200)\n"
+        "        self.send_header('Content-Type', 'application/json')\n"
+        "        self.send_header('Content-Length', str(len(body)))\n"
+        "        self.end_headers()\n"
+        "        self.wfile.write(body)\n"
+        "    def log_message(self, *args):\n"
+        "        return\n"
+        "print('preview route env server ready', port, flush=True)\n"
+        "http.server.ThreadingHTTPServer(('127.0.0.1', port), H).serve_forever()\n"
+    )
+    return [sys.executable, "-u", "-c", script]
+
+
 def _start_loopback_capture_server() -> tuple[http.server.ThreadingHTTPServer, int]:
     import json
 
@@ -807,6 +1006,12 @@ def _start_loopback_capture_server() -> tuple[http.server.ThreadingHTTPServer, i
                 "header": self.headers.get("X-Test-Header"),
                 "authorization": self.headers.get("Authorization"),
                 "cookie": self.headers.get("Cookie"),
+                "accept_encoding": self.headers.get("Accept-Encoding"),
+                "forwarded_host": self.headers.get("X-Forwarded-Host"),
+                "forwarded_proto": self.headers.get("X-Forwarded-Proto"),
+                "forwarded_port": self.headers.get("X-Forwarded-Port"),
+                "forwarded_prefix": self.headers.get("X-Forwarded-Prefix"),
+                "real_ip": self.headers.get("X-Real-IP"),
             }
             content = json.dumps(payload).encode("utf-8")
             self.send_response(201)
@@ -816,6 +1021,48 @@ def _start_loopback_capture_server() -> tuple[http.server.ThreadingHTTPServer, i
             self.send_header("Set-Cookie", "car_session=upstream; Path=/")
             self.end_headers()
             self.wfile.write(content)
+
+        def log_message(self, *args: object) -> None:
+            return
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, int(server.server_address[1])
+
+
+def _start_loopback_gzip_server() -> tuple[http.server.ThreadingHTTPServer, int]:
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            body = gzip.compress(b"compressed payload")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args: object) -> None:
+            return
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, int(server.server_address[1])
+
+
+def _start_loopback_redirect_server() -> tuple[http.server.ThreadingHTTPServer, int]:
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if self.path.endswith("/root-redirect"):
+                location = "/login"
+            else:
+                location = (
+                    f"http://127.0.0.1:{self.server.server_address[1]}/base/path?next=1"
+                )
+            self.send_response(302)
+            self.send_header("Location", location)
+            self.end_headers()
 
         def log_message(self, *args: object) -> None:
             return

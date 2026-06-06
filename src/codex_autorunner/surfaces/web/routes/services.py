@@ -45,6 +45,18 @@ from ..services.preview_capabilities import (
 
 logger = logging.getLogger("codex_autorunner.preview_services.routes")
 
+DEFAULT_PROXY_MAX_BODY_BYTES = 10 * 1024 * 1024
+DEFAULT_PROXY_CONNECT_TIMEOUT_SECONDS = 5.0
+DEFAULT_PROXY_READ_TIMEOUT_SECONDS = 60.0
+DEFAULT_PROXY_WRITE_TIMEOUT_SECONDS = 60.0
+DEFAULT_PROXY_POOL_TIMEOUT_SECONDS = 5.0
+DEFAULT_PROXY_MAX_GLOBAL_STREAMS = 128
+DEFAULT_PROXY_MAX_SERVICE_STREAMS = 16
+
+_GLOBAL_PROXY_SEMAPHORE: asyncio.Semaphore | None = None
+_GLOBAL_PROXY_SEMAPHORE_LIMIT: int | None = None
+_SERVICE_PROXY_SEMAPHORES: dict[str, tuple[int, asyncio.Semaphore]] = {}
+
 
 class ServiceScopeLinkPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
@@ -940,9 +952,27 @@ async def _proxy_http_request(
     preview_path: str,
 ) -> Response:
     target_url = _proxy_target_url(context, record, preview_path, request.url.query)
-    headers = _proxy_request_headers(request.headers.items())
-    body = await request.body()
-    client = httpx.AsyncClient(timeout=None, follow_redirects=False)
+    preview_prefix = _preview_request_prefix(request, preview_path)
+    headers = _proxy_request_headers(request, preview_prefix=preview_prefix)
+    body = await _read_limited_body(
+        request,
+        max_bytes=_proxy_int_config(
+            context,
+            "proxy_max_body_bytes",
+            DEFAULT_PROXY_MAX_BODY_BYTES,
+        ),
+    )
+    timeout = _proxy_timeout(context)
+    global_semaphore, service_semaphore = _proxy_stream_semaphores(context, record)
+    if global_semaphore.locked() or service_semaphore.locked():
+        raise HTTPException(
+            status_code=429,
+            detail="Preview proxy stream limit reached",
+        )
+    await global_semaphore.acquire()
+    await service_semaphore.acquire()
+    client = httpx.AsyncClient(timeout=timeout, follow_redirects=False)
+    upstream: httpx.Response | None = None
     try:
         upstream = await client.send(
             client.build_request(
@@ -953,17 +983,37 @@ async def _proxy_http_request(
             ),
             stream=True,
         )
+    except httpx.TimeoutException as exc:
+        await client.aclose()
+        service_semaphore.release()
+        global_semaphore.release()
+        raise HTTPException(
+            status_code=504, detail=f"Preview proxy timed out: {exc}"
+        ) from exc
     except httpx.HTTPError as exc:
         await client.aclose()
+        service_semaphore.release()
+        global_semaphore.release()
         raise HTTPException(
             status_code=502, detail=f"Preview proxy failed: {exc}"
         ) from exc
-    response_headers = _proxy_response_headers(upstream.headers.items())
+    response_headers = _proxy_response_headers(
+        upstream.headers.items(),
+        request=request,
+        record=record,
+        preview_prefix=preview_prefix,
+    )
     return StreamingResponse(
         upstream.aiter_bytes(),
         status_code=upstream.status_code,
         headers=response_headers,
-        background=BackgroundTask(_close_proxy_response, upstream, client),
+        background=BackgroundTask(
+            _close_proxy_response,
+            upstream,
+            client,
+            global_semaphore,
+            service_semaphore,
+        ),
     )
 
 
@@ -989,7 +1039,12 @@ async def _proxy_websocket(
         preview_path,
         websocket.url.query,
     )
-    headers = _proxy_websocket_request_headers(websocket.headers.items())
+    preview_prefix = _preview_websocket_prefix(websocket, preview_path)
+    headers = _proxy_websocket_request_headers(
+        websocket.headers.items(),
+        websocket=websocket,
+        preview_prefix=preview_prefix,
+    )
     connect_kwargs = _websocket_connect_kwargs(headers)
     try:
         async with websockets.connect(target_url, **connect_kwargs) as upstream:
@@ -1003,8 +1058,14 @@ async def _proxy_websocket(
 
 
 def _websocket_connect_kwargs(headers: dict[str, str]) -> dict[str, Any]:
-    connect_kwargs: dict[str, Any] = {"additional_headers": headers or None}
-    if "proxy" in inspect.signature(websockets.connect).parameters:
+    signature = inspect.signature(websockets.connect)
+    parameters = signature.parameters
+    connect_kwargs: dict[str, Any] = {}
+    if "additional_headers" in parameters:
+        connect_kwargs["additional_headers"] = headers or None
+    elif "extra_headers" in parameters:
+        connect_kwargs["extra_headers"] = headers or None
+    if "proxy" in parameters:
         connect_kwargs["proxy"] = None
     return connect_kwargs
 
@@ -1059,9 +1120,15 @@ async def _close_websocket_for_http_error(
 async def _close_proxy_response(
     upstream: httpx.Response,
     client: httpx.AsyncClient,
+    global_semaphore: asyncio.Semaphore,
+    service_semaphore: asyncio.Semaphore,
 ) -> None:
-    await upstream.aclose()
-    await client.aclose()
+    try:
+        await upstream.aclose()
+        await client.aclose()
+    finally:
+        service_semaphore.release()
+        global_semaphore.release()
 
 
 def _proxy_target_url(
@@ -1142,7 +1209,10 @@ def _prefer_capability_urls(context: HubAppContext) -> bool:
 
 
 _HOP_BY_HOP_HEADERS = {
+    "accept-encoding",
     "connection",
+    "content-length",
+    "content-encoding",
     "keep-alive",
     "proxy-authenticate",
     "proxy-authorization",
@@ -1179,18 +1249,41 @@ def _proxy_request_query_params(query_string: str) -> list[tuple[str, str]]:
     ]
 
 
-def _proxy_request_headers(headers: Iterable[tuple[str, str]]) -> dict[str, str]:
+async def _read_limited_body(request: Request, *, max_bytes: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Preview proxy request body exceeds {max_bytes} bytes",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _proxy_request_headers(
+    request: Request,
+    *,
+    preview_prefix: str,
+) -> dict[str, str]:
     forwarded: dict[str, str] = {}
-    for key, value in headers:
+    for key, value in request.headers.items():
         lowered = key.lower()
         if lowered in _HOP_BY_HOP_HEADERS or lowered in _SENSITIVE_REQUEST_HEADERS:
             continue
         forwarded[key] = value
+    forwarded["Accept-Encoding"] = "identity"
+    forwarded.update(_forwarded_headers(request, preview_prefix=preview_prefix))
     return forwarded
 
 
 def _proxy_websocket_request_headers(
     headers: Iterable[tuple[str, str]],
+    *,
+    websocket: WebSocket,
+    preview_prefix: str,
 ) -> dict[str, str]:
     forwarded: dict[str, str] = {}
     for key, value in headers:
@@ -1200,17 +1293,180 @@ def _proxy_websocket_request_headers(
         if lowered.startswith("sec-websocket-"):
             continue
         forwarded[key] = value
+    forwarded.update(_forwarded_headers(websocket, preview_prefix=preview_prefix))
     return forwarded
 
 
-def _proxy_response_headers(headers: Iterable[tuple[str, str]]) -> dict[str, str]:
+def _proxy_response_headers(
+    headers: Iterable[tuple[str, str]],
+    *,
+    request: Request,
+    record: PreviewServiceRecord,
+    preview_prefix: str,
+) -> dict[str, str]:
     forwarded: dict[str, str] = {}
     for key, value in headers:
         lowered = key.lower()
         if lowered in _HOP_BY_HOP_HEADERS or lowered in _SENSITIVE_RESPONSE_HEADERS:
             continue
+        if lowered == "location":
+            forwarded[key] = _rewrite_location_header(
+                value,
+                request=request,
+                record=record,
+                preview_prefix=preview_prefix,
+            )
+            continue
         forwarded[key] = value
     return forwarded
+
+
+def _forwarded_headers(
+    request: Request | WebSocket,
+    *,
+    preview_prefix: str,
+) -> dict[str, str]:
+    host = request.headers.get("host") or request.url.netloc
+    port = request.url.port or (443 if request.url.scheme == "https" else 80)
+    client_host = request.client.host if request.client is not None else ""
+    x_forwarded_for = client_host
+    existing = request.headers.get("x-forwarded-for")
+    if existing and client_host:
+        x_forwarded_for = f"{existing}, {client_host}"
+    return {
+        "X-Forwarded-Host": host,
+        "X-Forwarded-Proto": request.url.scheme,
+        "X-Forwarded-Port": str(port),
+        "X-Forwarded-For": x_forwarded_for,
+        "X-Forwarded-Prefix": preview_prefix,
+        "X-Real-IP": client_host,
+    }
+
+
+def _rewrite_location_header(
+    value: str,
+    *,
+    request: Request,
+    record: PreviewServiceRecord,
+    preview_prefix: str,
+) -> str:
+    split = urlsplit(value)
+    if not split.scheme and not split.netloc and value.startswith("/"):
+        return _absolute_preview_url(request, _join_url_path(preview_prefix, value))
+    target = record.target
+    direct_url = target.direct_url if target is not None else None
+    if not direct_url:
+        return value
+    target_split = urlsplit(direct_url)
+    if (
+        split.scheme in {"http", "https"}
+        and split.scheme == target_split.scheme
+        and split.netloc == target_split.netloc
+    ):
+        base_path = target_split.path or "/"
+        location_path = split.path or "/"
+        if base_path != "/" and location_path.startswith(base_path.rstrip("/") + "/"):
+            location_path = location_path[len(base_path.rstrip("/")) :]
+        rewritten_path = _join_url_path(preview_prefix, location_path)
+        return _absolute_preview_url(
+            request,
+            urlunsplit(("", "", rewritten_path, split.query, split.fragment)),
+        )
+    return value
+
+
+def _absolute_preview_url(request: Request, path: str) -> str:
+    return _request_url_for_path(request, path)
+
+
+def _join_url_path(prefix: str, suffix: str) -> str:
+    clean_prefix = "/" + prefix.strip("/")
+    clean_suffix = "/" + suffix.strip("/")
+    if clean_suffix == "/":
+        return clean_prefix + "/"
+    return clean_prefix + clean_suffix
+
+
+def _preview_request_prefix(request: Request, preview_path: str) -> str:
+    return _preview_prefix_from_path(request.url.path, preview_path)
+
+
+def _preview_websocket_prefix(websocket: WebSocket, preview_path: str) -> str:
+    return _preview_prefix_from_path(websocket.url.path, preview_path)
+
+
+def _preview_prefix_from_path(path: str, preview_path: str) -> str:
+    clean_preview = _validate_preview_path(preview_path)
+    clean_path = "/" + path.strip("/")
+    if clean_preview:
+        suffix = "/" + clean_preview
+        if clean_path.endswith(suffix):
+            clean_path = clean_path[: -len(suffix)]
+    return clean_path.rstrip("/") or "/"
+
+
+def _proxy_timeout(context: HubAppContext) -> httpx.Timeout:
+    return httpx.Timeout(
+        connect=_proxy_float_config(
+            context,
+            "proxy_connect_timeout_seconds",
+            DEFAULT_PROXY_CONNECT_TIMEOUT_SECONDS,
+        ),
+        read=_proxy_float_config(
+            context,
+            "proxy_read_timeout_seconds",
+            DEFAULT_PROXY_READ_TIMEOUT_SECONDS,
+        ),
+        write=_proxy_float_config(
+            context,
+            "proxy_write_timeout_seconds",
+            DEFAULT_PROXY_WRITE_TIMEOUT_SECONDS,
+        ),
+        pool=_proxy_float_config(
+            context,
+            "proxy_pool_timeout_seconds",
+            DEFAULT_PROXY_POOL_TIMEOUT_SECONDS,
+        ),
+    )
+
+
+def _proxy_stream_semaphores(
+    context: HubAppContext,
+    record: PreviewServiceRecord,
+) -> tuple[asyncio.Semaphore, asyncio.Semaphore]:
+    global _GLOBAL_PROXY_SEMAPHORE, _GLOBAL_PROXY_SEMAPHORE_LIMIT
+    global_limit = _proxy_int_config(
+        context,
+        "proxy_max_global_streams",
+        DEFAULT_PROXY_MAX_GLOBAL_STREAMS,
+    )
+    service_limit = _proxy_int_config(
+        context,
+        "proxy_max_service_streams",
+        DEFAULT_PROXY_MAX_SERVICE_STREAMS,
+    )
+    if _GLOBAL_PROXY_SEMAPHORE is None or _GLOBAL_PROXY_SEMAPHORE_LIMIT != global_limit:
+        _GLOBAL_PROXY_SEMAPHORE = asyncio.Semaphore(global_limit)
+        _GLOBAL_PROXY_SEMAPHORE_LIMIT = global_limit
+    service_entry = _SERVICE_PROXY_SEMAPHORES.get(record.service_id)
+    if service_entry is None or service_entry[0] != service_limit:
+        service_entry = (service_limit, asyncio.Semaphore(service_limit))
+        _SERVICE_PROXY_SEMAPHORES[record.service_id] = service_entry
+    return _GLOBAL_PROXY_SEMAPHORE, service_entry[1]
+
+
+def _proxy_int_config(context: HubAppContext, key: str, default: int) -> int:
+    value = _preview_config(context).get(key)
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return default
+
+
+def _proxy_float_config(context: HubAppContext, key: str, default: float) -> float:
+    value = _preview_config(context).get(key)
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+        return float(value)
+    return default
 
 
 def _not_found(exc: Exception) -> HTTPException:

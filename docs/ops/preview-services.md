@@ -28,6 +28,13 @@ preview_services:
   static_allowed_roots: []
   log_max_bytes: 1048576
   log_tail_default_lines: 200
+  proxy_max_body_bytes: 10485760
+  proxy_connect_timeout_seconds: 5.0
+  proxy_read_timeout_seconds: 60.0
+  proxy_write_timeout_seconds: 60.0
+  proxy_pool_timeout_seconds: 5.0
+  proxy_max_global_streams: 128
+  proxy_max_service_streams: 16
   auto_start_on_hub_start_default: false
 ```
 
@@ -120,6 +127,38 @@ Hot reload works best when the dev server is bound to `127.0.0.1`, uses the
 CAR-allocated `$PORT`, and is configured for same-origin HMR. Vite, SvelteKit,
 and Next-style flows generally work when the browser connects back to the same
 CAR preview URL.
+
+CAR serves previews below a path prefix:
+
+```text
+/preview/services/<service_id>/
+```
+
+Many frameworks assume they are mounted at `/` unless configured otherwise. For
+reliable assets, redirects, client routing, and HMR, configure the app's base
+path to match the CAR preview prefix. Managed commands receive these environment
+variables:
+
+```text
+CAR_PREVIEW_BASE_PATH=/preview/services/<service_id>
+CAR_PREVIEW_PUBLIC_URL=/preview/services/<service_id>/
+CAR_PREVIEW_SERVICE_ID=<service_id>
+PORT=<allocated_port>
+HOST=127.0.0.1
+```
+
+Framework notes:
+
+- Vite: set `base` to `process.env.CAR_PREVIEW_BASE_PATH + "/"`. Prefer
+  same-origin HMR; if you customize HMR, keep the client path and host aligned
+  with the CAR preview URL instead of hard-coding `localhost`.
+- SvelteKit: set `kit.paths.base` from `CAR_PREVIEW_BASE_PATH`. Root-relative
+  assets or links outside that base will bypass the preview prefix.
+- Next.js: `basePath` can mount pages below the preview prefix, but dev-mode
+  internals and `assetPrefix` have caveats. Verify script and HMR URLs in the
+  browser when using `next dev`.
+- React Router: create the router with `basename` set to
+  `CAR_PREVIEW_BASE_PATH` so client-side navigation stays under the preview URL.
 
 CAR does not rewrite arbitrary application bundles that hard-code absolute
 `http://localhost:*` or `ws://localhost:*` URLs. If HMR fails, configure the dev

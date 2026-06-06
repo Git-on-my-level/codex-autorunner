@@ -189,13 +189,33 @@ def _validate_preview_services_config(cfg: Dict[str, Any], *, root: Path) -> Non
         path="preview_services.static_allowed_roots",
         root=root,
     )
-    for key in ("log_max_bytes", "log_tail_default_lines"):
+    for key in (
+        "log_max_bytes",
+        "log_tail_default_lines",
+        "proxy_max_body_bytes",
+        "proxy_max_global_streams",
+        "proxy_max_service_streams",
+    ):
         value = preview_cfg.get(key)
         if value is None:
             continue
         if not _is_strict_int(value):
             raise ConfigError(f"preview_services.{key} must be an integer")
         if cast(int, value) <= 0:
+            raise ConfigError(f"preview_services.{key} must be > 0")
+    for key in (
+        "startup_health_timeout_seconds",
+        "proxy_connect_timeout_seconds",
+        "proxy_read_timeout_seconds",
+        "proxy_write_timeout_seconds",
+        "proxy_pool_timeout_seconds",
+    ):
+        value = preview_cfg.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise ConfigError(f"preview_services.{key} must be a number")
+        if cast(float, value) <= 0:
             raise ConfigError(f"preview_services.{key} must be > 0")
     if "auto_start_on_hub_start_default" in preview_cfg and not isinstance(
         preview_cfg.get("auto_start_on_hub_start_default"), bool

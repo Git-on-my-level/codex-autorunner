@@ -910,6 +910,8 @@ def _subprocess_env(
     service_id: str,
     car_url: str,
 ) -> dict[str, str]:
+    public_url = car_url
+    base_path = car_url.rstrip("/") or "/"
     env = dict(os.environ)
     env.update(
         _substitute_env(
@@ -925,6 +927,8 @@ def _subprocess_env(
             "PORT": str(port),
             "HOST": host,
             "CAR_PREVIEW_SERVICE_ID": service_id,
+            "CAR_PREVIEW_BASE_PATH": base_path,
+            "CAR_PREVIEW_PUBLIC_URL": public_url,
             "CAR_PREVIEW_URL": car_url,
         }
     )
