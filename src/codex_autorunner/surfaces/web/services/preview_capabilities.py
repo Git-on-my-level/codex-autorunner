@@ -143,11 +143,20 @@ class PreviewCapabilityStore:
         return data
 
     def _write_store(self, data: dict[str, Any]) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self._path.parent.chmod(0o700)
+        except OSError:
+            pass
         atomic_write(
             self._path,
             json.dumps(data, indent=2, sort_keys=True) + "\n",
             durable=self._durable,
         )
+        try:
+            self._path.chmod(0o600)
+        except OSError:
+            pass
 
 
 def _active_entries(data: dict[str, Any], *, now: float) -> list[dict[str, Any]]:

@@ -191,9 +191,7 @@ def register_services_commands(
         ownership = service.get("ownership", "")
         status = service.get("status", "")
         scope = service.get("scope") or _first_scope(service.get("scope_links"))
-        car_url = service.get("car_url") or (service.get("exposure") or {}).get(
-            "car_url", ""
-        )
+        service_url = _service_preview_or_car_url(service)
         port = service.get("port") or (service.get("target") or {}).get("port")
         port_text = f" port={port}" if port else ""
         scope_text = f" scope={scope}" if scope else ""
@@ -202,7 +200,22 @@ def register_services_commands(
         )
         taxonomy_text = f" {taxonomy}" if taxonomy else ""
         typer.echo(
-            f"{service_id}\t{status}\t{kind}{taxonomy_text}\t{name}{scope_text}{port_text}\t{car_url}"
+            f"{service_id}\t{status}\t{kind}{taxonomy_text}\t{name}{scope_text}{port_text}\t{service_url}"
+        )
+
+    def _service_preview_or_car_url(service: dict[str, Any]) -> str:
+        raw_exposure = service.get("exposure")
+        exposure: dict[str, Any] = (
+            raw_exposure if isinstance(raw_exposure, dict) else {}
+        )
+        return str(
+            service.get("preview_url")
+            or service.get("previewUrl")
+            or exposure.get("preview_url")
+            or exposure.get("previewUrl")
+            or service.get("car_url")
+            or exposure.get("car_url")
+            or ""
         )
 
     def _first_scope(scope_links: Any) -> Optional[str]:
@@ -231,6 +244,13 @@ def register_services_commands(
             ("network_policy", service.get("network_policy")),
             ("status", service.get("status")),
             ("scope", service.get("scope") or _first_scope(service.get("scope_links"))),
+            (
+                "preview_url",
+                service.get("preview_url")
+                or service.get("previewUrl")
+                or (service.get("exposure") or {}).get("preview_url")
+                or (service.get("exposure") or {}).get("previewUrl"),
+            ),
             (
                 "car_url",
                 service.get("car_url")
@@ -264,7 +284,7 @@ def register_services_commands(
         suffix = " deleted=true" if deleted is True else ""
         typer.echo(
             f"{action}: {service.get('service_id', '')} {service.get('status', '')} "
-            f"{(service.get('exposure') or {}).get('car_url') or service.get('car_url') or ''}{suffix}".strip()
+            f"{_service_preview_or_car_url(service)}{suffix}".strip()
         )
 
     def _danger_payload(

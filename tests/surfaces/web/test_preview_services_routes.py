@@ -67,6 +67,8 @@ def test_preview_services_static_crud_and_read_model(tmp_path: Path) -> None:
     assert service["exposure"]["car_url"] == f"/preview/services/{service_id}/"
     assert created.json()["read_model"]["scope"] == "repo:repo-1"
     assert created.json()["read_model"]["capabilities"]["can_open"] is True
+    assert created.json()["read_model"]["preview_url"] is None
+    assert created.json()["read_model"]["preview_url_status"] == "not_issued"
 
     listing = client.get("/hub/services")
     assert listing.status_code == 200
@@ -87,6 +89,8 @@ def test_preview_services_static_crud_and_read_model(tmp_path: Path) -> None:
         "infrastructure": 0,
     }
     assert payload["services"][0]["car_url"] == f"/preview/services/{service_id}/"
+    assert payload["services"][0]["preview_url"] is None
+    assert payload["services"][0]["preview_url_status"] == "not_issued"
 
     scoped = client.get("/hub/read-models/services", params={"scope": "repo:repo-1"})
     assert scoped.status_code == 200
@@ -123,6 +127,8 @@ def test_preview_static_file_opens_through_car_url(tmp_path: Path) -> None:
     opened = client.get(f"/preview/services/{service_id}/")
     assert opened.status_code == 200
     assert "<h1>Preview</h1>" in opened.text
+    assert "content-security-policy" not in opened.headers
+    assert "x-frame-options" not in opened.headers
     by_name = client.get(f"/preview/services/{service_id}/index.html")
     assert by_name.status_code == 200
     assert by_name.text == opened.text
@@ -159,7 +165,12 @@ def test_hosted_preview_capability_cannot_authorize_hub_apis(
     )
     assert created.status_code == 200
     service = created.json()["read_model"]
-    preview_url = service["preview_url"]
+    issued = client.post(
+        f"/hub/services/{service['service_id']}/preview-token",
+        headers={"Authorization": "Bearer hub-secret"},
+    )
+    assert issued.status_code == 200
+    preview_url = issued.json()["preview_url"]
     preview_token = preview_url.split("/preview/p/", 1)[1].split("/", 1)[0]
 
     opened = client.get(preview_url)
@@ -191,7 +202,7 @@ def test_hosted_preview_capability_cannot_authorize_hub_apis(
     assert allowed.status_code == 200
 
 
-def test_hosted_bearer_without_token_rejects_hub_routes(tmp_path: Path) -> None:
+def test_hosted_bearer_without_token_fails_startup(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     seed_hub_files(hub_root, force=True)
     _update_hub_config(
@@ -204,11 +215,8 @@ def test_hosted_bearer_without_token_rejects_hub_routes(tmp_path: Path) -> None:
             },
         },
     )
-    client = TestClient(create_hub_app(hub_root, endpoint_host="0.0.0.0"))
-
-    denied = client.get("/hub/services")
-
-    assert denied.status_code == 401
+    with pytest.raises(RuntimeError, match="auth.mode=hosted_bearer requires"):
+        create_hub_app(hub_root, endpoint_host="0.0.0.0")
 
 
 def test_hosted_direct_preview_services_redirects_to_capability_url(
@@ -298,7 +306,9 @@ def test_preview_static_dir_opens_index_and_nested_files(tmp_path: Path) -> None
 
     assert created.status_code == 200
     service_id = created.json()["service"]["service_id"]
-    preview_url = created.json()["read_model"]["preview_url"]
+    issued = client.post(f"/hub/services/{service_id}/preview-token")
+    assert issued.status_code == 200
+    preview_url = issued.json()["preview_url"]
     assert client.get(f"/preview/services/{service_id}/").text == "home"
     asset = client.get(f"/preview/services/{service_id}/assets/app.txt")
     assert asset.status_code == 200
@@ -403,6 +413,29 @@ def test_preview_static_dir_blocks_symlinked_directory_escape(
     service_id = created.json()["service"]["service_id"]
 
     opened = client.get(f"/preview/services/{service_id}/linked/index.html")
+
+    assert opened.status_code == 403
+
+
+def test_preview_static_dir_blocks_symlinked_directory_inside_root(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    static_dir = hub_root / "site"
+    static_dir.mkdir()
+    safe_dir = static_dir / "safe-real-dir"
+    safe_dir.mkdir()
+    (safe_dir / "index.html").write_text("safe", encoding="utf-8")
+    (static_dir / "linkdir").symlink_to(safe_dir, target_is_directory=True)
+    client = TestClient(create_hub_app(hub_root))
+    created = client.post(
+        "/hub/services/static",
+        json={"path": str(static_dir), "kind": "static_dir", "name": "Site"},
+    )
+    service_id = created.json()["service"]["service_id"]
+
+    opened = client.get(f"/preview/services/{service_id}/linkdir/index.html")
 
     assert opened.status_code == 403
 
@@ -540,7 +573,7 @@ def test_preview_loopback_http_service_proxies_method_path_query_and_body(
         assert "set-cookie" not in response.headers
         assert response.json() == {
             "method": "POST",
-            "path": "/base/nested/path?q=one",
+            "path": "/base/nested/path?q=one&token=hub-secret",
             "body": "payload",
             "header": "kept",
             "authorization": None,
@@ -719,7 +752,10 @@ def test_preview_loopback_websocket_echo_preserves_path_and_query(
             },
         ) as websocket:
             websocket.send_text("hello")
-            assert websocket.receive_text() == "path=/base/nested/socket?client=abc"
+            assert (
+                websocket.receive_text()
+                == "path=/base/nested/socket?client=abc&token=hub-secret"
+            )
             assert websocket.receive_text() == "echo:hello"
             websocket.send_bytes(b"raw")
             assert websocket.receive_bytes() == b"echo:raw"

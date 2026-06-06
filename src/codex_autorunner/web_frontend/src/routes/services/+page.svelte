@@ -23,7 +23,6 @@
     serviceCounts,
     serviceKindLabel,
     serviceNeedsAttention,
-    serviceOpenUrl,
     serviceOwnershipLabel,
     serviceScopeLabel,
     serviceStatusLabel,
@@ -252,8 +251,10 @@
   }
 
   async function copyCarUrl(service: PreviewServiceReadModel): Promise<void> {
+    const url = await issueServiceUrl(service);
+    if (!url) return;
     try {
-      await navigator.clipboard.writeText(absolutePreviewUrl(serviceOpenUrl(service)));
+      await navigator.clipboard.writeText(url);
       copiedServiceId = service.serviceId;
       if (copyTimer) clearTimeout(copyTimer);
       copyTimer = setTimeout(() => {
@@ -264,21 +265,29 @@
     }
   }
 
-  function openCarUrl(service: PreviewServiceReadModel): void {
-    window.open(href(serviceOpenUrl(service)), '_blank', 'noopener,noreferrer');
+  async function openCarUrl(service: PreviewServiceReadModel): Promise<void> {
+    const url = await issueServiceUrl(service);
+    if (!url) return;
+    window.open(href(url), '_blank', 'noopener,noreferrer');
   }
 
-  async function issueLink(service: PreviewServiceReadModel): Promise<void> {
+  async function issueServiceUrl(service: PreviewServiceReadModel): Promise<string | null> {
     actionId = `issue-link:${service.serviceId}`;
     error = null;
     const result = await webApi.hub.issueServiceLink(service.serviceId, 86400);
     actionId = null;
     if (!result.ok) {
       error = result.error;
-      return;
+      return null;
     }
     const url = absolutePreviewUrl(result.data.previewUrl);
     issuedLinks = { ...issuedLinks, [service.serviceId]: url };
+    return url;
+  }
+
+  async function issueLink(service: PreviewServiceReadModel): Promise<void> {
+    const url = await issueServiceUrl(service);
+    if (!url) return;
     await navigator.clipboard.writeText(url);
     copiedServiceId = service.serviceId;
     notice = `Issued preview link for ${service.name}`;
@@ -622,7 +631,7 @@
                 <td>
                   <div class="link-actions">
                     <button class="ghost-button compact" type="button" onclick={() => openCarUrl(service)} disabled={!eligibility.canOpen}>Open</button>
-                    <button class="ghost-button compact" type="button" onclick={() => copyCarUrl(service)} disabled={!serviceOpenUrl(service)}>
+                    <button class="ghost-button compact" type="button" onclick={() => copyCarUrl(service)} disabled={!eligibility.canOpen || actionBusy(service, 'issue-link')}>
                       {copiedServiceId === service.serviceId ? 'Copied' : 'Copy'}
                     </button>
                     <button class="ghost-button compact" type="button" onclick={() => issueLink(service)} disabled={!eligibility.canOpen || actionBusy(service, 'issue-link')}>Issue</button>

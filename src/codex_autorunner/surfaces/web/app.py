@@ -85,6 +85,11 @@ def create_hub_app(
     auth_mode = _hub_auth_mode(context)
     hosted_bearer = auth_mode == "hosted_bearer"
     auth_token = resolve_auth_token(context.config.server_auth_token_env)
+    if hosted_bearer and not auth_token:
+        raise RuntimeError(
+            "auth.mode=hosted_bearer requires server.auth_token_env to resolve "
+            "to a non-empty bearer token"
+        )
     browser_auth_store: Optional[BrowserAuthStore] = None
     if (auth_token or remote_bind) and not hosted_bearer:
         browser_auth_store = BrowserAuthStore(context.config.root)

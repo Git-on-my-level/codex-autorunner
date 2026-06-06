@@ -585,6 +585,7 @@ export type PreviewServiceReadModel = {
   scope: string | null;
   carUrl: string;
   previewUrl: string | null;
+  previewUrlStatus?: 'not_issued' | 'issued' | string | null;
   previewUrlExpiresAt: number | null;
   proxyEnabled: boolean;
   directUrl: string | null;

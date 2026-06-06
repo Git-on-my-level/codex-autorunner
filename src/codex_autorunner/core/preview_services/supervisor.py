@@ -23,6 +23,7 @@ from ..managed_processes.registry import (
     write_process_record,
 )
 from ..process_termination import terminate_record
+from ..utils import atomic_write
 from .health import PreviewServiceHealthResult, check_service_health
 from .logs import (
     DEFAULT_LOG_MAX_BYTES,
@@ -460,15 +461,18 @@ class PreviewServiceSupervisor:
             raise PreviewServiceSupervisorError("Only managed services can be stopped")
         process = record.process
         if process is not None:
-            self._verify_process_identity_or_orphan(record, action="stop")
-            terminate_record(
-                process.pid,
-                process.pgid,
-                grace_seconds=grace_seconds,
-                kill_seconds=DEFAULT_KILL_SECONDS,
-                logger=logger,
-                event_prefix="preview_services.stop",
-            )
+            identity = _process_identity_status(self._hub_root, record)
+            if identity == "match":
+                terminate_record(
+                    process.pid,
+                    process.pgid,
+                    grace_seconds=grace_seconds,
+                    kill_seconds=DEFAULT_KILL_SECONDS,
+                    logger=logger,
+                    event_prefix="preview_services.stop",
+                )
+            elif identity != "exited":
+                self._verify_process_identity_or_orphan(record, action="stop")
         delete_process_record(self._hub_root, PROCESS_KIND, service_id)
         self._processes.pop(service_id, None)
         stopped = self._registry.update(
@@ -480,7 +484,15 @@ class PreviewServiceSupervisor:
 
     def restart(self, service_id: str) -> PreviewServiceRecord:
         with self.service_lock(service_id):
-            self._stop_locked(service_id)
+            record = self.reconcile_service(service_id, lock=False)
+            if record.status not in {
+                PreviewServiceStatus.EXITED.value,
+                PreviewServiceStatus.FAILED.value,
+                PreviewServiceStatus.STOPPED.value,
+                PreviewServiceStatus.REGISTERED.value,
+                PreviewServiceStatus.CONFLICT.value,
+            }:
+                self._stop_locked(service_id)
             return self._start_locked(service_id)
 
     def kill(
@@ -819,7 +831,11 @@ class PreviewServiceSupervisor:
         existing.append(json.dumps(event, sort_keys=True))
         if self._event_history_limit > 0:
             existing = existing[-self._event_history_limit :]
-        path.write_text("\n".join(existing) + "\n", encoding="utf-8")
+        atomic_write(
+            path,
+            "\n".join(existing) + "\n",
+            durable=self._durable,
+        )
 
     def _verify_process_identity_or_orphan(
         self,

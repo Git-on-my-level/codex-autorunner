@@ -29,7 +29,13 @@ export type ServiceActionEligibility = {
 };
 
 const runningStatuses = new Set<PreviewServiceStatus>(['starting', 'running', 'healthy', 'unhealthy']);
-const attentionStatuses = new Set<PreviewServiceStatus>(['unhealthy', 'failed', 'orphaned', 'conflict']);
+const attentionStatuses = new Set<PreviewServiceStatus>([
+  'unhealthy',
+  'failed',
+  'orphaned',
+  'conflict',
+  'exited'
+]);
 
 export function defaultServiceFilters(): ServiceFilters {
   return { query: '', status: 'all', kind: 'all', scope: '' };

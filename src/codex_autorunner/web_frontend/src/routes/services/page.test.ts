@@ -6,7 +6,8 @@ const pageSource = readFileSync(fileURLToPath(new URL('./+page.svelte', import.m
 
 describe('services page preview link security', () => {
   it('opens preview links without exposing window.opener or referrer', () => {
-    expect(pageSource).toContain("window.open(href(serviceOpenUrl(service)), '_blank', 'noopener,noreferrer')");
+    expect(pageSource).toContain('const url = await issueServiceUrl(service);');
+    expect(pageSource).toContain("window.open(href(url), '_blank', 'noopener,noreferrer')");
   });
 
   it('does not persist hub access tokens in browser storage', () => {

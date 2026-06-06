@@ -268,7 +268,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
     async def get_services_read_model(scope: Optional[str] = None) -> dict[str, Any]:
         records = await asyncio.to_thread(manager.registry.list)
         filtered = _filter_records(records, scope=scope)
-        return _services_read_model(filtered, capability_store)
+        return _services_read_model(filtered)
 
     @router.get("/hub/services")
     async def list_services(scope: Optional[str] = None) -> dict[str, Any]:
@@ -276,7 +276,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
         filtered = _filter_records(records, scope=scope)
         return {
             "services": [record.to_dict() for record in filtered],
-            "read_model": _services_read_model(filtered, capability_store),
+            "read_model": _services_read_model(filtered),
         }
 
     @router.get("/hub/services/{service_id}")
@@ -284,7 +284,6 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
         record = await _require_record(manager, service_id)
         return _service_response(
             record,
-            capability_store,
             events=await asyncio.to_thread(manager.events, service_id),
         )
 
@@ -308,7 +307,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             )
         except (OSError, ValueError) as exc:
             raise _bad_request(exc) from exc
-        return _service_response(record, capability_store)
+        return _service_response(record)
 
     @router.post("/hub/services/loopback-url")
     async def register_loopback_url(
@@ -329,7 +328,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             )
         except ValueError as exc:
             raise _bad_request(exc) from exc
-        return _service_response(record, capability_store)
+        return _service_response(record)
 
     @router.post("/hub/services/managed")
     async def register_managed(
@@ -364,7 +363,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             raise _supervisor_error(exc) from exc
         except (OSError, ValueError) as exc:
             raise _bad_request(exc) from exc
-        return _service_response(record, capability_store)
+        return _service_response(record)
 
     @router.patch("/hub/services/{service_id}")
     async def update_service(
@@ -404,7 +403,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             raise _supervisor_error(exc) from exc
         except ValueError as exc:
             raise _bad_request(exc) from exc
-        return _service_response(record, capability_store)
+        return _service_response(record)
 
     @router.post("/hub/services/{service_id}/health")
     async def check_health(service_id: str) -> dict[str, Any]:
@@ -416,27 +415,21 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
         except ValueError as exc:
             raise _bad_request(exc) from exc
         return {
-            **_service_response(record, capability_store),
+            **_service_response(record),
             "health": result.to_dict(),
         }
 
     @router.post("/hub/services/{service_id}/start")
     async def start_service(service_id: str) -> dict[str, Any]:
-        return _service_response(
-            await _lifecycle(manager, service_id, "start"), capability_store
-        )
+        return _service_response(await _lifecycle(manager, service_id, "start"))
 
     @router.post("/hub/services/{service_id}/stop")
     async def stop_service(service_id: str) -> dict[str, Any]:
-        return _service_response(
-            await _lifecycle(manager, service_id, "stop"), capability_store
-        )
+        return _service_response(await _lifecycle(manager, service_id, "stop"))
 
     @router.post("/hub/services/{service_id}/restart")
     async def restart_service(service_id: str) -> dict[str, Any]:
-        return _service_response(
-            await _lifecycle(manager, service_id, "restart"), capability_store
-        )
+        return _service_response(await _lifecycle(manager, service_id, "restart"))
 
     @router.post("/hub/services/{service_id}/kill")
     async def kill_service(
@@ -457,7 +450,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             raise _not_found(exc) from exc
         except ValueError as exc:
             raise _bad_request(exc) from exc
-        return _service_response(record, capability_store)
+        return _service_response(record)
 
     @router.post("/hub/services/{service_id}/teardown")
     async def teardown_service(
@@ -716,13 +709,12 @@ async def _unlink(
 
 def _service_response(
     record: PreviewServiceRecord,
-    capability_store: PreviewCapabilityStore,
     *,
     events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     response: dict[str, Any] = {
         "service": record.to_dict(),
-        "read_model": _service_read_model(record, capability_store),
+        "read_model": _service_read_model(record),
     }
     if events is not None:
         response["events"] = events[-20:]
@@ -731,40 +723,31 @@ def _service_response(
 
 def _services_read_model(
     records: list[PreviewServiceRecord],
-    capability_store: PreviewCapabilityStore,
 ) -> dict[str, Any]:
     read_model = build_services_read_model(records)
     read_model["services"] = [
-        _with_preview_capability(item, capability_store)
+        _with_preview_capability_status(item)
         for item in read_model.get("services", [])
         if isinstance(item, dict)
     ]
     return read_model
 
 
-def _service_read_model(
-    record: PreviewServiceRecord,
-    capability_store: PreviewCapabilityStore,
-) -> dict[str, Any]:
-    return _with_preview_capability(service_read_model(record), capability_store)
+def _service_read_model(record: PreviewServiceRecord) -> dict[str, Any]:
+    return _with_preview_capability_status(service_read_model(record))
 
 
-def _with_preview_capability(
-    item: dict[str, Any],
-    capability_store: PreviewCapabilityStore,
-) -> dict[str, Any]:
+def _with_preview_capability_status(item: dict[str, Any]) -> dict[str, Any]:
     if not item.get("proxy_enabled", True):
         return item
     service_id = str(item.get("service_id") or "")
     if not service_id:
         return item
-    capability = capability_store.issue(
-        service_id, ttl_seconds=DEFAULT_PREVIEW_CAPABILITY_TTL_SECONDS
-    )
     return {
         **item,
-        "preview_url": capability.url,
-        "preview_url_expires_at": capability.expires_at,
+        "preview_url": None,
+        "preview_url_status": "not_issued",
+        "preview_url_expires_at": None,
     }
 
 
@@ -1076,16 +1059,6 @@ def _allowed_static_roots(
     return resolved
 
 
-def _path_is_under_any(path: Path, roots: Iterable[Path]) -> bool:
-    for root in roots:
-        try:
-            path.relative_to(root)
-            return True
-        except ValueError:
-            continue
-    return False
-
-
 def _validate_preview_path(preview_path: str) -> str:
     clean = preview_path.strip("/")
     if not clean:
@@ -1152,18 +1125,12 @@ def _reject_sensitive_static_part(part: str) -> None:
 
 
 def _resolve_static_child(root: Path, relative_parts: tuple[str, ...]) -> Path:
-    target = (root / Path(*relative_parts)).resolve()
-    try:
-        target.relative_to(root)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=403, detail="Static preview path escapes root"
-        ) from exc
-    _reject_sensitive_static_path(root, target)
-    if relative_parts:
-        raw = root.joinpath(*relative_parts)
+    _reject_sensitive_requested_parts(relative_parts)
+    cursor = root
+    for part in relative_parts:
+        cursor = cursor / part
         try:
-            if raw.is_symlink():
+            if cursor.is_symlink():
                 raise HTTPException(
                     status_code=403,
                     detail="Static preview path contains a symlink",
@@ -1172,6 +1139,14 @@ def _resolve_static_child(root: Path, relative_parts: tuple[str, ...]) -> Path:
             raise HTTPException(
                 status_code=403, detail="Static preview path cannot be inspected"
             ) from exc
+    target = cursor.resolve()
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=403, detail="Static preview path escapes root"
+        ) from exc
+    _reject_sensitive_static_path(root, target)
     return target
 
 
@@ -1473,11 +1448,9 @@ _SENSITIVE_RESPONSE_HEADERS = {
 }
 
 _SENSITIVE_QUERY_PARAMS = {
-    "token",
-    "auth_token",
-    "access_token",
     "car_token",
     "car_auth_token",
+    "car_preview_token",
 }
 
 

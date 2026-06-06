@@ -3,7 +3,10 @@ from typing import Optional
 
 import pytest
 
-from codex_autorunner.surfaces.web.middleware import AuthTokenMiddleware
+from codex_autorunner.surfaces.web.middleware import (
+    AuthTokenMiddleware,
+    BasePathRouterMiddleware,
+)
 
 
 def _scope(path: str, root_path: str = "") -> dict:
@@ -49,6 +52,14 @@ def test_auth_middleware_respects_base_path() -> None:
     middleware = AuthTokenMiddleware(lambda *_: None, token="token", base_path="/car")
     assert middleware._requires_auth(_scope("/car/health")) is False
     assert middleware._requires_auth(_scope("/car/hub/repos")) is True
+
+
+@pytest.mark.parametrize("path", ["/services", "/preview/p/token/index.html"])
+def test_base_path_router_redirects_preview_and_services_prefixes(path: str) -> None:
+    middleware = BasePathRouterMiddleware(lambda *_: None, base_path="/car")
+
+    assert middleware._should_redirect(path, "") is True
+    assert middleware._should_redirect(f"/car{path}", "") is False
 
 
 def test_auth_middleware_extracts_ws_protocol_token() -> None:

@@ -355,6 +355,61 @@ def test_reconciler_records_managed_service_exit_code_and_event(
     ]
 
 
+def test_stop_exited_service_is_idempotent(tmp_path: Path) -> None:
+    supervisor = PreviewServiceSupervisor(tmp_path)
+    record = supervisor.start_managed_command(
+        name="Exited stop service",
+        argv=[
+            sys.executable,
+            "-u",
+            "-c",
+            "import time; print('ready', flush=True); time.sleep(0.1)",
+        ],
+        cwd=tmp_path,
+        health_check={"type": "none"},
+    )
+    first_pid = record.process.pid if record.process else None
+    assert first_pid is not None
+    assert _wait_for_inactive(first_pid)
+
+    exited = supervisor.reconcile_service(record.service_id)
+    assert exited.status == PreviewServiceStatus.EXITED.value
+
+    stopped = supervisor.stop(record.service_id)
+    assert stopped.status == PreviewServiceStatus.STOPPED.value
+    assert stopped.process is None
+
+
+def test_restart_exited_service_starts_directly(tmp_path: Path) -> None:
+    port = _find_available_port()
+    supervisor = PreviewServiceSupervisor(tmp_path, port_range=(port, port))
+    record = supervisor.start_managed_command(
+        name="Exited restart service",
+        argv=[
+            sys.executable,
+            "-u",
+            "-c",
+            "import time; print('ready', flush=True); time.sleep(0.1)",
+        ],
+        cwd=tmp_path,
+        health_check={"type": "none"},
+    )
+    first_pid = record.process.pid if record.process else None
+    assert first_pid is not None
+    assert _wait_for_inactive(first_pid)
+
+    exited = supervisor.reconcile_service(record.service_id)
+    assert exited.status == PreviewServiceStatus.EXITED.value
+
+    restarted = supervisor.restart(record.service_id)
+    try:
+        assert restarted.status == PreviewServiceStatus.HEALTHY.value
+        assert restarted.process is not None
+        assert restarted.process.pid != first_pid
+    finally:
+        supervisor.stop(record.service_id)
+
+
 def test_stale_pid_identity_mismatch_is_orphaned_before_stop_or_kill(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

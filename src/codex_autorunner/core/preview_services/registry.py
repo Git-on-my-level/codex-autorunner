@@ -310,7 +310,9 @@ def service_capabilities(record: PreviewServiceRecord) -> dict[str, bool]:
         "can_open": bool(record.exposure.proxy_enabled),
         "can_start": bool(managed and startable),
         "can_stop": bool(managed and running),
-        "can_restart": bool(managed and record.command is not None),
+        "can_restart": bool(
+            managed and record.command is not None and (running or startable)
+        ),
         "can_kill": bool(managed and running),
         "can_unlink": not (managed and running),
         "can_teardown": True,

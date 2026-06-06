@@ -92,6 +92,7 @@ def test_services_register_static_payload_normalizes_kind_and_scope(
                     "name": "Site",
                     "kind": "static_file",
                     "status": "registered",
+                    "preview_url": "/preview/p/tok_static1/",
                     "exposure": {"car_url": "/preview/services/svc_static1/"},
                 }
             }
@@ -132,6 +133,7 @@ def test_services_register_static_payload_normalizes_kind_and_scope(
         "created_by": "cli",
     }
     assert "registered: svc_static1 registered" in result.output
+    assert "/preview/p/tok_static1/" in result.output
 
 
 def test_services_start_managed_payload_includes_command_port_env_and_start(
@@ -559,8 +561,10 @@ def test_services_list_and_get_against_test_hub_app(
     assert listed.exit_code == 0
     listed_payload = json.loads(listed.output)
     assert listed_payload["services"][0]["service_id"] == service_id
-    assert listed_payload["read_model"]["services"][0]["preview_url"].startswith(
-        "https://car.example.test/base/preview/p/"
+    assert listed_payload["read_model"]["services"][0]["preview_url"] is None
+    assert (
+        listed_payload["read_model"]["services"][0]["preview_url_status"]
+        == "not_issued"
     )
 
     detail = runner.invoke(
@@ -569,6 +573,5 @@ def test_services_list_and_get_against_test_hub_app(
     assert detail.exit_code == 0
     detail_payload = json.loads(detail.output)
     assert detail_payload["service"]["name"] == "Static preview"
-    assert detail_payload["read_model"]["preview_url"].startswith(
-        "https://car.example.test/base/preview/p/"
-    )
+    assert detail_payload["read_model"]["preview_url"] is None
+    assert detail_payload["read_model"]["preview_url_status"] == "not_issued"

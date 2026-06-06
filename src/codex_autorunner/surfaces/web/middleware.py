@@ -39,6 +39,8 @@ class BasePathRouterMiddleware:
                 "/_app",
                 "/api",
                 "/hub",
+                "/preview",
+                "/services",
                 "/chats",
                 "/repos",
                 "/worktrees",
@@ -545,6 +547,9 @@ class SecurityHeadersMiddleware:
 
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http":
+            return await self.app(scope, receive, send)
+        path = str(scope.get("path") or "")
+        if path == "/preview" or path.startswith("/preview/"):
             return await self.app(scope, receive, send)
 
         async def send_wrapper(message):
