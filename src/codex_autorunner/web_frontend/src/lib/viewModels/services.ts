@@ -44,7 +44,14 @@ export function filterServices(
     if (filters.kind !== 'all' && service.kind !== filters.kind) return false;
     if (scope && !(service.scope ?? '').toLowerCase().includes(scope)) return false;
     if (!query) return true;
-    return [service.name, service.serviceId, service.carUrl, service.directUrl ?? '', service.scope ?? '']
+    return [
+      service.name,
+      service.serviceId,
+      service.previewUrl ?? '',
+      service.carUrl,
+      service.directUrl ?? '',
+      service.scope ?? ''
+    ]
       .join(' ')
       .toLowerCase()
       .includes(query);
@@ -98,7 +105,11 @@ export function serviceScopeLabel(service: PreviewServiceReadModel): string {
 
 export function serviceTargetLabel(service: PreviewServiceReadModel): string {
   if (service.port) return `${service.host ?? '127.0.0.1'}:${service.port}`;
-  return service.directUrl ?? service.carUrl;
+  return service.directUrl ?? service.previewUrl ?? service.carUrl;
+}
+
+export function serviceOpenUrl(service: PreviewServiceReadModel): string {
+  return service.previewUrl ?? service.carUrl;
 }
 
 export function serviceUptimeLabel(service: PreviewServiceReadModel, now = Date.now()): string {

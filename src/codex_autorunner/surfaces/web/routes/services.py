@@ -10,7 +10,12 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 import httpx
 import websockets
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, WebSocket
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from starlette.background import BackgroundTask
 from starlette.websockets import WebSocketDisconnect, WebSocketState
@@ -37,6 +42,10 @@ from ....core.preview_services import (
     services_read_model as build_services_read_model,
 )
 from ..app_state import HubAppContext
+from ..services.preview_capabilities import (
+    DEFAULT_PREVIEW_CAPABILITY_TTL_SECONDS,
+    PreviewCapabilityStore,
+)
 
 logger = logging.getLogger("codex_autorunner.preview_services.routes")
 
@@ -168,12 +177,16 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
         dependencies=[Depends(_require_preview_services_enabled)],
     )
     manager = context.preview_service_manager
+    capability_store = PreviewCapabilityStore(
+        context.config.root,
+        durable=bool(getattr(context.config, "durable_writes", False)),
+    )
 
     @router.get("/hub/read-models/services")
     async def get_services_read_model(scope: Optional[str] = None) -> dict[str, Any]:
         records = await asyncio.to_thread(manager.registry.list)
         filtered = _filter_records(records, scope=scope)
-        return build_services_read_model(filtered)
+        return _services_read_model(filtered, capability_store)
 
     @router.get("/hub/services")
     async def list_services(scope: Optional[str] = None) -> dict[str, Any]:
@@ -181,13 +194,13 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
         filtered = _filter_records(records, scope=scope)
         return {
             "services": [record.to_dict() for record in filtered],
-            "read_model": build_services_read_model(filtered),
+            "read_model": _services_read_model(filtered, capability_store),
         }
 
     @router.get("/hub/services/{service_id}")
     async def get_service(service_id: str) -> dict[str, Any]:
         record = await _require_record(manager, service_id)
-        return _service_response(record)
+        return _service_response(record, capability_store)
 
     @router.post("/hub/services/static")
     async def register_static(
@@ -204,7 +217,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             )
         except (OSError, ValueError) as exc:
             raise _bad_request(exc) from exc
-        return _service_response(record)
+        return _service_response(record, capability_store)
 
     @router.post("/hub/services/loopback-url")
     async def register_loopback_url(
@@ -221,7 +234,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             )
         except ValueError as exc:
             raise _bad_request(exc) from exc
-        return _service_response(record)
+        return _service_response(record, capability_store)
 
     @router.post("/hub/services/managed")
     async def register_managed(
@@ -251,7 +264,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             raise _supervisor_error(exc) from exc
         except (OSError, ValueError) as exc:
             raise _bad_request(exc) from exc
-        return _service_response(record)
+        return _service_response(record, capability_store)
 
     @router.patch("/hub/services/{service_id}")
     async def update_service(
@@ -277,7 +290,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             raise _not_found(exc) from exc
         except ValueError as exc:
             raise _bad_request(exc) from exc
-        return _service_response(record)
+        return _service_response(record, capability_store)
 
     @router.post("/hub/services/{service_id}/health")
     async def check_health(service_id: str) -> dict[str, Any]:
@@ -288,19 +301,28 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             raise _not_found(exc) from exc
         except ValueError as exc:
             raise _bad_request(exc) from exc
-        return {**_service_response(record), "health": result.to_dict()}
+        return {
+            **_service_response(record, capability_store),
+            "health": result.to_dict(),
+        }
 
     @router.post("/hub/services/{service_id}/start")
     async def start_service(service_id: str) -> dict[str, Any]:
-        return _service_response(await _lifecycle(manager, service_id, "start"))
+        return _service_response(
+            await _lifecycle(manager, service_id, "start"), capability_store
+        )
 
     @router.post("/hub/services/{service_id}/stop")
     async def stop_service(service_id: str) -> dict[str, Any]:
-        return _service_response(await _lifecycle(manager, service_id, "stop"))
+        return _service_response(
+            await _lifecycle(manager, service_id, "stop"), capability_store
+        )
 
     @router.post("/hub/services/{service_id}/restart")
     async def restart_service(service_id: str) -> dict[str, Any]:
-        return _service_response(await _lifecycle(manager, service_id, "restart"))
+        return _service_response(
+            await _lifecycle(manager, service_id, "restart"), capability_store
+        )
 
     @router.post("/hub/services/{service_id}/kill")
     async def kill_service(
@@ -321,7 +343,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             raise _not_found(exc) from exc
         except ValueError as exc:
             raise _bad_request(exc) from exc
-        return _service_response(record)
+        return _service_response(record, capability_store)
 
     @router.post("/hub/services/{service_id}/teardown")
     async def teardown_service(
@@ -329,6 +351,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
         payload: OptionalDestructiveBody,
     ) -> dict[str, Any]:
         record = await _teardown(manager, service_id, payload)
+        await asyncio.to_thread(capability_store.revoke_service, service_id)
         return {"service": record.to_dict(), "deleted": True}
 
     @router.post("/hub/services/{service_id}/unlink")
@@ -337,6 +360,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
         payload: OptionalDestructiveBody,
     ) -> dict[str, Any]:
         record = await _unlink(manager, service_id, payload)
+        await asyncio.to_thread(capability_store.revoke_service, service_id)
         return {"service": record.to_dict(), "deleted": True}
 
     @router.delete("/hub/services/{service_id}")
@@ -345,7 +369,18 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
         payload: OptionalDestructiveBody,
     ) -> dict[str, Any]:
         record = await _unlink(manager, service_id, payload)
+        await asyncio.to_thread(capability_store.revoke_service, service_id)
         return {"service": record.to_dict(), "deleted": True}
+
+    @router.post("/hub/services/{service_id}/preview-token")
+    async def issue_preview_token(service_id: str) -> dict[str, Any]:
+        record = await _require_record(manager, service_id)
+        capability = await asyncio.to_thread(capability_store.issue, service_id)
+        return {
+            "service_id": record.service_id,
+            "preview_url": capability.url,
+            "expires_at": capability.expires_at,
+        }
 
     @router.get("/hub/services/{service_id}/logs")
     async def service_logs(
@@ -376,20 +411,42 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
         preview_path: str = "",
     ) -> Response:
         record = await _require_record(manager, service_id)
-        if not record.exposure.proxy_enabled:
-            raise HTTPException(status_code=404, detail="Preview proxy is disabled")
-        if record.kind == PreviewServiceKind.STATIC_FILE.value:
-            return _static_file_response(context, record, preview_path, request.method)
-        if record.kind == PreviewServiceKind.STATIC_DIR.value:
-            return _static_dir_response(context, record, preview_path, request.method)
-        if record.kind in {
-            PreviewServiceKind.LOOPBACK_URL.value,
-            PreviewServiceKind.MANAGED_COMMAND.value,
-        }:
-            return await _proxy_http_request(context, record, request, preview_path)
-        raise HTTPException(
-            status_code=400, detail=f"Unsupported service kind: {record.kind}"
-        )
+        if _prefer_capability_urls(context):
+            capability = await asyncio.to_thread(
+                capability_store.issue,
+                service_id,
+                path_prefix=preview_path,
+            )
+            return RedirectResponse(
+                _request_url_for_path(request, capability.url),
+                status_code=307,
+            )
+        return await _preview_response(context, record, request, preview_path)
+
+    @router.api_route(
+        "/preview/p/{token}/",
+        methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        include_in_schema=False,
+    )
+    @router.api_route(
+        "/preview/p/{token}/{preview_path:path}",
+        methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        include_in_schema=False,
+    )
+    async def preview_capability(
+        token: str,
+        request: Request,
+        preview_path: str = "",
+    ) -> Response:
+        capability = await asyncio.to_thread(capability_store.validate, token)
+        if capability is None:
+            raise HTTPException(
+                status_code=403,
+                detail="Invalid preview capability",
+            )
+        record = await _require_record(manager, capability.service_id)
+        combined_path = _join_capability_path(capability.path_prefix, preview_path)
+        return await _preview_response(context, record, request, combined_path)
 
     @router.websocket("/preview/services/{service_id}/")
     @router.websocket("/preview/services/{service_id}/{preview_path:path}")
@@ -401,6 +458,26 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
         try:
             record = await _require_record(manager, service_id)
             await _proxy_websocket(context, record, websocket, preview_path)
+        except HTTPException as exc:
+            await _close_websocket_for_http_error(websocket, exc)
+
+    @router.websocket("/preview/p/{token}/")
+    @router.websocket("/preview/p/{token}/{preview_path:path}")
+    async def preview_capability_websocket(
+        websocket: WebSocket,
+        token: str,
+        preview_path: str = "",
+    ) -> None:
+        try:
+            capability = await asyncio.to_thread(capability_store.validate, token)
+            if capability is None:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Invalid preview capability",
+                )
+            record = await _require_record(manager, capability.service_id)
+            combined_path = _join_capability_path(capability.path_prefix, preview_path)
+            await _proxy_websocket(context, record, websocket, combined_path)
         except HTTPException as exc:
             await _close_websocket_for_http_error(websocket, exc)
 
@@ -501,8 +578,53 @@ async def _unlink(
     return record
 
 
-def _service_response(record: PreviewServiceRecord) -> dict[str, Any]:
-    return {"service": record.to_dict(), "read_model": service_read_model(record)}
+def _service_response(
+    record: PreviewServiceRecord,
+    capability_store: PreviewCapabilityStore,
+) -> dict[str, Any]:
+    return {
+        "service": record.to_dict(),
+        "read_model": _service_read_model(record, capability_store),
+    }
+
+
+def _services_read_model(
+    records: list[PreviewServiceRecord],
+    capability_store: PreviewCapabilityStore,
+) -> dict[str, Any]:
+    read_model = build_services_read_model(records)
+    read_model["services"] = [
+        _with_preview_capability(item, capability_store)
+        for item in read_model.get("services", [])
+        if isinstance(item, dict)
+    ]
+    return read_model
+
+
+def _service_read_model(
+    record: PreviewServiceRecord,
+    capability_store: PreviewCapabilityStore,
+) -> dict[str, Any]:
+    return _with_preview_capability(service_read_model(record), capability_store)
+
+
+def _with_preview_capability(
+    item: dict[str, Any],
+    capability_store: PreviewCapabilityStore,
+) -> dict[str, Any]:
+    if not item.get("proxy_enabled", True):
+        return item
+    service_id = str(item.get("service_id") or "")
+    if not service_id:
+        return item
+    capability = capability_store.issue(
+        service_id, ttl_seconds=DEFAULT_PREVIEW_CAPABILITY_TTL_SECONDS
+    )
+    return {
+        **item,
+        "preview_url": capability.url,
+        "preview_url_expires_at": capability.expires_at,
+    }
 
 
 def _scope_payloads(scope_links: list[ServiceScopeLinkPayload]) -> list[dict[str, Any]]:
@@ -559,6 +681,44 @@ def _is_running_managed(record: PreviewServiceRecord) -> bool:
             PreviewServiceStatus.UNHEALTHY.value,
         }
     )
+
+
+async def _preview_response(
+    context: HubAppContext,
+    record: PreviewServiceRecord,
+    request: Request,
+    preview_path: str,
+) -> Response:
+    if not record.exposure.proxy_enabled:
+        raise HTTPException(status_code=404, detail="Preview proxy is disabled")
+    if record.kind == PreviewServiceKind.STATIC_FILE.value:
+        return _static_file_response(context, record, preview_path, request.method)
+    if record.kind == PreviewServiceKind.STATIC_DIR.value:
+        return _static_dir_response(context, record, preview_path, request.method)
+    if record.kind in {
+        PreviewServiceKind.LOOPBACK_URL.value,
+        PreviewServiceKind.MANAGED_COMMAND.value,
+    }:
+        return await _proxy_http_request(context, record, request, preview_path)
+    raise HTTPException(
+        status_code=400, detail=f"Unsupported service kind: {record.kind}"
+    )
+
+
+def _join_capability_path(path_prefix: str, preview_path: str) -> str:
+    prefix = _validate_preview_path(path_prefix)
+    suffix = _validate_preview_path(preview_path)
+    if prefix and suffix:
+        return f"{prefix}/{suffix}"
+    return prefix or suffix
+
+
+def _request_url_for_path(request: Request, path: str) -> str:
+    base = str(request.base_url).rstrip("/")
+    root_path = request.scope.get("root_path") or ""
+    if root_path and path.startswith(f"{root_path}/"):
+        return f"{base}{path[len(root_path):]}"
+    return f"{base}{path}"
 
 
 def _static_file_response(
@@ -919,6 +1079,16 @@ def _preview_config(context: HubAppContext) -> dict[str, Any]:
 def _preview_services_enabled(context: HubAppContext) -> bool:
     enabled = _preview_config(context).get("enabled")
     return True if enabled is None else bool(enabled)
+
+
+def _prefer_capability_urls(context: HubAppContext) -> bool:
+    raw_config = getattr(context.config, "raw", {})
+    if not isinstance(raw_config, dict):
+        return False
+    auth_config = raw_config.get("auth")
+    if not isinstance(auth_config, dict):
+        return False
+    return auth_config.get("mode") == "hosted_bearer"
 
 
 _HOP_BY_HOP_HEADERS = {

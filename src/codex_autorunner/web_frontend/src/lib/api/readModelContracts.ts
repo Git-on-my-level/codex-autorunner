@@ -576,6 +576,8 @@ export type PreviewServiceReadModel = {
   scopeLinks: PreviewServiceScopeLink[];
   scope: string | null;
   carUrl: string;
+  previewUrl: string | null;
+  previewUrlExpiresAt: number | null;
   proxyEnabled: boolean;
   directUrl: string | null;
   host: string | null;

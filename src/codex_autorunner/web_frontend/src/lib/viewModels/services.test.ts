@@ -21,6 +21,8 @@ function service(overrides: Partial<PreviewServiceReadModel>): PreviewServiceRea
     scopeLinks: [],
     scope: null,
     carUrl: '/preview/services/svc_base123/',
+    previewUrl: null,
+    previewUrlExpiresAt: null,
     proxyEnabled: true,
     directUrl: null,
     host: null,

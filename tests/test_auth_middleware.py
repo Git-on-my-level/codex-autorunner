@@ -95,3 +95,25 @@ def test_auth_middleware_accepts_browser_session_cookie() -> None:
     scope["headers"] = [(b"cookie", b"car_session=session-secret")]
     assert middleware._extract_session_cookie(scope) == "session-secret"
     assert middleware.session_validator(middleware._extract_session_cookie(scope))
+
+
+def test_auth_middleware_hosted_mode_ignores_session_cookie() -> None:
+    middleware = AuthTokenMiddleware(
+        lambda *_: None,
+        token="hub-secret",
+        session_validator=lambda token: token == "session-secret",
+        allow_session_auth=False,
+    )
+    scope = _scope("/hub/repos")
+    scope["headers"] = [(b"cookie", b"car_session=session-secret")]
+
+    assert middleware._extract_header_token(scope) is None
+    assert middleware._extract_session_cookie(scope) == "session-secret"
+    assert middleware.allow_session_auth is False
+
+
+def test_auth_middleware_preview_capability_route_is_public() -> None:
+    middleware = AuthTokenMiddleware(lambda *_: None, token="hub-secret")
+
+    assert middleware._requires_auth(_scope("/preview/p/token/index.html")) is False
+    assert middleware._requires_auth(_scope("/preview/services/svc_base123/")) is True

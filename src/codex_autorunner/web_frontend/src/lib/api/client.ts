@@ -1261,6 +1261,8 @@ function mapPreviewServiceReadModel(raw: JsonRecord): PreviewServiceReadModel {
     scopeLinks: asArray(raw.scope_links ?? raw.scopeLinks).map(mapPreviewServiceScopeLink),
     scope: nullableString(raw.scope),
     carUrl: stringValue(raw.car_url ?? raw.carUrl, ''),
+    previewUrl: nullableString(raw.preview_url ?? raw.previewUrl),
+    previewUrlExpiresAt: nullableNumber(raw.preview_url_expires_at ?? raw.previewUrlExpiresAt),
     proxyEnabled: raw.proxy_enabled ?? raw.proxyEnabled ?? true ? true : false,
     directUrl: nullableString(raw.direct_url ?? raw.directUrl),
     host: nullableString(raw.host),

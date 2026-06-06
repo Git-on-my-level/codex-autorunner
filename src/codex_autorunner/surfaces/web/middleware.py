@@ -168,13 +168,21 @@ class AuthTokenMiddleware:
         *,
         session_cookie_name: str = "car_session",
         session_validator: Optional[Callable[[Optional[str]], bool]] = None,
+        allow_session_auth: bool = True,
     ):
         self.app = app
         self.token = token
         self.base_path = normalize_base_path(base_path)
         self.session_cookie_name = session_cookie_name
         self.session_validator = session_validator
-        self.public_prefixes = ("/_app", "/health", "/auth/bootstrap", "/cat")
+        self.allow_session_auth = allow_session_auth
+        self.public_prefixes = (
+            "/_app",
+            "/health",
+            "/auth/bootstrap",
+            "/cat",
+            "/preview/p",
+        )
 
     def __getattr__(self, name):
         return getattr(self.app, name)
@@ -327,7 +335,7 @@ class AuthTokenMiddleware:
         if token and self.token and hmac.compare_digest(token, self.token):
             return await self.app(scope, receive, send)
 
-        if self.session_validator is not None:
+        if self.allow_session_auth and self.session_validator is not None:
             session_token = self._extract_session_cookie(scope)
             if self.session_validator(session_token):
                 return await self.app(scope, receive, send)

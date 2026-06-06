@@ -22,6 +22,9 @@ from codex_autorunner.core.preview_services import PROCESS_KIND, PreviewServiceR
 from codex_autorunner.core.process_termination import terminate_record
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes import services as services_routes
+from codex_autorunner.surfaces.web.services.preview_capabilities import (
+    PreviewCapabilityStore,
+)
 
 
 def test_preview_services_disabled_config_does_not_mount_routes(tmp_path: Path) -> None:
@@ -117,6 +120,128 @@ def test_preview_static_file_opens_through_car_url(tmp_path: Path) -> None:
     assert by_name.text == opened.text
 
 
+def test_hosted_preview_capability_cannot_authorize_hub_apis(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    _update_hub_config(
+        hub_root,
+        {
+            "auth": {"mode": "hosted_bearer"},
+            "server": {
+                "auth_token_env": "CAR_TEST_TOKEN",
+                "allowed_hosts": ["testserver"],
+            },
+        },
+    )
+    monkeypatch.setenv("CAR_TEST_TOKEN", "hub-secret")
+    html = hub_root / "index.html"
+    html.write_text(
+        "<html><script>fetch('/hub/services')</script><h1>Preview</h1></html>",
+        encoding="utf-8",
+    )
+    client = TestClient(create_hub_app(hub_root, endpoint_host="0.0.0.0"))
+
+    created = client.post(
+        "/hub/services/static",
+        json={"path": str(html), "name": "Static preview"},
+        headers={"Authorization": "Bearer hub-secret"},
+    )
+    assert created.status_code == 200
+    service = created.json()["read_model"]
+    preview_url = service["preview_url"]
+    preview_token = preview_url.split("/preview/p/", 1)[1].split("/", 1)[0]
+
+    opened = client.get(preview_url)
+    assert opened.status_code == 200
+    assert "<h1>Preview</h1>" in opened.text
+    asset = client.get(f"{preview_url}index.html")
+    assert asset.status_code == 200
+
+    denied_with_preview_token = client.get(
+        "/hub/services",
+        headers={"Authorization": f"Bearer {preview_token}"},
+    )
+    assert denied_with_preview_token.status_code == 401
+    denied_with_cookie = client.get(
+        "/hub/read-models/services",
+        headers={"Cookie": "car_session=ambient", "Authorization": "Basic abc"},
+    )
+    assert denied_with_cookie.status_code == 401
+    destructive_denied = client.post(
+        f"/hub/services/{service['service_id']}/unlink",
+        headers={"Authorization": f"Bearer {preview_token}"},
+    )
+    assert destructive_denied.status_code == 401
+
+    allowed = client.get(
+        "/hub/read-models/services",
+        headers={"Authorization": "Bearer hub-secret"},
+    )
+    assert allowed.status_code == 200
+
+
+def test_hosted_direct_preview_services_redirects_to_capability_url(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    _update_hub_config(
+        hub_root,
+        {
+            "auth": {"mode": "hosted_bearer"},
+            "server": {
+                "auth_token_env": "CAR_TEST_TOKEN",
+                "allowed_hosts": ["testserver"],
+            },
+        },
+    )
+    monkeypatch.setenv("CAR_TEST_TOKEN", "hub-secret")
+    html = hub_root / "index.html"
+    html.write_text("<h1>Preview</h1>", encoding="utf-8")
+    client = TestClient(create_hub_app(hub_root, endpoint_host="0.0.0.0"))
+    created = client.post(
+        "/hub/services/static",
+        json={"path": str(html), "name": "Static preview"},
+        headers={"Authorization": "Bearer hub-secret"},
+    )
+    service_id = created.json()["service"]["service_id"]
+
+    unauthenticated = client.get(
+        f"/preview/services/{service_id}/", follow_redirects=False
+    )
+    assert unauthenticated.status_code == 401
+    redirected = client.get(
+        f"/preview/services/{service_id}/",
+        headers={"Authorization": "Bearer hub-secret"},
+        follow_redirects=False,
+    )
+    assert redirected.status_code == 307
+    assert "/preview/p/" in redirected.headers["location"]
+
+
+def test_preview_capability_store_expiry_and_service_revocation(
+    tmp_path: Path,
+) -> None:
+    now = 1_000.0
+    store = PreviewCapabilityStore(tmp_path, now=lambda: now)
+    first = store.issue("svc_first123", ttl_seconds=10)
+    second = store.issue("svc_second123", path_prefix="assets", ttl_seconds=100)
+
+    assert store.validate(first.token).service_id == "svc_first123"
+    assert store.validate(second.token).path_prefix == "assets"
+
+    now += 11
+    assert store.validate(first.token) is None
+    assert store.validate(second.token).service_id == "svc_second123"
+
+    assert store.revoke_service("svc_second123") == 1
+    assert store.validate(second.token) is None
+
+
 def test_preview_static_dir_opens_index_and_nested_files(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     seed_hub_files(hub_root, force=True)
@@ -134,10 +259,15 @@ def test_preview_static_dir_opens_index_and_nested_files(tmp_path: Path) -> None
 
     assert created.status_code == 200
     service_id = created.json()["service"]["service_id"]
+    preview_url = created.json()["read_model"]["preview_url"]
     assert client.get(f"/preview/services/{service_id}/").text == "home"
     asset = client.get(f"/preview/services/{service_id}/assets/app.txt")
     assert asset.status_code == 200
     assert asset.text == "asset"
+    capability_asset = client.get(f"{preview_url}assets/app.txt")
+    assert capability_asset.status_code == 200
+    assert capability_asset.text == "asset"
+    assert client.get("/preview/p/not-a-valid-token/").status_code == 403
 
 
 def test_preview_static_security_rejects_unsafe_paths(tmp_path: Path) -> None:

@@ -82,9 +82,11 @@ def create_hub_app(
     app.state.web_static_assets_context = web_static_context
     bind_host = endpoint_host or context.config.server_host
     remote_bind = not is_loopback_host(bind_host)
+    auth_mode = _hub_auth_mode(context)
+    hosted_bearer = auth_mode == "hosted_bearer"
     auth_token = resolve_auth_token(context.config.server_auth_token_env)
     browser_auth_store: Optional[BrowserAuthStore] = None
-    if auth_token or remote_bind:
+    if (auth_token or remote_bind) and not hosted_bearer:
         browser_auth_store = BrowserAuthStore(context.config.root)
         browser_auth_store.ensure_bootstrap_token()
         app.state.browser_auth_store = browser_auth_store
@@ -357,6 +359,7 @@ def create_hub_app(
                 if browser_auth_store is not None
                 else None
             ),
+            allow_session_auth=not hosted_bearer,
         )
     if context.base_path:
         asgi_app = BasePathRouterMiddleware(asgi_app, context.base_path)
@@ -381,3 +384,17 @@ def _preview_services_enabled(context: object) -> bool:
     if not isinstance(preview_config, dict):
         return True
     return preview_config.get("enabled", True) is not False
+
+
+def _hub_auth_mode(context: object) -> str:
+    config = getattr(context, "config", None)
+    raw_config = getattr(config, "raw", {})
+    if not isinstance(raw_config, dict):
+        return "local_trusted_cookie"
+    auth_config = raw_config.get("auth")
+    if not isinstance(auth_config, dict):
+        return "local_trusted_cookie"
+    mode = str(auth_config.get("mode") or "").strip()
+    if mode in {"hosted_bearer", "local_trusted_cookie"}:
+        return mode
+    return "local_trusted_cookie"

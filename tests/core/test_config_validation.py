@@ -10,6 +10,7 @@ from codex_autorunner.core.config_validation import (
     _normalize_ticket_flow_approval_mode,
     _validate_agents_config,
     _validate_app_server_config,
+    _validate_auth_config,
     _validate_collaboration_policy_config,
     _validate_discord_bot_config,
     _validate_housekeeping_config,
@@ -120,6 +121,20 @@ class TestIsStrictInt:
 
     def test_float_fails(self) -> None:
         assert _is_strict_int(3.14) is False
+
+
+class TestValidateAuthConfig:
+    def test_auth_mode_accepts_explicit_modes(self) -> None:
+        _validate_auth_config({"auth": {"mode": "local_trusted_cookie"}})
+        _validate_auth_config({"auth": {"mode": "hosted_bearer"}})
+
+    def test_auth_mode_rejects_invalid_mode(self) -> None:
+        with pytest.raises(ConfigError, match="auth.mode must be one of"):
+            _validate_auth_config({"auth": {"mode": "cookie"}})
+
+    def test_auth_section_must_be_mapping(self) -> None:
+        with pytest.raises(ConfigError, match="auth section must be a mapping"):
+            _validate_auth_config({"auth": "hosted_bearer"})
 
 
 class TestValidateServerSecurity:

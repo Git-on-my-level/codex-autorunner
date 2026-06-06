@@ -22,6 +22,7 @@
     serviceCounts,
     serviceKindLabel,
     serviceNeedsAttention,
+    serviceOpenUrl,
     serviceScopeLabel,
     serviceStatusLabel,
     serviceTargetLabel,
@@ -166,7 +167,7 @@
 
   async function copyCarUrl(service: PreviewServiceReadModel): Promise<void> {
     try {
-      await navigator.clipboard.writeText(service.carUrl);
+      await navigator.clipboard.writeText(serviceOpenUrl(service));
       copiedServiceId = service.serviceId;
       if (copyTimer) clearTimeout(copyTimer);
       copyTimer = setTimeout(() => {
@@ -178,7 +179,7 @@
   }
 
   function openCarUrl(service: PreviewServiceReadModel): void {
-    window.open(href(service.carUrl), '_blank', 'noopener');
+    window.open(href(serviceOpenUrl(service)), '_blank', 'noopener,noreferrer');
   }
 
   function clearFilters(): void {
@@ -344,8 +345,8 @@
                 <td>{service.ownerPid ? `pid ${service.ownerPid}` : service.createdBy ?? '—'}</td>
                 <td>
                   <div class="link-actions">
-                    <button class="ghost-button compact" type="button" onclick={() => openCarUrl(service)} disabled={!service.proxyEnabled || !service.carUrl}>Open</button>
-                    <button class="ghost-button compact" type="button" onclick={() => copyCarUrl(service)} disabled={!service.carUrl}>
+                    <button class="ghost-button compact" type="button" onclick={() => openCarUrl(service)} disabled={!service.proxyEnabled || !serviceOpenUrl(service)}>Open</button>
+                    <button class="ghost-button compact" type="button" onclick={() => copyCarUrl(service)} disabled={!serviceOpenUrl(service)}>
                       {copiedServiceId === service.serviceId ? 'Copied' : 'Copy'}
                     </button>
                   </div>
