@@ -314,6 +314,7 @@ def register_services_commands(
         ),
         json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
     ) -> None:
+        """List preview services registered with the hub."""
         config = _load_config(path)
         url = _append_query(
             _url(config, "/hub/services", base_path=base_path),
@@ -341,6 +342,7 @@ def register_services_commands(
         ),
         json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
     ) -> None:
+        """Show one preview service by ID."""
         config = _load_config(path)
         data = _request(
             "GET",
@@ -372,6 +374,7 @@ def register_services_commands(
         ),
         json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
     ) -> None:
+        """Register a static file or directory as a preview service."""
         kind_value = kind.replace("-", "_") if kind else None
         payload = {
             "path": _client_resolved_path(static_path),
@@ -412,6 +415,7 @@ def register_services_commands(
         ),
         json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
     ) -> None:
+        """Register a loopback URL as a proxied preview service."""
         payload = {
             "url": url_arg,
             "name": name,
@@ -470,6 +474,7 @@ def register_services_commands(
         ),
         json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
     ) -> None:
+        """Register a managed command and start it immediately."""
         command = [str(item) for item in ctx.args]
         if command and command[0] == "--":
             command = command[1:]
@@ -550,6 +555,7 @@ def register_services_commands(
         ),
         json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
     ) -> None:
+        """Register a managed command without starting it."""
         command = [str(item) for item in ctx.args]
         if command and command[0] == "--":
             command = command[1:]
@@ -621,6 +627,7 @@ def register_services_commands(
         ),
         json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
     ) -> None:
+        """Start a registered preview service."""
         _simple_lifecycle(
             service_id, "start", path=path, base_path=base_path, json_output=json_output
         )
@@ -636,6 +643,7 @@ def register_services_commands(
         ),
         json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
     ) -> None:
+        """Stop a running preview service."""
         _simple_lifecycle(
             service_id, "stop", path=path, base_path=base_path, json_output=json_output
         )
@@ -651,6 +659,7 @@ def register_services_commands(
         ),
         json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
     ) -> None:
+        """Restart a preview service."""
         _simple_lifecycle(
             service_id,
             "restart",
@@ -674,6 +683,7 @@ def register_services_commands(
         ),
         json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
     ) -> None:
+        """Force-terminate a managed preview service process."""
         payload = _danger_payload(
             force=force, force_attestation=force_attestation, command_name="kill"
         )
@@ -731,6 +741,7 @@ def register_services_commands(
         ),
         json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
     ) -> None:
+        """Tear down a preview service and remove its registration."""
         _danger_lifecycle(
             service_id,
             "teardown",
@@ -758,6 +769,7 @@ def register_services_commands(
         ),
         json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
     ) -> None:
+        """Unlink a preview service from the hub without deleting its files."""
         _danger_lifecycle(
             service_id,
             "unlink",
@@ -785,6 +797,7 @@ def register_services_commands(
         ),
         json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
     ) -> None:
+        """Fetch or follow logs for a preview service."""
         config = _load_config(path)
         url = _append_query(
             _url(config, f"/hub/services/{service_id}/logs", base_path=base_path),
@@ -828,6 +841,7 @@ def register_services_commands(
         ),
         json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
     ) -> None:
+        """Open a preview service URL in the default browser."""
         config = _load_config(path)
         if direct:
             data = _request(
@@ -875,6 +889,7 @@ def register_services_commands(
         ),
         json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
     ) -> None:
+        """Issue a time-limited capability link for a preview service."""
         ttl_seconds = _parse_ttl_seconds(ttl)
         config = _load_config(path)
         url = _append_query(
@@ -907,6 +922,7 @@ def register_services_commands(
         ),
         json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
     ) -> None:
+        """Revoke active capability links for a preview service."""
         if not all_links:
             raise_exit("revoke-link currently requires --all.")
         config = _load_config(path)
@@ -935,6 +951,7 @@ def register_services_commands(
         ),
         json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
     ) -> None:
+        """Run a health check against a preview service."""
         config = _load_config(path)
         data = _request(
             "POST",
@@ -973,6 +990,7 @@ def register_services_commands(
         ),
         json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
     ) -> None:
+        """Enable or disable hub-start autostart for a managed service."""
         if enabled is None:
             raise_exit("set-autostart requires --enabled or --disabled.")
         payload = {

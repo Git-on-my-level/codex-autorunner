@@ -73,6 +73,17 @@ describe('preview service view models', () => {
     expect(filterServices(services, { ...defaultServiceFilters(), query: 'front' })).toEqual([services[0]]);
   });
 
+  it('filters by service class', () => {
+    const services = [
+      service({ serviceId: 'svc_preview1', name: 'Preview app', serviceClass: 'preview' }),
+      service({ serviceId: 'svc_infra1', name: 'Infra', serviceClass: 'infrastructure' })
+    ];
+
+    expect(filterServices(services, { ...defaultServiceFilters(), serviceClass: 'preview' })).toEqual([services[0]]);
+    expect(filterServices(services, { ...defaultServiceFilters(), serviceClass: 'infrastructure' })).toEqual([services[1]]);
+    expect(filterServices(services, { ...defaultServiceFilters(), serviceClass: 'all' })).toEqual(services);
+  });
+
   it('derives action eligibility from backend capabilities when present', () => {
     const runningManaged = service({
       kind: 'managed_command',

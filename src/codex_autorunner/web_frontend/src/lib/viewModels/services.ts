@@ -8,11 +8,13 @@ import type {
 
 export type ServiceStatusFilter = 'all' | PreviewServiceStatus;
 export type ServiceKindFilter = 'all' | PreviewServiceKind;
+export type ServiceClassFilter = 'all' | PreviewServiceReadModel['serviceClass'];
 
 export type ServiceFilters = {
   query: string;
   status: ServiceStatusFilter;
   kind: ServiceKindFilter;
+  serviceClass: ServiceClassFilter;
   scope: string;
 };
 
@@ -38,7 +40,7 @@ const attentionStatuses = new Set<PreviewServiceStatus>([
 ]);
 
 export function defaultServiceFilters(): ServiceFilters {
-  return { query: '', status: 'all', kind: 'all', scope: '' };
+  return { query: '', status: 'all', kind: 'all', serviceClass: 'all', scope: '' };
 }
 
 export function filterServices(
@@ -50,6 +52,7 @@ export function filterServices(
   return services.filter((service) => {
     if (filters.status !== 'all' && service.status !== filters.status) return false;
     if (filters.kind !== 'all' && service.kind !== filters.kind) return false;
+    if (filters.serviceClass !== 'all' && service.serviceClass !== filters.serviceClass) return false;
     if (scope && !(service.scope ?? '').toLowerCase().includes(scope)) return false;
     if (!query) return true;
     return [

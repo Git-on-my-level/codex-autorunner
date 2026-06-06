@@ -61,13 +61,37 @@ describe('ChatDetailLiveProjection', () => {
     });
 
     await projection.refresh('pma:draft-1');
-    projection.connect('pma:draft-1', { force: true });
+    projection.connect('pma:draft-1');
 
     expect(api.getTranscriptCalls).toBe(0);
     expect(api.getQueueCalls).toBe(0);
     expect(stream.openedChatIds).toEqual([]);
     expect(projection.snapshot().streamState).toBe('idle');
     expect(projection.snapshot().activeError).toBeNull();
+  });
+
+  it('force-streams a just-committed chat that the draft heuristic still flags as local', async () => {
+    // After a new chat's first send mints the managed thread, the committed id
+    // can momentarily still look like a local draft (the draft record lingers
+    // and the chat index window has not yet absorbed the new row). `forceStream`
+    // must override the draft short-circuit so the agent reply streams in
+    // without requiring a manual refresh.
+    const store = new ReadModelEntityStore();
+    const stream = streamFixture();
+    const api = apiFixture({
+      transcriptRows: [messageCard('chat-committed', 'assistant-1', 'assistant', 'hello')]
+    });
+    const projection = projectionFixture(store, api, {
+      openStream: stream.open,
+      shouldUseStream: () => false,
+      isLocalDraft: () => true
+    });
+
+    await projection.refresh('chat-committed', { quiet: true, forceStream: true });
+
+    expect(api.getTranscriptCalls).toBe(1);
+    expect(stream.openedChatIds).toEqual(['chat-committed']);
+    expect(projection.snapshot().streamState).toBe('connecting');
   });
 
   it('can force-open the transcript stream after an accepted first send before status projection catches up', async () => {

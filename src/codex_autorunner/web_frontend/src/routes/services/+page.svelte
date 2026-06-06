@@ -1,6 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import ContentSkeleton from '$lib/components/ContentSkeleton.svelte';
+  import PageHero from '$lib/components/PageHero.svelte';
+  import OverflowMenu from '$lib/components/OverflowMenu.svelte';
+  import type { OverflowMenuItem } from '$lib/components/OverflowMenu';
   import { confirmDialog, confirmDialogTyped } from '$lib/components/confirmDialog';
   import {
     webApi,
@@ -44,6 +48,7 @@
   let copiedServiceId = $state<string | null>(null);
   let issuedLinks = $state<Record<string, string>>({});
   let createMode = $state<'static' | 'loopback' | 'managed'>('static');
+  let showRegister = $state(false);
   let editService = $state<PreviewServiceReadModel | null>(null);
   let createForm = $state({
     name: '',
@@ -81,7 +86,31 @@
   const counts = $derived(serviceCounts(model));
   const services = $derived(model?.services ?? []);
   const filteredServices = $derived(filterServices(services, filters));
-  const hasFilters = $derived(Boolean(filters.query.trim() || filters.scope.trim() || filters.status !== 'all' || filters.kind !== 'all'));
+  const hasFilters = $derived(
+    Boolean(
+      filters.query.trim() ||
+        filters.scope.trim() ||
+        filters.status !== 'all' ||
+        filters.kind !== 'all' ||
+        filters.serviceClass !== 'all'
+    )
+  );
+  const classChips = $derived(
+    (['preview', 'application', 'infrastructure'] as const)
+      .map((value) => ({ value, label: serviceClassLabel(value), count: counts[value] }))
+      .filter((chip) => chip.count > 0)
+  );
+
+  function toggleClassFilter(value: ServiceFilters['serviceClass']): void {
+    filters.serviceClass = filters.serviceClass === value ? 'all' : value;
+  }
+
+  const createModeHints: Record<typeof createMode, string> = {
+    static: 'Serve a file or directory through the hub proxy.',
+    loopback: 'Proxy an already-running local URL through the hub.',
+    managed: 'CAR starts and supervises the process for you.'
+  };
+  const createModeHint = $derived(createModeHints[createMode]);
 
   onMount(() => {
     void loadServices();
@@ -469,20 +498,75 @@
     return Number.isInteger(parsed) && parsed > 0 ? { mode: 'preferred', port: parsed } : { mode: 'auto' };
   }
 
+  function primaryLifecycle(
+    service: PreviewServiceReadModel
+  ): { action: PreviewServiceAction; label: string } | null {
+    const eligibility = serviceActionEligibility(service);
+    if (eligibility.canStop) return { action: 'stop', label: 'Stop' };
+    if (eligibility.canStart) return { action: 'start', label: 'Start' };
+    return null;
+  }
+
+  function moreActions(service: PreviewServiceReadModel): OverflowMenuItem[] {
+    const eligibility = serviceActionEligibility(service);
+    const items: OverflowMenuItem[] = [];
+    if (eligibility.canRestart) {
+      items.push({ label: 'Restart', disabled: actionBusy(service, 'restart'), onSelect: () => void runLifecycle(service, 'restart') });
+    }
+    items.push({ label: 'Run health check', disabled: actionBusy(service, 'health'), onSelect: () => void runLifecycle(service, 'health') });
+    if (eligibility.canOpen) {
+      items.push({ label: 'Issue preview link', disabled: actionBusy(service, 'issue-link'), onSelect: () => void issueLink(service) });
+      items.push({ label: 'Revoke preview links', disabled: actionBusy(service, 'revoke-link'), onSelect: () => void revokeLinks(service) });
+    }
+    const autostartOn = service.restartPolicy?.auto_start_on_hub_start === true;
+    items.push({
+      label: autostartOn ? 'Disable autostart' : 'Enable autostart',
+      disabled: actionBusy(service, 'autostart'),
+      onSelect: () => void toggleAutostart(service)
+    });
+    const editLocked =
+      service.status === 'running' || service.status === 'healthy' || service.status === 'starting' || service.status === 'unhealthy';
+    items.push({ label: 'Edit', disabled: editLocked, onSelect: () => beginEdit(service) });
+    if (eligibility.canKill) {
+      items.push({ label: 'Kill', danger: true, disabled: actionBusy(service, 'kill'), onSelect: () => void runDestructive(service, 'kill') });
+    }
+    if (eligibility.canTeardown) {
+      items.push({ label: 'Teardown', danger: true, disabled: actionBusy(service, 'teardown'), onSelect: () => void runDestructive(service, 'teardown') });
+    }
+    if (eligibility.canUnlink || eligibility.requiresForceForUnlink) {
+      items.push({ label: 'Unlink', danger: true, disabled: actionBusy(service, 'unlink'), onSelect: () => void unlinkService(service) });
+    }
+    return items;
+  }
+
   const statusOptions: Array<ServiceFilters['status']> = ['all', 'registered', 'starting', 'running', 'healthy', 'unhealthy', 'stopped', 'exited', 'failed', 'orphaned', 'conflict'];
   const kindOptions: Array<ServiceFilters['kind']> = ['all', 'static_file', 'static_dir', 'loopback_url', 'managed_command'];
 </script>
 
+<AutoDismissNotice message={notice} tone="success" />
+
 <section class="services-page page-stack">
-  <div class="services-hero">
-    <div>
-      <h1>Services</h1>
-      <p>Preview service registry, links, process state, and logs.</p>
-    </div>
-    <button class="ghost-button" type="button" onclick={loadServices} disabled={loading}>
-      Refresh
-    </button>
-  </div>
+  <PageHero title="Services" subtitle="Preview service registry, links, process state, and logs.">
+    {#snippet stats()}
+      {#if model}
+        <dl class="hero-stats">
+          <div><dd>{counts.total}</dd><dt>Total</dt></div>
+          <div class:active={counts.running > 0}><dd>{counts.running}</dd><dt>Running</dt></div>
+          {#if counts.attention > 0}
+            <div class="danger"><dd>{counts.attention}</dd><dt>Attention</dt></div>
+          {/if}
+        </dl>
+      {/if}
+    {/snippet}
+    {#snippet actions()}
+      {#if model && services.length > 0}
+        <button class="ghost-button" type="button" onclick={() => (showRegister = !showRegister)}>
+          {showRegister ? 'Hide register' : '+ Register service'}
+        </button>
+      {/if}
+      <button class="ghost-button" type="button" onclick={loadServices} disabled={loading}>Refresh</button>
+    {/snippet}
+  </PageHero>
 
   {#if loading}
     <ContentSkeleton variant="index" rows={5} />
@@ -499,28 +583,22 @@
         <p>{error.message}</p>
       </div>
     {/if}
-    {#if notice}
-      <div class="services-notice">{notice}</div>
-    {/if}
-
-    <div class="services-metrics" aria-label="Service counts">
-      <div><span>Total</span><strong>{counts.total}</strong></div>
-      <div><span>Running</span><strong>{counts.running}</strong></div>
-      <div class:attention={counts.attention > 0}><span>Attention</span><strong>{counts.attention}</strong></div>
-      <div><span>Preview</span><strong>{counts.preview}</strong></div>
-      <div><span>Application</span><strong>{counts.application}</strong></div>
-      <div><span>Infrastructure</span><strong>{counts.infrastructure}</strong></div>
-    </div>
-
+    {#if showRegister || services.length === 0}
     <section class="service-editor" aria-label="Register service">
       <div class="editor-head">
-        <h2>Register</h2>
-        <div class="mode-tabs">
-          <button class:active={createMode === 'static'} type="button" onclick={() => createMode = 'static'}>Static</button>
-          <button class:active={createMode === 'loopback'} type="button" onclick={() => createMode = 'loopback'}>Loopback</button>
-          <button class:active={createMode === 'managed'} type="button" onclick={() => createMode = 'managed'}>Managed</button>
+        <div class="editor-head-copy">
+          <h2>Register a service</h2>
+          {#if services.length === 0}
+            <p class="editor-sub">No services yet. Register your first preview service to proxy it through the hub.</p>
+          {/if}
+        </div>
+        <div class="mode-tabs" role="tablist" aria-label="Service kind">
+          <button role="tab" aria-selected={createMode === 'static'} class:active={createMode === 'static'} type="button" onclick={() => createMode = 'static'}>Static</button>
+          <button role="tab" aria-selected={createMode === 'loopback'} class:active={createMode === 'loopback'} type="button" onclick={() => createMode = 'loopback'}>Loopback</button>
+          <button role="tab" aria-selected={createMode === 'managed'} class:active={createMode === 'managed'} type="button" onclick={() => createMode = 'managed'}>Managed</button>
         </div>
       </div>
+      <p class="editor-hint">{createModeHint}</p>
       <div class="editor-grid">
         <label><span>Name</span><input bind:value={createForm.name} placeholder="frontend preview" /></label>
         {#if createMode === 'static'}
@@ -545,9 +623,27 @@
           <label class="check-row"><input type="checkbox" bind:checked={createForm.autostart} /> <span>Autostart on hub start</span></label>
         {/if}
       </div>
-      <button class="ghost-button" type="button" onclick={registerService} disabled={Boolean(actionId?.startsWith('create:'))}>Register service</button>
+      <button class="primary-button" type="button" onclick={registerService} disabled={Boolean(actionId?.startsWith('create:'))}>Register service</button>
     </section>
+    {/if}
 
+    {#if services.length > 0}
+    {#if classChips.length > 0}
+      <div class="class-chips" role="group" aria-label="Filter by class">
+        {#each classChips as chip (chip.value)}
+          <button
+            type="button"
+            class={`class-chip class-${chip.value}`}
+            class:active={filters.serviceClass === chip.value}
+            aria-pressed={filters.serviceClass === chip.value}
+            onclick={() => toggleClassFilter(chip.value)}
+          >
+            <span class="class-chip-label">{chip.label}</span>
+            <span class="class-chip-count">{chip.count}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
     <div class="services-filters" aria-label="Service filters">
       <label>
         <span>Search</span>
@@ -576,12 +672,7 @@
       <button class="ghost-button" type="button" onclick={clearFilters} disabled={!hasFilters}>Clear</button>
     </div>
 
-    {#if services.length === 0}
-      <div class="empty-state">
-        <strong>No preview services registered</strong>
-        <p>Registered static previews, loopback URLs, and managed commands will appear here.</p>
-      </div>
-    {:else if filteredServices.length === 0}
+    {#if filteredServices.length === 0}
       <div class="empty-state">
         <strong>No services match the current filters</strong>
         <p>Clear filters or adjust status, kind, scope, or search.</p>
@@ -595,27 +686,35 @@
               <th>Status</th>
               <th>Health</th>
               <th>Class</th>
-              <th>Substrate</th>
-              <th>Scope</th>
               <th>Target</th>
               <th>Uptime</th>
               <th>Owner</th>
-              <th>Link</th>
-              <th>Actions</th>
+              <th class="col-links">Links</th>
+              <th class="col-actions">Actions</th>
             </tr>
           </thead>
           <tbody>
             {#each filteredServices as service (service.serviceId)}
               {@const eligibility = serviceActionEligibility(service)}
+              {@const lifecycle = primaryLifecycle(service)}
+              {@const scopeLabel = serviceScopeLabel(service)}
               <tr class:attention={serviceNeedsAttention(service)}>
                 <td>
                   <div class="service-name">
-                    <strong>{service.name}</strong>
-                    <code>{service.serviceId}</code>
+                    <strong title={service.name}>{service.name}</strong>
+                    <div class="service-meta">
+                      <span class="id-tag">{service.serviceId}</span>
+                      <span class="meta-dot" aria-hidden="true">·</span>
+                      <span>{serviceKindLabel(service.kind)}</span>
+                      {#if scopeLabel && scopeLabel !== '—'}
+                        <span class="meta-dot" aria-hidden="true">·</span>
+                        <span class="truncate">{scopeLabel}</span>
+                      {/if}
+                    </div>
                   </div>
                 </td>
-                <td><span class={`status-pill status-${service.status}`}>{serviceStatusLabel(service.status)}</span></td>
-                <td>{healthLabel(service)}</td>
+                <td><span class={`status-pill svc-status status-${service.status}`}>{serviceStatusLabel(service.status)}</span></td>
+                <td class="cell-muted">{healthLabel(service)}</td>
                 <td>
                   <div class="badge-stack">
                     <span class={`meta-badge class-${service.serviceClass}`}>{serviceClassLabel(service.serviceClass)}</span>
@@ -623,36 +722,28 @@
                     <span class="meta-badge">{serviceOwnershipLabel(service.ownership)}</span>
                   </div>
                 </td>
-                <td>{serviceKindLabel(service.kind)}</td>
-                <td><span class="truncate">{serviceScopeLabel(service)}</span></td>
-                <td><span class="truncate">{serviceTargetLabel(service)}</span></td>
-                <td>{serviceUptimeLabel(service)}</td>
-                <td>{service.ownerPid ? `pid ${service.ownerPid}` : service.createdBy ?? '—'}</td>
-                <td>
-                  <div class="link-actions">
-                    <button class="ghost-button compact" type="button" onclick={() => openCarUrl(service)} disabled={!eligibility.canOpen}>Open</button>
-                    <button class="ghost-button compact" type="button" onclick={() => copyCarUrl(service)} disabled={!eligibility.canOpen || actionBusy(service, 'issue-link')}>
-                      {copiedServiceId === service.serviceId ? 'Copied' : 'Copy'}
-                    </button>
-                    <button class="ghost-button compact" type="button" onclick={() => issueLink(service)} disabled={!eligibility.canOpen || actionBusy(service, 'issue-link')}>Issue</button>
-                    <button class="ghost-button compact" type="button" onclick={() => revokeLinks(service)} disabled={actionBusy(service, 'revoke-link')}>Revoke</button>
-                    {#if issuedLinks[service.serviceId]}
-                      <code class="issued-link">{issuedLinks[service.serviceId]}</code>
-                    {/if}
-                  </div>
+                <td><span class="truncate cell-muted">{serviceTargetLabel(service)}</span></td>
+                <td class="cell-num">{serviceUptimeLabel(service)}</td>
+                <td class="cell-muted">{service.ownerPid ? `pid ${service.ownerPid}` : service.createdBy ?? '—'}</td>
+                <td class="col-links">
+                  {#if eligibility.canOpen}
+                    <div class="link-actions">
+                      <button class="ghost-button compact" type="button" onclick={() => openCarUrl(service)}>Open</button>
+                      <button class="ghost-button compact" type="button" onclick={() => copyCarUrl(service)} disabled={actionBusy(service, 'issue-link')}>
+                        {copiedServiceId === service.serviceId ? 'Copied' : 'Copy'}
+                      </button>
+                    </div>
+                  {:else}
+                    <span class="cell-muted">—</span>
+                  {/if}
                 </td>
-                <td>
+                <td class="col-actions">
                   <div class="row-actions">
-                    <button class="ghost-button compact" type="button" onclick={() => runLifecycle(service, 'start')} disabled={!eligibility.canStart || actionBusy(service, 'start')}>Start</button>
-                    <button class="ghost-button compact" type="button" onclick={() => runLifecycle(service, 'stop')} disabled={!eligibility.canStop || actionBusy(service, 'stop')}>Stop</button>
-                    <button class="ghost-button compact" type="button" onclick={() => runLifecycle(service, 'restart')} disabled={!eligibility.canRestart || actionBusy(service, 'restart')}>Restart</button>
-                    <button class="ghost-button compact" type="button" onclick={() => runLifecycle(service, 'health')} disabled={actionBusy(service, 'health')}>Health</button>
-                    <button class="ghost-button compact" type="button" onclick={() => toggleAutostart(service)} disabled={actionBusy(service, 'autostart')}>{service.restartPolicy?.auto_start_on_hub_start === true ? 'Autostart on' : 'Autostart off'}</button>
-                    <button class="ghost-button compact" type="button" onclick={() => beginEdit(service)} disabled={service.status === 'running' || service.status === 'healthy' || service.status === 'starting' || service.status === 'unhealthy'}>Edit</button>
+                    {#if lifecycle}
+                      <button class="ghost-button compact" type="button" onclick={() => runLifecycle(service, lifecycle.action)} disabled={actionBusy(service, lifecycle.action)}>{lifecycle.label}</button>
+                    {/if}
                     <button class="ghost-button compact" type="button" onclick={() => viewLogs(service)} disabled={!eligibility.canViewLogs || logsLoadingId === service.serviceId}>Logs</button>
-                    <button class="ghost-button compact danger" type="button" onclick={() => runDestructive(service, 'kill')} disabled={!eligibility.canKill || actionBusy(service, 'kill')}>Kill</button>
-                    <button class="ghost-button compact danger" type="button" onclick={() => runDestructive(service, 'teardown')} disabled={!eligibility.canTeardown || actionBusy(service, 'teardown')}>Teardown</button>
-                    <button class="ghost-button compact danger" type="button" onclick={() => unlinkService(service)} disabled={(!eligibility.canUnlink && !eligibility.requiresForceForUnlink) || actionBusy(service, 'unlink')}>Unlink</button>
+                    <OverflowMenu items={moreActions(service)} ariaLabel={`More actions for ${service.name}`} />
                   </div>
                 </td>
               </tr>
@@ -660,6 +751,7 @@
           </tbody>
         </table>
       </div>
+    {/if}
     {/if}
 
     {#if selectedLogService}
@@ -722,7 +814,6 @@
     gap: var(--space-4);
   }
 
-  .services-hero,
   .service-logs-head {
     display: flex;
     justify-content: space-between;
@@ -730,27 +821,18 @@
     gap: var(--space-4);
   }
 
-  .services-hero h1,
   .service-logs h2 {
     margin: 0;
-    font-size: var(--font-size-5);
+    font-size: var(--font-size-3);
     color: var(--color-ink);
   }
 
-  .services-hero p,
   .service-logs-head p {
     margin: var(--space-1) 0 0;
     color: var(--color-ink-muted);
     font-size: var(--font-size-1);
   }
 
-  .services-metrics {
-    display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-    gap: var(--space-2);
-  }
-
-  .services-metrics div,
   .service-logs,
   .service-editor {
     border: 1px solid var(--color-border-subtle);
@@ -758,26 +840,68 @@
     background: var(--color-surface);
   }
 
-  .services-metrics div {
-    padding: var(--space-3);
-    display: grid;
-    gap: var(--space-1);
+  .class-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
   }
 
-  .services-metrics span {
+  .class-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 30px;
+    padding: 0 var(--space-2) 0 var(--space-3);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-3);
+    background: var(--color-surface);
     color: var(--color-ink-muted);
     font-size: var(--font-size-0);
-    text-transform: uppercase;
-    letter-spacing: 0;
+    font-weight: 550;
+    transition:
+      background-color var(--transition-fast),
+      color var(--transition-fast),
+      border-color var(--transition-fast);
   }
 
-  .services-metrics strong {
-    font-size: var(--font-size-5);
+  .class-chip:hover {
     color: var(--color-ink);
+    border-color: var(--color-border);
   }
 
-  .services-metrics .attention strong {
-    color: var(--color-danger);
+  .class-chip .class-chip-count {
+    min-width: 18px;
+    padding: 0 5px;
+    border-radius: var(--radius-2);
+    background: var(--color-surface-muted);
+    color: var(--color-ink-soft);
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+  }
+
+  .class-chip.active {
+    color: var(--color-ink);
+    border-color: currentColor;
+  }
+
+  .class-chip.class-preview.active {
+    color: var(--color-accent);
+    background: var(--color-accent-soft);
+  }
+
+  .class-chip.class-application.active {
+    color: var(--color-success);
+    background: var(--color-success-soft);
+  }
+
+  .class-chip.class-infrastructure.active {
+    color: var(--color-warning);
+    background: var(--color-warning-soft);
+  }
+
+  .class-chip.active .class-chip-count {
+    background: color-mix(in srgb, currentColor 18%, transparent);
+    color: currentColor;
   }
 
   .services-filters {
@@ -800,6 +924,12 @@
     align-items: center;
   }
 
+  .editor-head-copy {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
   .editor-head h2,
   .events-list h3 {
     margin: 0;
@@ -807,24 +937,52 @@
     color: var(--color-ink);
   }
 
+  .editor-sub {
+    margin: 0;
+    font-size: var(--font-size-1);
+    color: var(--color-ink-muted);
+  }
+
+  .editor-hint {
+    margin: 0;
+    font-size: var(--font-size-0);
+    color: var(--color-ink-muted);
+  }
+
   .mode-tabs {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-1);
+    display: inline-flex;
+    flex-wrap: nowrap;
+    flex-shrink: 0;
+    gap: 2px;
+    padding: 3px;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-3);
+    background: var(--color-surface);
   }
 
   .mode-tabs button {
-    min-height: 30px;
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-1);
+    min-height: 28px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-2);
+    background: transparent;
+    color: var(--color-ink-muted);
+    padding: 0 var(--space-3);
+    font-size: var(--font-size-1);
+    transition:
+      background-color var(--transition-fast),
+      color var(--transition-fast);
+  }
+
+  .mode-tabs button:hover {
     background: var(--color-surface-muted);
     color: var(--color-ink);
-    padding: 0 var(--space-2);
   }
 
   .mode-tabs button.active {
-    border-color: var(--color-accent);
-    background: var(--color-accent-soft);
+    background: var(--color-surface-muted);
+    color: var(--color-ink);
+    font-weight: 600;
+    box-shadow: inset 0 0 0 1px var(--color-border-subtle);
   }
 
   .editor-grid {
@@ -848,7 +1006,15 @@
   .editor-grid .check-row {
     grid-template-columns: auto 1fr;
     align-items: center;
+    gap: var(--space-2);
     color: var(--color-ink);
+  }
+
+  .editor-grid .check-row input[type='checkbox'] {
+    width: auto;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
   }
 
   .services-filters label {
@@ -888,17 +1054,31 @@
 
   .services-table {
     width: 100%;
-    min-width: 1080px;
+    min-width: 920px;
     border-collapse: collapse;
     font-size: var(--font-size-1);
   }
 
   .services-table th,
   .services-table td {
-    padding: var(--space-3);
+    padding: var(--space-2) var(--space-3);
     border-bottom: 1px solid var(--color-border-subtle);
     text-align: left;
-    vertical-align: top;
+    vertical-align: middle;
+  }
+
+  .services-table .col-links,
+  .services-table .col-actions {
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .services-table tbody tr {
+    transition: background-color var(--transition-fast);
+  }
+
+  .services-table tbody tr:hover {
+    background: var(--color-surface-muted);
   }
 
   .services-table th {
@@ -919,74 +1099,114 @@
 
   .service-name {
     display: grid;
-    gap: var(--space-1);
-    min-width: 180px;
+    gap: 3px;
+    min-width: 200px;
+    max-width: 320px;
   }
 
-  .service-name code,
+  .service-name strong {
+    font-size: var(--font-size-2);
+    font-weight: 600;
+    color: var(--color-ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .service-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-0);
+    line-height: 1.4;
+  }
+
+  .service-meta .meta-dot {
+    color: var(--color-ink-faint);
+    opacity: 0.7;
+  }
+
   .truncate {
     overflow-wrap: anywhere;
   }
 
-  .service-name code {
+  .id-tag {
+    font-family: var(--font-mono);
     color: var(--color-ink-muted);
-    font-size: var(--font-size-0);
   }
 
-  .status-pill {
+  .cell-muted {
+    color: var(--color-ink-muted);
+  }
+
+  .cell-num {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    color: var(--color-ink-soft);
+  }
+
+  /* Service status badges: read-only soft pills, semantic fill + solid text. */
+  .svc-status {
     display: inline-flex;
     align-items: center;
-    min-height: 24px;
-    padding: 0 var(--space-2);
-    border-radius: 999px;
-    background: var(--color-surface-muted);
-    color: var(--color-ink);
     text-transform: capitalize;
-    white-space: nowrap;
+    background: var(--color-surface-muted);
+    color: var(--color-ink-soft);
   }
 
   .badge-stack {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-1);
-    min-width: 150px;
+    min-width: 140px;
   }
 
   .meta-badge {
     display: inline-flex;
     align-items: center;
-    min-height: 22px;
-    padding: 0 var(--space-2);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-1);
+    min-height: 20px;
+    padding: 0 6px;
+    border-radius: var(--radius-2);
     background: var(--color-surface-muted);
-    color: var(--color-ink);
-    font-size: var(--font-size-0);
+    color: var(--color-ink-soft);
+    font-size: 10px;
+    font-weight: 550;
+    letter-spacing: 0.02em;
     white-space: nowrap;
   }
 
   .class-preview {
-    border-color: var(--color-accent-soft);
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
   }
 
   .class-application {
-    border-color: var(--color-success-soft);
+    background: var(--color-success-soft);
+    color: var(--color-success);
   }
 
   .class-infrastructure {
-    border-color: var(--color-warning-soft);
+    background: var(--color-warning-soft);
+    color: var(--color-warning);
   }
 
-  .status-running,
-  .status-healthy {
+  .svc-status.status-running,
+  .svc-status.status-healthy {
     color: var(--color-success);
     background: var(--color-success-soft);
   }
 
-  .status-unhealthy,
-  .status-failed,
-  .status-orphaned,
-  .status-conflict {
+  .svc-status.status-starting {
+    color: var(--color-warning);
+    background: var(--color-warning-soft);
+  }
+
+  .svc-status.status-unhealthy,
+  .svc-status.status-failed,
+  .svc-status.status-orphaned,
+  .svc-status.status-conflict {
     color: var(--color-danger);
     background: var(--color-danger-soft);
   }
@@ -994,31 +1214,20 @@
   .link-actions,
   .row-actions {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    align-items: center;
     gap: var(--space-1);
   }
 
-  .issued-link {
-    display: block;
-    max-width: 220px;
-    overflow-wrap: anywhere;
-    color: var(--color-ink-muted);
-    font-size: var(--font-size-0);
+  .row-actions {
+    justify-content: flex-end;
   }
 
   :global(.ghost-button.compact) {
-    min-height: 30px;
+    min-height: 28px;
     padding: 0 var(--space-2);
     font-size: var(--font-size-0);
-  }
-
-  .services-notice {
-    border: 1px solid var(--color-success-soft);
-    border-radius: var(--radius-2);
-    background: color-mix(in srgb, var(--color-success-soft) 70%, transparent);
-    color: var(--color-ink);
-    padding: var(--space-3);
-    font-size: var(--font-size-1);
+    white-space: nowrap;
   }
 
   .service-logs {

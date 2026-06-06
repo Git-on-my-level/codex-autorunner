@@ -1013,6 +1013,10 @@
   function chatModelMetaLabel(chat: ChatSummary): string | null {
     const model = chat.model?.trim();
     if (model) return model;
+    // Agents that manage their own model (no caller-selectable catalog, e.g.
+    // Hermes) have no "model" that can be unknown — don't surface "model unknown".
+    const agentRecord = chat.agentId ? agentRecordForId(agents, chat.agentId) : null;
+    if (agentRecord && !agentCanListModels(agentRecord)) return null;
     return runtimeModelIsExplicitlyUnknown(chat) ? 'model unknown' : null;
   }
 
@@ -1025,10 +1029,27 @@
   }
 
   function activeChatRuntimeConfigLabel(chat: ChatSummary): string {
+    // For an unsent local draft the persisted snapshot is frozen at creation
+    // time, so read the live picker state instead. Otherwise the header shows
+    // the default (codex / remembered model) until the backend row replaces it,
+    // which is the "wrong, then corrects" flash users see on a new chat.
+    const isActiveDraft = Boolean(localDraftChat && localDraftChat.id === chat.id);
+    const agentIdValue = (isActiveDraft ? selectedAgent : chat.agentId) || chat.agentId;
+    const agentRecord = agentIdValue ? agentRecordForId(agents, agentIdValue) : null;
+    const agentDisplay = (agentRecord ? agentLabel(agentRecord) : agentIdValue) || activeChatKindLabel;
+    const canListModels = agentRecord ? agentCanListModels(agentRecord) : true;
+    const profileValue = (isActiveDraft ? selectedProfile : chat.agentProfile)?.trim() || null;
+    const reasoningValue = (isActiveDraft ? selectedReasoning : chat.reasoning)?.trim() || null;
+
+    let modelMeta = isActiveDraft ? selectedModel.trim() || null : chatModelMetaLabel(chat);
+    // Agents that manage their own model (Hermes) surface the profile in place
+    // of a model so the line stays meaningful instead of empty / "model unknown".
+    if (!modelMeta && !canListModels && profileValue) modelMeta = `profile ${profileValue}`;
+
     const parts = [
-      agentDisplayForChat(agents, chat) || chat.agentId || activeChatKindLabel,
-      chatModelMetaLabel(chat),
-      chat.reasoning ? `effort ${chat.reasoning}` : null
+      agentDisplay,
+      modelMeta,
+      reasoningValue ? `effort ${reasoningValue}` : null
     ].filter((part): part is string => Boolean(part));
     return parts.join(' · ');
   }

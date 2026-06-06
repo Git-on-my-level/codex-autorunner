@@ -138,7 +138,7 @@ export class ChatDetailLiveProjection {
       this.activeChatId = chatId;
       this.refreshedTerminalTurnId = null;
     }
-    if (this.activateLocalDraft(chatId)) return;
+    if (!options.forceStream && this.activateLocalDraft(chatId)) return;
     await this.refreshActive(chatId, options);
   }
 
@@ -164,12 +164,12 @@ export class ChatDetailLiveProjection {
       await this.activate(chatId, options);
       return;
     }
-    if (this.activateLocalDraft(chatId)) return;
+    if (!options.forceStream && this.activateLocalDraft(chatId)) return;
     await this.refreshActive(chatId, options);
   }
 
   private async refreshActive(chatId: string, options: ChatDetailLiveProjectionRefreshOptions = {}): Promise<void> {
-    if (this.activateLocalDraft(chatId)) return;
+    if (!options.forceStream && this.activateLocalDraft(chatId)) return;
     const refreshSeq = ++this.activeRefreshSeq;
     if (!options.quiet) this.setState({ loadingActive: true, activeError: null });
 
@@ -223,7 +223,12 @@ export class ChatDetailLiveProjection {
   }
 
   connect(chatId: string, options: { force?: boolean } = {}): void {
-    if (this.isLocalDraft(chatId)) {
+    // `force` is set only after the first send of a new chat mints a real
+    // managed thread. The committed id can momentarily still look like a local
+    // draft (the draft record lingers and the index window has not yet absorbed
+    // the new row), so honoring the draft short-circuit here would drop the
+    // stream and require a manual refresh to see the agent reply.
+    if (!options.force && this.isLocalDraft(chatId)) {
       this.activeChatId = chatId;
       this.closeStream();
       this.setState({ streamState: 'idle', streamError: null });
