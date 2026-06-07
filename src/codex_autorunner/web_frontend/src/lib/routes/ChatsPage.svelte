@@ -2036,12 +2036,16 @@
     const chatId = titleEditingChatId;
     if (!chatId || titleSaving) return;
     const editingChat = chatSummaryForId(chatId);
+    if (!editingChat || isLocalDraft(chatId) || isChatArchived(editingChat)) {
+      cancelTitleEdit();
+      return;
+    }
     const nextTitle = titleDraft.trim();
     if (!nextTitle) {
       cancelTitleEdit();
       return;
     }
-    if (editingChat && nextTitle === editingChat.title) {
+    if (nextTitle === editingChat.title) {
       cancelTitleEdit();
       return;
     }
@@ -2051,14 +2055,18 @@
     titleSaving = false;
     if (!result.ok) {
       composeError = result.error;
-      await tick();
-      titleInput?.focus();
+      if (activeChat?.id === chatId) {
+        await tick();
+        titleInput?.focus();
+      }
       return;
     }
     titleEditingChatId = null;
     titleDraft = '';
     await invalidateChatMutation(chatId);
-    await refreshActive(chatId, { quiet: true });
+    if (activeChat?.id === chatId) {
+      await refreshActive(chatId, { quiet: true });
+    }
   }
 
   function handleTitleKeydown(event: KeyboardEvent): void {

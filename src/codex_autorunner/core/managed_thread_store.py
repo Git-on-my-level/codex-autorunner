@@ -77,7 +77,6 @@ from .orchestration.runtime_bindings import (
     set_runtime_thread_binding,
 )
 from .orchestration.thread_titles import (
-    EXPLICIT_TITLE_SOURCE,
     FIRST_MESSAGE_TITLE_SOURCE,
     PROVIDER_TITLE_SOURCE,
     choose_owned_thread_title,
@@ -1339,10 +1338,22 @@ class ManagedThreadStore:
                     and metadata_patch.get("car_title_source") == "message_preview"
                 ):
                     source = FIRST_MESSAGE_TITLE_SOURCE
+                if source is None and may_replace_preview_title:
+                    source = FIRST_MESSAGE_TITLE_SOURCE
+                if source is None and (
+                    metadata_patch.get("provider_conversation_title")
+                    or metadata_patch.get("provider_conversation_summary")
+                ):
+                    source = PROVIDER_TITLE_SOURCE
+                if source is None and thread_title_source_allows_replacement(
+                    current_title_source
+                ):
+                    source = normalize_thread_title_source(current_title_source)
+                if source is None and only_if_generic:
+                    source = PROVIDER_TITLE_SOURCE
                 metadata_patch = dict(metadata_patch)
-                metadata_patch["title_source"] = source or (
-                    PROVIDER_TITLE_SOURCE if only_if_generic else EXPLICIT_TITLE_SOURCE
-                )
+                if source is not None:
+                    metadata_patch["title_source"] = source
                 metadata_patch.pop("car_title_source", None)
             updated_metadata = dict(current_metadata)
             updated_metadata.update(metadata_patch)
