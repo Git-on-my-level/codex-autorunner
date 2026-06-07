@@ -264,7 +264,14 @@ export type ChatTranscriptCard =
       timestamp: string | null;
     }
   | { kind: 'ticket'; id: string; title: string; summary: string | null; ticketId: string }
-  | { kind: 'artifact'; id: string; artifact: SurfaceArtifact };
+  | {
+      kind: 'artifact';
+      id: string;
+      artifact: SurfaceArtifact;
+      turnId: string | null;
+      orderKey: string;
+      timestamp: string | null;
+    };
 
 export type ChatContextCompaction = {
   source: 'car' | 'provider' | 'unknown';
@@ -1207,7 +1214,14 @@ export function buildChatTranscriptCards(
     (artifact) => !artifactKeysFor(artifact).some((key) => messageAttachmentKeys.has(key))
   );
   for (const artifact of remainingArtifacts.slice(0, 4)) {
-    cards.push({ kind: 'artifact', id: `artifact-${artifact.id}`, artifact });
+    cards.push({
+      kind: 'artifact',
+      id: `artifact-${artifact.id}`,
+      artifact,
+      turnId: null,
+      orderKey: '',
+      timestamp: artifact.createdAt
+    });
   }
 
   return cards;
@@ -1631,7 +1645,14 @@ function mapChatTranscriptRow(raw: Record<string, unknown>): ChatTranscriptCard 
     };
   }
   if (kind === 'artifact') {
-    return { kind: 'artifact', id, artifact: mapTranscriptArtifact(asRecord(raw.artifact)) };
+    return {
+      kind: 'artifact',
+      id,
+      artifact: mapTranscriptArtifact(asRecord(raw.artifact)),
+      turnId: nullableString(raw.turn_id),
+      orderKey: stringValue(raw.order_key),
+      timestamp: nullableString(raw.timestamp)
+    };
   }
   return null;
 }
@@ -2222,7 +2243,14 @@ function timelineItemToCard(item: ChatTimelineItem): ChatTranscriptCard[] {
     }];
   }
   if (item.kind === 'artifact') {
-    return [{ kind: 'artifact', id: item.id, artifact: mapTimelineArtifact(item.payload) }];
+    return [{
+      kind: 'artifact',
+      id: item.id,
+      artifact: mapTimelineArtifact(item.payload),
+      turnId: item.turnId,
+      orderKey: item.orderKey,
+      timestamp: item.timestamp
+    }];
   }
   return [];
 }

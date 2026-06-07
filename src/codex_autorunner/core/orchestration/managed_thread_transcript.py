@@ -235,7 +235,16 @@ def _timeline_item_to_transcript_rows(item: Mapping[str, Any]) -> list[dict[str,
         ]
 
     if kind == "artifact":
-        return [{"kind": "artifact", "id": item_id, "artifact": dict(payload)}]
+        return [
+            {
+                "kind": "artifact",
+                "id": item_id,
+                "artifact": dict(payload),
+                "turn_id": managed_turn_id,
+                "order_key": order_key,
+                "timestamp": timestamp,
+            }
+        ]
     return []
 
 

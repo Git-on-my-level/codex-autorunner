@@ -1368,39 +1368,42 @@ def _append_assistant_message(
     return sequence + 1
 
 
-def _append_attachment_artifacts(
+def _append_artifacts(
     items: list[ManagedThreadTimelineItem],
     *,
     managed_thread_id: str,
     turn: dict[str, Any],
     sequence: int,
 ) -> int:
+    # User attachments are already carried on the user-message item (and render
+    # as inline attachment pills), so they are intentionally not duplicated as
+    # standalone artifact items here. Only genuine surfaced artifacts, which have
+    # no message of their own, become standalone artifact cards.
     managed_turn_id = str(turn.get("managed_turn_id") or "")
     metadata = _metadata(turn)
     timestamp = _turn_timestamp(turn)
-    for field_name in ("attachments", "artifacts"):
-        values = metadata.get(field_name)
-        if not isinstance(values, list):
+    values = metadata.get("artifacts")
+    if not isinstance(values, list):
+        return sequence
+    for index, value in enumerate(values, start=1):
+        if not isinstance(value, dict):
             continue
-        for index, value in enumerate(values, start=1):
-            if not isinstance(value, dict):
-                continue
-            item_id = f"turn:{managed_turn_id}:{field_name}:{index}"
-            items.append(
-                ManagedThreadTimelineItem(
-                    item_id=item_id,
-                    kind="artifact",
-                    order_key=_order_key(timestamp, sequence, item_id),
-                    timestamp=timestamp,
-                    managed_thread_id=managed_thread_id,
-                    managed_turn_id=managed_turn_id,
-                    status=str(turn.get("status") or ""),
-                    identity=_timeline_identity(item_id),
-                    provenance=_timeline_provenance(),
-                    payload={"artifact_kind": field_name.rstrip("s"), **value},
-                )
+        item_id = f"turn:{managed_turn_id}:artifacts:{index}"
+        items.append(
+            ManagedThreadTimelineItem(
+                item_id=item_id,
+                kind="artifact",
+                order_key=_order_key(timestamp, sequence, item_id),
+                timestamp=timestamp,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                status=str(turn.get("status") or ""),
+                identity=_timeline_identity(item_id),
+                provenance=_timeline_provenance(),
+                payload={"artifact_kind": "artifact", **value},
             )
-            sequence += 1
+        )
+        sequence += 1
     return sequence
 
 
@@ -1591,7 +1594,7 @@ def _append_turn_timeline_items(
             ),
             source_event_ids=terminal_event_ids,
         )
-    sequence = _append_attachment_artifacts(
+    sequence = _append_artifacts(
         items,
         managed_thread_id=managed_thread_id,
         turn=turn,

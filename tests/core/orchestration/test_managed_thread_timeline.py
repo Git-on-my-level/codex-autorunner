@@ -171,7 +171,19 @@ def test_completed_timeline_separates_intermediate_and_final_output(
     assert kinds.count("user_message") == 1
     assert kinds.count("intermediate") == 1
     assert kinds.count("assistant_message") == 1
-    assert kinds.count("artifact") == 2
+    # User attachments ride on the user-message item and are not duplicated as
+    # standalone artifact items; only genuine surfaced artifacts are.
+    assert kinds.count("artifact") == 1
+    user_item = next(
+        item for item in payload["items"] if item["kind"] == "user_message"
+    )
+    assert user_item["payload"]["attachments"] == [
+        {"attachment_id": "att-1", "title": "notes.txt"}
+    ]
+    artifact_item = next(
+        item for item in payload["items"] if item["kind"] == "artifact"
+    )
+    assert artifact_item["item_id"] == f"turn:{turn_id}:artifacts:1"
     assert payload["items"][0]["item_id"] == f"turn:{turn_id}:user"
     for item in payload["items"]:
         _assert_v2_metadata(item)
