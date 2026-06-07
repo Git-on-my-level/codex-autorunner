@@ -688,7 +688,7 @@
               <th>Class</th>
               <th>Target</th>
               <th>Uptime</th>
-              <th>Owner</th>
+              <th class="col-pid">PID</th>
               <th class="col-links">Links</th>
               <th class="col-actions">Actions</th>
             </tr>
@@ -724,7 +724,7 @@
                 </td>
                 <td><span class="truncate cell-muted">{serviceTargetLabel(service)}</span></td>
                 <td class="cell-num">{serviceUptimeLabel(service)}</td>
-                <td class="cell-muted">{service.ownerPid ? `pid ${service.ownerPid}` : service.createdBy ?? '—'}</td>
+                <td class="cell-num col-pid">{service.ownerPid ?? '—'}</td>
                 <td class="col-links">
                   {#if eligibility.canOpen}
                     <div class="link-actions">
@@ -1067,10 +1067,12 @@
     vertical-align: middle;
   }
 
+  .services-table .col-pid,
   .services-table .col-links,
   .services-table .col-actions {
     text-align: right;
     white-space: nowrap;
+    width: 1%;
   }
 
   .services-table tbody tr {
@@ -1217,6 +1219,10 @@
     flex-wrap: nowrap;
     align-items: center;
     gap: var(--space-1);
+  }
+
+  .link-actions {
+    justify-content: flex-end;
   }
 
   .row-actions {
