@@ -30,6 +30,12 @@ tests, and docs only; release/package builds produce and verify the static bundl
   environment mock in every file.
 - Normal updates should arrive through cursor streams plus repair snapshots.
   Do not add recurring `setInterval`/quiet-refresh loops for migrated screens.
+- Read-model-backed pages should render stale cached data while refreshing.
+  Add a non-blocking `+page.ts` loader (`ensureXLoaded({ blocking: false })`),
+  store snapshots in `readModelEntityStore`, and select from the store in the
+  Svelte page. Do not fetch read-model snapshots directly from `+page.svelte`
+  and blank back to skeletons on every navigation; `readModelRouteConventions.test.ts`
+  enforces this for route pages.
 - High-cardinality UI must stay windowed and virtualized. Do not render
   unbounded chat, timeline, repo/worktree, ticket, artifact, or dispatch lists
   with raw `{#each}` loops.

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import AgentModelReasoningPicker from '$lib/components/AgentModelReasoningPicker.svelte';
   import ContentSkeleton from '$lib/components/ContentSkeleton.svelte';
   import MasterDetail from '$lib/components/MasterDetail.svelte';
@@ -14,7 +14,6 @@
   import {
     webApi,
     type ApiError,
-    type AutomationOverview,
     type AutomationPresetDescriptor,
     type AutomationSummary,
     type AutomationTargetOption,
@@ -22,17 +21,28 @@
     type JsonRecord
   } from '$lib/api/client';
   import { resolveAgentModelSelection } from '$lib/viewModels/modelPickers';
+  import {
+    ensureAutomationWorkspaceLoaded,
+    readModelEntityStore,
+    selectAutomationWorkspace
+  } from '$lib/data';
 
   type PresetId = 'security_scan_pr' | 'weekly_ticket_flow';
   type SelectionKind = 'automation' | 'preset' | null;
   type JsonField = 'trigger' | 'filters' | 'target' | 'executor' | 'policy' | 'metadata';
   type TicketPackTicket = { path: string; content: string };
 
-  let overview = $state<AutomationOverview | null>(null);
+  let { data = { status: 'cold' as const, tags: [] } } = $props();
+  let readModelState = $state(readModelEntityStore.snapshot());
+  let unsubscribeReadModels: (() => void) | null = null;
+  const overview = $derived(selectAutomationWorkspace(readModelState));
+  const hasCachedWorkspace = $derived(Boolean(overview));
   let targetOptions = $state<AutomationTargetOption[]>([]);
   let agents = $state<JsonRecord[]>([]);
   let models = $state<JsonRecord[]>([]);
-  let loading = $state(true);
+  let refreshing = $state(false);
+  let coldHydrating = $state(true);
+  const loading = $derived((data.status === 'cold' && coldHydrating && !hasCachedWorkspace) || (refreshing && !hasCachedWorkspace));
   let loadingTargetOptions = $state(false);
   let loadingAgents = $state(false);
   let loadingModels = $state(false);
@@ -96,31 +106,36 @@
   );
 
   onMount(() => {
-    void load();
+    unsubscribeReadModels = readModelEntityStore.subscribe((state) => {
+      readModelState = state;
+    });
+    void load({ showLoading: data.status === 'cold' && !hasCachedWorkspace });
     return () => {
       if (saveTimer) window.clearTimeout(saveTimer);
     };
   });
 
-  async function load(): Promise<void> {
-    loading = true;
+  onDestroy(() => {
+    unsubscribeReadModels?.();
+  });
+
+  async function load(options: { showLoading?: boolean } = {}): Promise<void> {
+    if (options.showLoading !== false) refreshing = true;
     error = null;
-    const automationResult = await webApi.hub.getAutomationWorkspaceIndex();
-    if (automationResult.ok) {
-      overview = mergeAutomationOverview(automationResult.data);
-      if (!selectedRepoId) {
-        selectedRepoId = presetTargetOptions.find((option) => !option.disabled)?.id ?? presetTargetOptions[0]?.id ?? '';
+    try {
+      const result = await ensureAutomationWorkspaceLoaded({ refresh: true });
+      if (result.status === 'error') {
+        error = result.error;
+        return;
       }
-      defaultAgentId = automationResult.data.agentDefaults.defaultAgent;
-      defaultProfile = automationResult.data.agentDefaults.defaultProfile ?? '';
-      selectedModel = selectedModel || automationResult.data.agentDefaults.defaultModel || '';
-      selectedReasoning = selectedReasoning || automationResult.data.agentDefaults.defaultReasoning || '';
+      syncWorkspaceDefaults();
+      syncDraftsForSelection(true);
+      if (selectedKind === 'automation' && selectedId) void hydrateAutomationDetail(selectedId, { force: true });
+      void hydrateTargetOptions();
+    } finally {
+      coldHydrating = false;
+      refreshing = false;
     }
-    else error = automationResult.error;
-    loading = false;
-    syncDraftsForSelection(true);
-    if (selectedKind === 'automation' && selectedId) void hydrateAutomationDetail(selectedId, { force: true });
-    void hydrateTargetOptions();
   }
 
   async function hydrateAgentCatalog(): Promise<void> {
@@ -155,16 +170,16 @@
     }
   }
 
-  function mergeAutomationOverview(next: AutomationOverview): AutomationOverview {
-    if (!overview || hydratedDetailIds.length === 0) return next;
-    const currentById = new Map(overview.automations.map((automation) => [automation.id, automation]));
-    return {
-      ...next,
-      automations: next.automations.map((automation) => {
-        const current = currentById.get(automation.id);
-        return current && hydratedDetailIds.includes(automation.id) ? current : automation;
-      })
-    };
+  function syncWorkspaceDefaults(): void {
+    const workspace = selectAutomationWorkspace(readModelEntityStore.snapshot());
+    if (!workspace) return;
+    if (!selectedRepoId) {
+      selectedRepoId = presetTargetOptions.find((option) => !option.disabled)?.id ?? presetTargetOptions[0]?.id ?? '';
+    }
+    defaultAgentId = workspace.agentDefaults.defaultAgent;
+    defaultProfile = workspace.agentDefaults.defaultProfile ?? '';
+    selectedModel = selectedModel || workspace.agentDefaults.defaultModel || '';
+    selectedReasoning = selectedReasoning || workspace.agentDefaults.defaultReasoning || '';
   }
 
   async function hydrateAutomationDetail(ruleId: string, options: { force?: boolean } = {}): Promise<void> {
@@ -332,17 +347,7 @@
 
   function replaceAutomation(updated: AutomationSummary): void {
     if (!overview) return;
-    const nextAutomations = overview.automations.map((automation) => (automation.id === updated.id ? updated : automation));
-    overview = {
-      ...overview,
-      automations: nextAutomations,
-      summary: {
-        total: nextAutomations.length,
-        active: nextAutomations.filter((automation) => automation.enabled).length,
-        paused: nextAutomations.filter((automation) => !automation.enabled).length,
-        failedJobs: nextAutomations.filter((automation) => automation.lastJob?.effectiveState === 'failed').length
-      }
-    };
+    readModelEntityStore.replaceAutomationSummary(updated);
   }
 
   async function savePatch(patch: AutomationUpdateRequest, label: string): Promise<void> {
@@ -441,9 +446,7 @@
       error = result.error;
       return;
     }
-    overview = overview
-      ? { ...overview, automations: [...overview.automations, result.data] }
-      : { automations: [result.data], presets, summary: { total: 1, active: result.data.enabled ? 1 : 0, paused: result.data.enabled ? 0 : 1, failedJobs: 0 } };
+    readModelEntityStore.replaceAutomationSummary(result.data);
     notice = `Created ${result.data.name}${result.data.enabled ? '' : ' — paused'}`;
     detailMode = 'detail';
     await goto(automationRoute(result.data.id));
@@ -481,19 +484,7 @@
       error = result.error;
       return;
     }
-    if (overview) {
-      const nextAutomations = overview.automations.filter((entry) => entry.id !== automation.id);
-      overview = {
-        ...overview,
-        automations: nextAutomations,
-        summary: {
-          total: nextAutomations.length,
-          active: nextAutomations.filter((entry) => entry.enabled).length,
-          paused: nextAutomations.filter((entry) => !entry.enabled).length,
-          failedJobs: nextAutomations.filter((entry) => entry.lastJob?.state === 'failed').length
-        }
-      };
-    }
+    readModelEntityStore.removeAutomationSummary(automation.id);
     selectedKind = null;
     selectedId = '';
     detailMode = 'list';
