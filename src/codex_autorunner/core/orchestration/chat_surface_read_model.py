@@ -1529,6 +1529,7 @@ class ChatSurfaceReadService:
                     "provider_conversation_title": _normalize_text(
                         metadata.get("provider_conversation_title")
                     ),
+                    "title_source": _normalize_text(metadata.get("title_source")),
                     "turn_kinds": execution_facets.get("turn_kinds") or ["message"],
                     "origin_kinds": execution_facets.get("origin_kinds") or ["surface"],
                     "last_visible_message_at": last_visible_message_at,
@@ -2195,6 +2196,8 @@ def _chat_index_rows_from_surfaces(
         )
         if surface_kind == "pma" or row.get("surface") is None:
             row["surface"] = base_surface
+            if metadata_map.get("title_source") is not None:
+                row["title_source"] = metadata_map.get("title_source")
             row["title"] = _display_title(display_map, managed_thread_id)
             for key in (
                 "repo_id",
@@ -2285,10 +2288,6 @@ def _chat_index_rows_from_surfaces(
         row["display_title"] = _normalize_text(row.get("chat_display_name")) or str(
             row.get("title") or row.get("chat_id") or row.get("row_id") or ""
         )
-        if row.get("managed_thread_id") is not None:
-            binding_title = _direct_external_binding_display_name(row)
-            if binding_title is not None:
-                row["display_title"] = binding_title
         _apply_ticket_flow_child_state(row)
         row["technical_title"] = _normalize_text(row.get("technical_title")) or str(
             row.get("managed_thread_id") or row.get("row_id") or ""
@@ -2365,6 +2364,7 @@ def _managed_thread_identity_title(row: Mapping[str, Any]) -> str:
         resolve_managed_thread_display_title(
             ManagedThreadTitleInputs(
                 stored_title=_visible_chrome_text(row.get("title")),
+                stored_title_source=row.get("title_source"),
                 provider_title=_visible_chrome_text(
                     row.get("provider_conversation_title")
                 ),
@@ -2466,23 +2466,6 @@ def _binding_display_names(surfaces: Iterable[Mapping[str, Any]]) -> list[str]:
         if name not in names:
             names.append(name)
     return names
-
-
-def _direct_external_binding_display_name(row: Mapping[str, Any]) -> Optional[str]:
-    for surface in row.get("surface_bindings") or []:
-        if not isinstance(surface, Mapping):
-            continue
-        surface_kind = _normalize_kind(surface.get("surface_kind"))
-        if surface_kind in {None, "pma", "managed_thread", "notification"}:
-            continue
-        name = _visible_chrome_text(
-            surface.get("binding_display_name")
-            or surface.get("display_name")
-            or surface.get("title")
-        )
-        if name is not None and not _is_surface_id_title(name, surface):
-            return name
-    return None
 
 
 def _primary_surface(row: Mapping[str, Any]) -> Optional[Mapping[str, Any]]:
@@ -3487,6 +3470,7 @@ def _chat_detail_thread_metadata(
     title = resolve_managed_thread_display_title(
         ManagedThreadTitleInputs(
             stored_title=stored_title,
+            stored_title_source=metadata_map.get("title_source"),
             provider_title=metadata_map.get("provider_conversation_title"),
             user_visible_title_seed=thread.get("last_message_preview"),
             chat_display_name=chat_display_name,
@@ -4239,6 +4223,7 @@ def _pma_thread_from_surface(surface: Mapping[str, Any]) -> dict[str, Any]:
     display_title = resolve_managed_thread_display_title(
         ManagedThreadTitleInputs(
             stored_title=_visible_chrome_text(display.get("display_name")),
+            stored_title_source=metadata.get("title_source"),
             provider_title=metadata.get("provider_conversation_title"),
             user_visible_title_seed=metadata.get("last_message_preview"),
             chat_display_name=chat_display_name,

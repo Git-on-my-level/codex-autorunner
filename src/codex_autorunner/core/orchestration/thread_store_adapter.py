@@ -19,7 +19,7 @@ from .managed_turn_lifecycle_contract import (
 )
 from .models import ExecutionRecord, MessageRequestKind, ThreadTarget
 from .runtime_bindings import RuntimeThreadBinding
-from .thread_titles import choose_owned_thread_title
+from .thread_titles import FIRST_MESSAGE_TITLE_SOURCE, choose_owned_thread_title
 from .turn_execution_contract import TurnExecutionRecord, TurnExecutionRequest
 
 logger = logging.getLogger(__name__)
@@ -638,7 +638,7 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
         self.update_thread_title(
             thread_target_id,
             choose_owned_thread_title(None, message_preview=message_preview),
-            metadata={"car_title_source": "message_preview"},
+            metadata={"title_source": FIRST_MESSAGE_TITLE_SOURCE},
         )
 
     def update_thread_title(

@@ -2361,8 +2361,52 @@ def test_chat_index_uses_message_preview_before_thread_id_fallback(
     ][0]
 
     assert row["title"] == "Investigate failed deploy"
-    assert row["display_title"] == "Agent Nexus / #deploys"
+    assert row["display_title"] == "Investigate failed deploy"
     assert row["binding_display_name"] == "Agent Nexus / #deploys"
+
+
+def test_chat_index_titles_coding_agent_placeholder_from_visible_message(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="thread-coding-agent",
+        display_name="New coding agent chat",
+        last_message_preview="Can we test the new services feature?",
+        metadata={"title_source": "unset"},
+    )
+
+    row = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(limit=20)[
+        "rows"
+    ][0]
+
+    assert row["title"] == "Can we test the new services feature?"
+    assert row["display_title"] == "Can we test the new services feature?"
+
+
+def test_chat_index_keeps_user_explicit_title_even_if_generic_or_technical(
+    tmp_path: Path,
+) -> None:
+    for explicit_title in ("New chat", "discord:123"):
+        hub_root = tmp_path / explicit_title.replace(":", "-")
+        _seed_thread(
+            hub_root,
+            thread_id="thread-explicit-title",
+            display_name=explicit_title,
+            last_message_preview="Visible message should not replace explicit title",
+            metadata={
+                "provider_conversation_title": "Provider title should not replace it",
+                "title_source": "user_explicit",
+            },
+        )
+
+        row = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+            limit=20
+        )["rows"][0]
+
+        assert row["title"] == explicit_title
+        assert row["display_title"] == explicit_title
 
 
 def test_chat_index_uses_provider_title_before_visible_seed(tmp_path: Path) -> None:

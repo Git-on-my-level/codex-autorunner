@@ -28,6 +28,8 @@ from .runtime_bindings import (
     runtime_thread_binding_allows_resume,
 )
 from .thread_titles import (
+    FIRST_MESSAGE_TITLE_SOURCE,
+    PROVIDER_TITLE_SOURCE,
     choose_owned_thread_title,
     provider_title_metadata,
 )
@@ -564,7 +566,7 @@ class _ThreadExecutionLifecycle:
                         provider_summary=getattr(conversation, "summary", None),
                     )
                     if provider_metadata.get("provider_conversation_title"):
-                        provider_metadata["car_title_source"] = "provider"
+                        provider_metadata["title_source"] = PROVIDER_TITLE_SOURCE
                     thread, provider_title_changed = (
                         _update_owned_thread_title_best_effort(
                             self.thread_store,
@@ -586,6 +588,7 @@ class _ThreadExecutionLifecycle:
                             self.thread_store,
                             thread,
                             title=message_title,
+                            metadata={"title_source": FIRST_MESSAGE_TITLE_SOURCE},
                         )
                     )
                     await _set_runtime_conversation_title_best_effort(

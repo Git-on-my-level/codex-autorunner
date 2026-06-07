@@ -339,7 +339,7 @@ export type ManagedThreadCreatePayload = {
   chat_kind?: ChatKind;
   model?: string;
   profile?: string;
-  name: string;
+  name?: string;
   scope_urn: string;
 };
 
@@ -2539,10 +2539,11 @@ export function buildManagedThreadCreatePayload(
   chatKind: ChatKind = 'pma',
   managedThreadId: string | null = null
 ): ManagedThreadCreatePayload {
+  const trimmedName = name.trim();
   const base: Pick<ManagedThreadCreatePayload, 'agent' | 'name' | 'model'> = {
-    agent: agent || undefined,
-    name
+    agent: agent || undefined
   };
+  if (trimmedName && !isGeneratedNewChatTitle(trimmedName)) base.name = trimmedName;
   if (model) base.model = model;
   const trimmedProfile = profile.trim();
   return {
@@ -2552,6 +2553,11 @@ export function buildManagedThreadCreatePayload(
     ...(trimmedProfile ? { profile: trimmedProfile } : {}),
     scope_urn: scope.scopeUrn
   };
+}
+
+export function isGeneratedNewChatTitle(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'new chat' || normalized === 'new coding agent chat';
 }
 
 export type ChatKind = 'pma' | 'coding_agent';

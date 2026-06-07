@@ -32,6 +32,13 @@ from codex_autorunner.core.orchestration.thread_titles import (
         ),
         (
             ManagedThreadTitleInputs(
+                stored_title="New coding agent chat",
+                user_visible_title_seed="Test preview services",
+            ),
+            "Test preview services",
+        ),
+        (
+            ManagedThreadTitleInputs(
                 stored_title="discord:1488827014600331415",
                 user_visible_title_seed="Investigate notification routing",
                 chat_display_name="CAR Workspace / #hermes",

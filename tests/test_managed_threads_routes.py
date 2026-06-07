@@ -146,6 +146,7 @@ def test_create_managed_thread_with_repo_owner(hub_env) -> None:
     stored = store.get_thread(thread["managed_thread_id"])
     assert stored is not None
     assert stored.get("backend_thread_id") is None
+    assert stored["metadata"]["title_source"] == "user_explicit"
     assert "notification" not in resp.json()
     subscriptions = _subscription_rows(
         hub_env.hub_root, thread_id=thread["managed_thread_id"]
@@ -1182,6 +1183,50 @@ def test_list_managed_threads_includes_ticket_flow_threads_for_repo(hub_env) -> 
     assert thread["resource_id"] == hub_env.repo_id
 
 
+def test_create_managed_thread_without_name_marks_title_unset(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                **_repo_owner(hub_env),
+            },
+        )
+
+    assert resp.status_code == 200
+    thread = resp.json()["thread"]
+    stored = ManagedThreadStore(hub_env.hub_root).get_thread(
+        thread["managed_thread_id"]
+    )
+    assert stored is not None
+    assert stored["metadata"]["title_source"] == "unset"
+
+
+def test_create_managed_thread_with_generic_name_marks_title_unset(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "name": "New coding agent chat",
+                **_repo_owner(hub_env),
+            },
+        )
+
+    assert resp.status_code == 200
+    thread = resp.json()["thread"]
+    stored = ManagedThreadStore(hub_env.hub_root).get_thread(
+        thread["managed_thread_id"]
+    )
+    assert stored is not None
+    assert stored["name"] == "New coding agent chat"
+    assert stored["metadata"]["title_source"] == "unset"
+
+
 def test_get_managed_thread_returns_created_thread(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
 
@@ -1201,6 +1246,56 @@ def test_get_managed_thread_returns_created_thread(hub_env) -> None:
     assert get_resp.status_code == 200
     fetched = get_resp.json()["thread"]
     assert fetched["managed_thread_id"] == created["managed_thread_id"]
+
+
+def test_rename_managed_thread_sets_user_explicit_title(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                **_repo_owner(hub_env),
+            },
+        )
+        assert create_resp.status_code == 200
+        thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        rename_resp = client.patch(
+            f"/hub/pma/threads/{thread_id}/title",
+            json={"title": "CAR services test"},
+        )
+
+    assert rename_resp.status_code == 200
+    renamed = rename_resp.json()["thread"]
+    assert renamed["name"] == "CAR services test"
+    stored = ManagedThreadStore(hub_env.hub_root).get_thread(thread_id)
+    assert stored is not None
+    assert stored["metadata"]["title_source"] == "user_explicit"
+    assert stored["metadata"].get("car_title_source") is None
+
+
+def test_rename_managed_thread_rejects_blank_title(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                **_repo_owner(hub_env),
+            },
+        )
+        assert create_resp.status_code == 200
+        thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        rename_resp = client.patch(
+            f"/hub/pma/threads/{thread_id}/title",
+            json={"title": "   "},
+        )
+
+    assert rename_resp.status_code == 422
 
 
 def test_managed_thread_routes_expose_chat_binding_metadata(hub_env) -> None:
@@ -2085,7 +2180,9 @@ def test_retire_active_managed_threads_route_retires_notification_chat_rows(
     assert payload["retired_count"] == 3
     assert payload["error_count"] == 0
     assert payload["threads"] == []
-    assert [surface["surface_key"] for surface in payload["retired_surfaces"]] == [
+    assert sorted(
+        surface["surface_key"] for surface in payload["retired_surfaces"]
+    ) == [
         "notification:notif-0",
         "notification:notif-1",
         "notification:notif-2",
@@ -2278,6 +2375,7 @@ def test_managed_thread_crud_routes_use_orchestration_service(
             agent_id,
             workspace_root,
             *,
+            thread_target_id=None,
             repo_id=None,
             resource_kind=None,
             resource_id=None,
@@ -2290,6 +2388,7 @@ def test_managed_thread_crud_routes_use_orchestration_service(
                     {
                         "agent_id": agent_id,
                         "workspace_root": str(workspace_root),
+                        "thread_target_id": thread_target_id,
                         "repo_id": repo_id,
                         "resource_kind": resource_kind,
                         "resource_id": resource_id,
@@ -2299,13 +2398,14 @@ def test_managed_thread_crud_routes_use_orchestration_service(
                 )
             )
             self.thread = ThreadTarget(
-                thread_target_id=self.thread.thread_target_id,
+                thread_target_id=thread_target_id or self.thread.thread_target_id,
                 agent_id=agent_id,
                 repo_id=repo_id,
                 resource_kind=resource_kind,
                 resource_id=resource_id,
                 workspace_root=str(workspace_root),
                 display_name=display_name,
+                metadata=metadata,
                 status="idle",
                 lifecycle_status="active",
                 status_reason="thread_created",
@@ -2457,6 +2557,7 @@ def test_managed_thread_crud_routes_use_orchestration_service(
             {
                 "agent_id": "codex",
                 "workspace_root": str(hub_env.repo_root.resolve()),
+                "thread_target_id": None,
                 "repo_id": hub_env.repo_id,
                 "resource_kind": "repo",
                 "resource_id": hub_env.repo_id,
@@ -2465,6 +2566,7 @@ def test_managed_thread_crud_routes_use_orchestration_service(
                     "context_profile": "car_ambient",
                     "approval_mode": "yolo",
                     "chat_kind": "pma",
+                    "title_source": "user_explicit",
                     "genesis": {
                         "origin": "legacy",
                         "scope_source": "legacy_scope_fields",

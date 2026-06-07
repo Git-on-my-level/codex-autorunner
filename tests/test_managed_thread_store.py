@@ -98,9 +98,90 @@ def test_update_thread_title_only_replaces_generic_titles(tmp_path: Path) -> Non
     assert updated_generic["metadata"]["provider_conversation_summary"] == (
         "native summary"
     )
+    assert updated_generic["metadata"]["title_source"] == "provider"
+    updated_generic_again = store.update_thread_title(
+        generic["managed_thread_id"],
+        "First visible message",
+        metadata={"title_source": "first_user_message"},
+    )
+    assert updated_generic_again is not None
+    assert updated_generic_again["name"] == "First visible message"
+    assert updated_generic_again["metadata"]["title_source"] == "first_user_message"
     assert updated_explicit is not None
     assert updated_explicit["name"] == "Release notes"
     assert "car_title_source" not in updated_explicit["metadata"]
+
+
+def test_update_thread_title_replaces_unset_placeholder_from_message_preview(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    store = ManagedThreadStore(tmp_path / "hub")
+    thread = store.create_thread(
+        "codex",
+        workspace_root,
+        name="New coding agent chat",
+        metadata={"title_source": "unset"},
+    )
+
+    updated = store.update_thread_title(
+        thread["managed_thread_id"],
+        "Test CAR services preview",
+        metadata={"title_source": "first_user_message"},
+    )
+
+    assert updated is not None
+    assert updated["name"] == "Test CAR services preview"
+    assert updated["metadata"]["title_source"] == "first_user_message"
+
+
+def test_update_thread_title_user_explicit_blocks_automatic_replacement(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    store = ManagedThreadStore(tmp_path / "hub")
+    thread = store.create_thread(
+        "codex",
+        workspace_root,
+        name="My saved title",
+        metadata={"title_source": "user_explicit"},
+    )
+
+    updated = store.update_thread_title(
+        thread["managed_thread_id"],
+        "Automatic title",
+        metadata={"title_source": "first_user_message"},
+    )
+
+    assert updated is not None
+    assert updated["name"] == "My saved title"
+    assert updated["metadata"]["title_source"] == "user_explicit"
+
+
+def test_update_thread_title_user_explicit_generic_title_blocks_automatic_replacement(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    store = ManagedThreadStore(tmp_path / "hub")
+    thread = store.create_thread(
+        "codex",
+        workspace_root,
+        name="New chat",
+        metadata={"title_source": "user_explicit"},
+    )
+
+    updated = store.update_thread_title(
+        thread["managed_thread_id"],
+        "Automatic title",
+        metadata={"title_source": "first_user_message"},
+    )
+
+    assert updated is not None
+    assert updated["name"] == "New chat"
+    assert updated["metadata"]["title_source"] == "user_explicit"
 
 
 def test_prepare_runs_legacy_backfill_before_marking_prepared(

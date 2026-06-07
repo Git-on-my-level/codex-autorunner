@@ -1065,6 +1065,20 @@ class ManagedThreadCompactRequest(Payload):
     reset_backend: bool = True
 
 
+class ManagedThreadRenameRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    title: str = Field(validation_alias=AliasChoices("title", "name"))
+
+    @field_validator("title")
+    @classmethod
+    def _normalize_title(cls, value: str) -> str:
+        normalized = _normalize_text(value)
+        if not normalized:
+            raise ValueError("title is required")
+        return normalized
+
+
 class ManagedThreadResumeRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
