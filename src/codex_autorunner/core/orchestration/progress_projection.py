@@ -25,6 +25,7 @@ from .run_notice_visibility import is_internal_run_notice_kind
 from .stream_text_merge import (
     append_assistant_stream_text_readably,
     merge_assistant_stream_text,
+    normalize_stream_text_for_dedup,
 )
 
 PROGRESS_PROJECTION_VERSION = "pma_progress_projection.v1"
@@ -171,6 +172,35 @@ def _merge_streamed_item_summary(
     incoming_summary = current.summary or ""
     if current.merge_strategy == RUN_EVENT_STREAM_MODE_SNAPSHOT:
         merged = merge_assistant_stream_text(previous_summary, incoming_summary)
+        # A streamed thinking snapshot is the decoder's authoritative,
+        # bounded per-reasoning-item buffer. The runtime re-decodes raw events
+        # from scratch on every projection pass with a fresh decoder state, and
+        # a turn contains many distinct reasoning items, so the same block is
+        # re-emitted repeatedly. A re-emitted block does NOT have to sit at the
+        # start of what we've accumulated (earlier reasoning blocks precede
+        # it), so a prefix-only check misses interior/tail re-emissions and the
+        # block gets concatenated over and over (observed: one 220-char block
+        # appended ~1.9k times -> 861KB). Treat any incoming snapshot already
+        # contained in the accumulated summary as a redundant re-emission and
+        # drop it instead of concatenating.
+        if incoming_summary and incoming_summary in previous_summary:
+            return previous_summary
+        # The same reasoning block is often re-streamed reformatted with markdown
+        # emphasis (plain ``Title ...`` then ``**Title**\n\n...``). The two forms
+        # differ only in markdown/whitespace, so the raw checks above miss them
+        # and the block would be concatenated as a visible duplicate. For a
+        # substantial incoming snapshot (not a tiny token delta), compare the
+        # normalized forms; if one already contains the other it is a redundant
+        # re-emission, so keep the longer (canonical) raw text and drop the dup.
+        if incoming_summary and len(incoming_summary) >= 40:
+            norm_prev = normalize_stream_text_for_dedup(previous_summary)
+            norm_incoming = normalize_stream_text_for_dedup(incoming_summary)
+            if norm_incoming and (
+                norm_incoming in norm_prev or norm_prev in norm_incoming
+            ):
+                if len(incoming_summary) >= len(previous_summary):
+                    return incoming_summary
+                return previous_summary
         # Cumulative thinking snapshots may have been coalesced to append-only
         # deltas in hot storage (turn_timeline._maybe_coalesce_hot_event). On
         # replay those deltas are projected with the snapshot strategy, so a

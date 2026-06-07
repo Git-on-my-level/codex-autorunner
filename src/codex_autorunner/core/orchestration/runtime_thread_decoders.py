@@ -1246,14 +1246,24 @@ class SessionUpdateDecoder(MessageDecoder):
         key = _thought_chunk_buffer_key(params)
         buffer = state.reasoning_buffers.get(key, "")
         if incoming == buffer:
-            return []
-        if not buffer:
+            branch = "drop_equal"
+            accumulated = buffer
+        elif not buffer:
+            branch = "fresh"
             accumulated = incoming
         elif _is_thought_prefix_growth(buffer, incoming):
+            branch = "prefix_growth"
             accumulated = incoming
         else:
+            branch = "append"
             accumulated = append_assistant_stream_text_readably(buffer, incoming)
-        if accumulated == state.reasoning_last_emitted.get(key, ""):
+        drop_last_emitted = (
+            branch != "drop_equal"
+            and accumulated == state.reasoning_last_emitted.get(key, "")
+        )
+        if branch == "drop_equal":
+            return []
+        if drop_last_emitted:
             return []
         state.reasoning_buffers[key] = accumulated
         state.reasoning_last_emitted[key] = accumulated

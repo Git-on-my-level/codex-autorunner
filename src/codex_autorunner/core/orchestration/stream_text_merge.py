@@ -1,6 +1,23 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+
+_NORMALIZE_DEDUP_RE = re.compile(r"[*_`#>~\s]+")
+
+
+def normalize_stream_text_for_dedup(text: str) -> str:
+    """Collapse markdown emphasis/heading markers and whitespace for comparison.
+
+    Some agents (e.g. Hermes) stream a reasoning block as plain token deltas and
+    then re-stream the same block reformatted with markdown
+    (``**Title**\n\n...``). The two forms differ only in emphasis/whitespace, so
+    neither contains the other as a raw substring and a naive merge concatenates
+    a near-duplicate. Comparing the normalized forms lets the merge/coalesce
+    layers recognize the reformat as a redundant re-emission.
+    """
+    return _NORMALIZE_DEDUP_RE.sub(" ", text).strip()
+
 
 _NO_SPACE_BEFORE = frozenset(",.;:!?)]}")
 _NO_SPACE_AFTER = frozenset("([{")

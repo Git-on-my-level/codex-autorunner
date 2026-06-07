@@ -320,6 +320,67 @@ def test_progress_projection_dedupes_cumulative_agent_thought_chunk_snapshots() 
     assert items[0].event_ids == (1, 2, 3)
 
 
+def test_progress_projection_drops_interior_reemission_of_earlier_block() -> None:
+    # A turn streams two distinct reasoning blocks; the agent then re-emits the
+    # FIRST block, which no longer sits at the start of the accumulated summary.
+    # A prefix-only check would miss it and concatenate a third copy; substring
+    # containment must drop it.
+    block_a = "Inspecting project setup before planning the work ahead."
+    block_b = "Now drafting the implementation plan for the requested feature."
+    items = _project(
+        RunNotice(timestamp="2026-05-06T10:00:01Z", kind="thinking", message=block_a),
+        RunNotice(
+            timestamp="2026-05-06T10:00:02Z",
+            kind="thinking",
+            message=f"{block_a} {block_b}",
+        ),
+        RunNotice(timestamp="2026-05-06T10:00:03Z", kind="thinking", message=block_a),
+    )
+
+    assert len(items) == 1
+    assert items[0].summary == f"{block_a} {block_b}"
+    assert items[0].summary.count(block_a) == 1
+
+
+def test_progress_projection_drops_markdown_reformatted_reemission() -> None:
+    # Hermes streams a reasoning block plain, then re-streams the same block
+    # reformatted with markdown emphasis. The two differ only by ``**``/newlines
+    # so neither is a raw substring of the other; normalized dedup must collapse
+    # them instead of rendering a visible duplicate.
+    plain = "Clarifying task status I need to respond to the question and check context"
+    formatted = (
+        "**Clarifying task status**\n\nI need to respond to the question and "
+        "check context"
+    )
+    items = _project(
+        RunNotice(timestamp="2026-05-06T10:00:01Z", kind="thinking", message=plain),
+        RunNotice(timestamp="2026-05-06T10:00:02Z", kind="thinking", message=formatted),
+    )
+
+    assert len(items) == 1
+    # The duplicate paragraph must not appear twice in the rendered summary.
+    assert items[0].summary.count("I need to respond to the question") == 1
+
+
+def test_progress_projection_preserves_distinct_reasoning_blocks() -> None:
+    # Guard against over-aggressive dedup: two genuinely different blocks where
+    # neither contains the other (normalized) must both survive.
+    block_a = "Inspecting the repository layout and existing configuration files."
+    block_b = "Evaluating which test suites to run for the changed modules."
+    items = _project(
+        RunNotice(timestamp="2026-05-06T10:00:01Z", kind="thinking", message=block_a),
+        RunNotice(
+            timestamp="2026-05-06T10:00:02Z",
+            kind="thinking",
+            message=f"{block_a} {block_b}",
+        ),
+    )
+
+    assert len(items) == 1
+    assert block_a in items[0].summary
+    assert block_b in items[0].summary
+
+
 def test_high_volume_stream_deltas_reduce_to_bounded_visible_projection() -> None:
     events = [
         ProgressProjectionInput(

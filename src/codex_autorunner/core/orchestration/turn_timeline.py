@@ -40,6 +40,7 @@ from .execution_history_diagnostics import (
     log_truncation,
 )
 from .sqlite import open_orchestration_sqlite
+from .stream_text_merge import normalize_stream_text_for_dedup
 
 _EVENT_FAMILY = "turn.timeline"
 _CHECKPOINT_PREVIEW_CHARS = 240
@@ -567,6 +568,39 @@ def _maybe_coalesce_hot_event(
             hot_state.update_notice_memory(kind, message)
             hot_state.note_deduped("run_notice")
             return None, {"hot_duplicate_notice": True}
+        if (
+            kind in _COALESCED_NOTICE_KINDS
+            and previous
+            and len(message) < len(previous)
+            and message in previous
+        ):
+            # Redundant re-emission of a coalesced snapshot: the runtime
+            # re-decodes raw events from scratch each pass with fresh state, and
+            # a turn has many distinct reasoning blocks, so a re-emitted block
+            # need not be a prefix of our accumulated memory (earlier blocks
+            # precede it). A prefix-only check misses interior/tail re-emissions
+            # and the block gets appended repeatedly downstream. Drop any
+            # shorter message already contained in memory and keep the longest.
+            hot_state.note_deduped("run_notice")
+            return None, {"hot_duplicate_notice": True, "hot_prefix_reemission": True}
+        if (
+            kind in _COALESCED_NOTICE_KINDS
+            and previous
+            and len(message) >= 40
+            and len(message) <= len(previous)
+        ):
+            # A substantial re-emission whose normalized text is already present
+            # in memory (same reasoning block re-streamed with different markdown
+            # emphasis/whitespace) would otherwise be appended as a visible
+            # duplicate downstream. Drop it and keep the longer memory.
+            norm_prev = normalize_stream_text_for_dedup(previous)
+            norm_message = normalize_stream_text_for_dedup(message)
+            if norm_message and norm_message in norm_prev:
+                hot_state.note_deduped("run_notice")
+                return None, {
+                    "hot_duplicate_notice": True,
+                    "hot_normalized_reemission": True,
+                }
         if (
             kind in _COALESCED_NOTICE_KINDS
             and previous
