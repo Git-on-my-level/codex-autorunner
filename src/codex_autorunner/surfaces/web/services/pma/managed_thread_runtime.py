@@ -48,6 +48,7 @@ from .....core.orchestration.runtime_threads import (
 from .....core.orchestration.thread_titles import (
     EXPLICIT_TITLE_SOURCE,
     UNSET_TITLE_SOURCE,
+    is_generic_thread_title,
 )
 from .....core.text_utils import _truncate_text
 from ...schemas import ManagedThreadMessageRequest, ManagedThreadStartMessageRequest
@@ -166,7 +167,9 @@ async def _create_managed_thread_for_first_message(
         )
         display_name = normalize_optional_text(payload.name)
         metadata["title_source"] = (
-            EXPLICIT_TITLE_SOURCE if display_name else UNSET_TITLE_SOURCE
+            EXPLICIT_TITLE_SOURCE
+            if display_name and not is_generic_thread_title(display_name)
+            else UNSET_TITLE_SOURCE
         )
         try:
             if resolved.scope is not None:

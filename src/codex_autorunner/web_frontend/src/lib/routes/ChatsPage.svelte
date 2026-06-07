@@ -2033,31 +2033,40 @@
   }
 
   async function commitTitleEdit(): Promise<void> {
-    if (!activeChat || titleEditingChatId !== activeChat.id || titleSaving) return;
+    const chatId = titleEditingChatId;
+    if (!chatId || titleSaving) return;
+    const editingChat = chatSummaryForId(chatId);
+    if (!editingChat || isLocalDraft(chatId) || isChatArchived(editingChat)) {
+      cancelTitleEdit();
+      return;
+    }
     const nextTitle = titleDraft.trim();
     if (!nextTitle) {
       cancelTitleEdit();
       return;
     }
-    if (nextTitle === activeChat.title) {
+    if (nextTitle === editingChat.title) {
       cancelTitleEdit();
       return;
     }
     titleSaving = true;
     composeError = null;
-    const chatId = activeChat.id;
     const result = await webApi.pma.renameChat(chatId, nextTitle);
     titleSaving = false;
     if (!result.ok) {
       composeError = result.error;
-      await tick();
-      titleInput?.focus();
+      if (activeChat?.id === chatId) {
+        await tick();
+        titleInput?.focus();
+      }
       return;
     }
     titleEditingChatId = null;
     titleDraft = '';
     await invalidateChatMutation(chatId);
-    await refreshActive(chatId, { quiet: true });
+    if (activeChat?.id === chatId) {
+      await refreshActive(chatId, { quiet: true });
+    }
   }
 
   function handleTitleKeydown(event: KeyboardEvent): void {
