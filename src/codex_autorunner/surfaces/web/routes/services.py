@@ -1643,8 +1643,6 @@ def _rewrite_proxy_html_body(
     def replace(match: re.Match[str]) -> str:
         quote = match.group("quote")
         path = match.group("path")
-        if not path or path.startswith("#") or path.startswith("?"):
-            return match.group(0)
         return f"{quote}{_join_url_path(prefix, path)}{quote}"
 
     return _ROOT_RELATIVE_HTML_URL_RE.sub(replace, text).encode(charset)
