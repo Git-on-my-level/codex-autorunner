@@ -226,7 +226,7 @@ describe('read model entity store', () => {
         enabled: false,
         updatedAt: '2026-05-11T12:00:00Z',
         jobs: [automationJob('old-1'), automationJob('old-2')],
-        jobCount: 2,
+        jobCount: 3,
         lastJob: automationJob('old-2', 'succeeded'),
         raw: { executor: { prompt: 'full detail prompt' } }
       })
@@ -239,7 +239,7 @@ describe('read model entity store', () => {
         enabled: true,
         updatedAt: '2026-05-11T12:05:00Z',
         jobs: [],
-        jobCount: 0,
+        jobCount: 3,
         lastJob: automationJob('fresh-1', 'failed'),
         raw: { shallow: true }
       })
@@ -251,7 +251,7 @@ describe('read model entity store', () => {
       enabled: true,
       updatedAt: '2026-05-11T12:05:00Z',
       lastJob: { jobId: 'fresh-1', effectiveState: 'failed' },
-      jobCount: 2,
+      jobCount: 3,
       raw: { executor: { prompt: 'full detail prompt' } }
     });
     expect(row?.jobs.map((job) => job.jobId)).toEqual(['old-1', 'old-2']);

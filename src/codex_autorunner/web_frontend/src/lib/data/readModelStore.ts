@@ -1201,10 +1201,9 @@ function shouldKeepHydratedAutomation(
   next: AutomationSummary
 ): previous is AutomationSummary {
   if (!previous) return false;
-  if (previous.jobs.length > next.jobs.length) return true;
-  const previousJobCount = previous.jobs.length || previous.jobCount;
-  const nextJobCount = next.jobs.length || next.jobCount;
-  return previousJobCount > nextJobCount;
+  const previousJobCount = Math.max(previous.jobs.length, previous.jobCount);
+  const nextJobCount = Math.max(next.jobs.length, next.jobCount);
+  return previous.jobs.length > next.jobs.length || previousJobCount > nextJobCount;
 }
 
 function cloneAutomationWorkspace(workspace: AutomationWorkspace): AutomationWorkspace {
