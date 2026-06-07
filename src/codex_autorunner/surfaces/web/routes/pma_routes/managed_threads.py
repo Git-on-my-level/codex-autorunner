@@ -25,6 +25,7 @@ from .....core.orchestration.managed_thread_timeline import (
 from .....core.orchestration.thread_titles import (
     EXPLICIT_TITLE_SOURCE,
     UNSET_TITLE_SOURCE,
+    is_generic_thread_title,
 )
 from .....core.orchestration.turn_timeline import list_turn_timeline
 from .....core.pma_automation_services import PmaAutomationThreadNotFoundError
@@ -372,7 +373,9 @@ def build_managed_thread_crud_routes(
             )
             display_name = normalize_optional_text(payload.name)
             metadata["title_source"] = (
-                EXPLICIT_TITLE_SOURCE if display_name else UNSET_TITLE_SOURCE
+                EXPLICIT_TITLE_SOURCE
+                if display_name and not is_generic_thread_title(display_name)
+                else UNSET_TITLE_SOURCE
             )
             try:
                 if resolved.scope is not None:

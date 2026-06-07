@@ -79,6 +79,7 @@ from .orchestration.runtime_bindings import (
 from .orchestration.thread_titles import (
     EXPLICIT_TITLE_SOURCE,
     FIRST_MESSAGE_TITLE_SOURCE,
+    PROVIDER_TITLE_SOURCE,
     choose_owned_thread_title,
     is_deprioritized_thread_title,
     is_generic_thread_title,
@@ -1293,9 +1294,14 @@ class ManagedThreadStore:
                 and incoming_title is not None
                 and not is_generic_thread_title(incoming_title)
             )
+            may_replace_sourced_title = (
+                thread_title_source_allows_replacement(current_title_source)
+                and incoming_title is not None
+                and not is_generic_thread_title(incoming_title)
+            )
             next_title = (
                 incoming_title
-                if may_replace_preview_title
+                if may_replace_preview_title or may_replace_sourced_title
                 else choose_owned_thread_title(
                     current_title,
                     provider_title=title,
@@ -1308,6 +1314,7 @@ class ManagedThreadStore:
                     not only_if_generic
                     or thread_title_source_allows_replacement(current_title_source)
                     or may_replace_preview_title
+                    or may_replace_sourced_title
                     or (
                         current_title_source is None
                         and (
@@ -1333,7 +1340,9 @@ class ManagedThreadStore:
                 ):
                     source = FIRST_MESSAGE_TITLE_SOURCE
                 metadata_patch = dict(metadata_patch)
-                metadata_patch["title_source"] = source or EXPLICIT_TITLE_SOURCE
+                metadata_patch["title_source"] = source or (
+                    PROVIDER_TITLE_SOURCE if only_if_generic else EXPLICIT_TITLE_SOURCE
+                )
                 metadata_patch.pop("car_title_source", None)
             updated_metadata = dict(current_metadata)
             updated_metadata.update(metadata_patch)

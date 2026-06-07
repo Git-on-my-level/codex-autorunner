@@ -2033,19 +2033,20 @@
   }
 
   async function commitTitleEdit(): Promise<void> {
-    if (!activeChat || titleEditingChatId !== activeChat.id || titleSaving) return;
+    const chatId = titleEditingChatId;
+    if (!chatId || titleSaving) return;
+    const editingChat = chatSummaryForId(chatId);
     const nextTitle = titleDraft.trim();
     if (!nextTitle) {
       cancelTitleEdit();
       return;
     }
-    if (nextTitle === activeChat.title) {
+    if (editingChat && nextTitle === editingChat.title) {
       cancelTitleEdit();
       return;
     }
     titleSaving = true;
     composeError = null;
-    const chatId = activeChat.id;
     const result = await webApi.pma.renameChat(chatId, nextTitle);
     titleSaving = false;
     if (!result.ok) {

@@ -1204,6 +1204,29 @@ def test_create_managed_thread_without_name_marks_title_unset(hub_env) -> None:
     assert stored["metadata"]["title_source"] == "unset"
 
 
+def test_create_managed_thread_with_generic_name_marks_title_unset(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "name": "New coding agent chat",
+                **_repo_owner(hub_env),
+            },
+        )
+
+    assert resp.status_code == 200
+    thread = resp.json()["thread"]
+    stored = ManagedThreadStore(hub_env.hub_root).get_thread(
+        thread["managed_thread_id"]
+    )
+    assert stored is not None
+    assert stored["name"] == "New coding agent chat"
+    assert stored["metadata"]["title_source"] == "unset"
+
+
 def test_get_managed_thread_returns_created_thread(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
 

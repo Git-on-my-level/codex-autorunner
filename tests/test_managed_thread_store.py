@@ -98,6 +98,15 @@ def test_update_thread_title_only_replaces_generic_titles(tmp_path: Path) -> Non
     assert updated_generic["metadata"]["provider_conversation_summary"] == (
         "native summary"
     )
+    assert updated_generic["metadata"]["title_source"] == "provider"
+    updated_generic_again = store.update_thread_title(
+        generic["managed_thread_id"],
+        "First visible message",
+        metadata={"title_source": "first_user_message"},
+    )
+    assert updated_generic_again is not None
+    assert updated_generic_again["name"] == "First visible message"
+    assert updated_generic_again["metadata"]["title_source"] == "first_user_message"
     assert updated_explicit is not None
     assert updated_explicit["name"] == "Release notes"
     assert "car_title_source" not in updated_explicit["metadata"]
