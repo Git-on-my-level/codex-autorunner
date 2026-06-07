@@ -292,18 +292,15 @@
       <section class="page-panel execution-panel wide workspace-ticket-queue-panel">
         <div class="panel-heading-row">
           <h2>{detail.kind === 'worktree' ? 'Worktree tickets' : 'Repo tickets'}</h2>
-          <div class="panel-heading-actions">
-            <a
-              class="ghost-button is-primary"
-              href={href(detail.newTicketHref)}
-              data-sveltekit-preload-data="tap"
-            >+ New ticket</a>
-            <a
-              class="ghost-button"
-              href={href(detail.ticketIndexHref)}
-              data-sveltekit-preload-data="tap"
-            >All tickets</a>
-          </div>
+          {#if detail.ticketOverview.total === 0}
+            <div class="panel-heading-actions">
+              <a
+                class="ghost-button"
+                href={href(detail.ticketIndexHref)}
+                data-sveltekit-preload-data="tap"
+              >All tickets</a>
+            </div>
+          {/if}
         </div>
         {@render degradedIssues(ticketIssues)}
         {#if detail.ticketOverview.total > 0}
@@ -334,16 +331,13 @@
               </a>
             {/each}
             {#if detail.ticketOverview.remaining > 0}
-              <a class="ticket-overview-more" href={href(detail.ticketIndexHref)}>
+              <span class="ticket-overview-more" aria-label={`${detail.ticketOverview.remaining} more open tickets`}>
                 +{detail.ticketOverview.remaining} more open ticket{detail.ticketOverview.remaining === 1 ? '' : 's'}
-              </a>
+              </span>
             {/if}
           {:else if ticketIssues.length === 0 && detail.ticketOverview.total === 0}
             <div class="panel-empty-card" role="status">
               <p class="panel-empty-card-title">No tickets yet for this {detail.kind}.</p>
-              <div class="panel-empty-card-actions">
-                <a class="ghost-button is-primary" href={href(detail.newTicketHref)} data-sveltekit-preload-data="tap">+ New ticket</a>
-              </div>
             </div>
           {/if}
         </div>
@@ -358,18 +352,10 @@
               Chats<span class="panel-heading-link-chevron" aria-hidden="true">→</span>
             </a>
           </h2>
-          <div class="panel-heading-actions">
-            <a class="ghost-button" href={href(detail.chatHref)} data-sveltekit-preload-data="tap">New chat</a>
-            <a class="ghost-button" href={href(detail.codingAgentChatHref)} data-sveltekit-preload-data="tap">New coding agent chat</a>
-          </div>
         </div>
         {#if detail.chatList.totalChatCount === 0}
           <div class="panel-empty-card" role="status">
             <p class="panel-empty-card-title">No chats scoped to this {detail.kind} yet.</p>
-            <div class="panel-empty-card-actions">
-              <a class="ghost-button is-primary" href={href(detail.chatHref)} data-sveltekit-preload-data="tap">+ New chat</a>
-              <a class="ghost-button" href={href(detail.codingAgentChatHref)} data-sveltekit-preload-data="tap">+ New coding agent chat</a>
-            </div>
           </div>
         {/if}
         {#if detail.chatList.totalChatCount > 0}

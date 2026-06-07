@@ -230,20 +230,23 @@ async def test_normalize_runtime_thread_raw_event_shared_lifecycle_corpus() -> N
                 assert events[0].content == expected["output_delta"]
                 assert state.best_assistant_text() == expected["output_delta"]
         elif expected["normalized_kind"] == "progress":
-            if (
-                raw["method"] in {"session.status", "session/status"}
-                and expected["session_status"] == "idle"
-            ):
-                assert events == []
-                assert state.completed_seen is True
+            if raw["method"] in {"session.status", "session/status"}:
+                session_status = expected["session_status"]
+                if session_status == "idle":
+                    # Idle is terminal-ish: no notice, marks completion.
+                    assert events == []
+                    assert state.completed_seen is True
+                elif session_status == "busy":
+                    # Busy is a content-free liveness keepalive: consumed for
+                    # liveness only, never surfaced as a progress notice.
+                    assert events == []
+                    assert state.completed_seen is False
+                else:
+                    assert isinstance(events[0], RunNotice)
+                    assert events[0].message == f"agent {expected['progress_message']}"
             else:
                 assert isinstance(events[0], RunNotice)
-                expected_message = (
-                    f"agent {expected['progress_message']}"
-                    if raw["method"] in {"session.status", "session/status"}
-                    else expected["progress_message"]
-                )
-                assert events[0].message == expected_message
+                assert events[0].message == expected["progress_message"]
         elif expected["normalized_kind"] == "permission_requested":
             assert isinstance(events[0], ApprovalRequested)
             assert events[0].request_id == expected["permission_request_id"]
@@ -446,10 +449,13 @@ async def test_normalize_runtime_thread_raw_event_emits_progress_for_session_sta
         },
         properties_busy_state,
     )
-    assert isinstance(properties_busy[0], RunNotice)
-    assert properties_busy[0].kind == "progress"
-    assert properties_busy[0].message == "agent busy"
+    # A bare "busy" status is a liveness keepalive: it advances liveness state
+    # but must not surface as a renderable progress notice (which would render an
+    # empty "agent busy" reasoning step and inflate turn activity counts).
+    assert properties_busy == []
     assert properties_busy_state.completed_seen is False
+    assert properties_busy_state.last_runtime_method == "session.status"
+    assert isinstance(properties_busy_state.last_progress_at, str)
 
     properties_idle_state = RuntimeThreadRunEventState()
     properties_idle = await normalize_runtime_thread_raw_event(

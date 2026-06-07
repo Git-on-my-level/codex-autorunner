@@ -149,6 +149,9 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('Surfaced artifacts');
     expect(body).toContain('Chats');
     expect(body).toContain('configured model');
+    expect(body.match(/\+ New chat/g)).toHaveLength(1);
+    expect(body.match(/\+ New ticket/g)).toHaveLength(1);
+    expect(body).not.toContain('New coding agent chat');
     expect(body).not.toContain('Child worktrees');
     expect(body).not.toContain('Activity');
     expect(body).not.toContain('Open chat');
@@ -209,6 +212,9 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('href="/repos/repo-1/contextspace"');
     expect(body).toContain('Chats');
     expect(body).toContain('href="/chats?new=repo:repo-1&amp;kind=pma"');
+    expect(body.match(/\+ New chat/g)).toHaveLength(1);
+    expect(body.match(/\+ New ticket/g)).toHaveLength(1);
+    expect(body).not.toContain('New coding agent chat');
     expect(body).not.toContain('Terminal');
     expect(body).not.toContain('Analytics');
     const tickets = body.indexOf('Repo tickets');

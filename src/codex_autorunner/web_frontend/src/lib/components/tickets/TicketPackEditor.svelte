@@ -23,20 +23,21 @@
     agents?: JsonRecord[];
   } = $props();
 
-  let expandedIndex = $state<number | null>(null);
+  let expandedIndex = $state<number | null>(0);
 
+  // Auto-expand the first ticket only when a pack first appears; a deliberate
+  // collapse to `null` must stick. Clamp the index if the pack later shrinks.
+  let lastTicketCount = 0;
   $effect(() => {
-    if (tickets.length === 0) {
+    const count = tickets.length;
+    if (count === 0) {
       expandedIndex = null;
-      return;
-    }
-    if (expandedIndex === null) {
+    } else if (lastTicketCount === 0) {
       expandedIndex = 0;
-      return;
+    } else if (expandedIndex !== null && expandedIndex >= count) {
+      expandedIndex = count - 1;
     }
-    if (expandedIndex >= tickets.length) {
-      expandedIndex = tickets.length - 1;
-    }
+    lastTicketCount = count;
   });
 
   function updateTicket(index: number, ticket: TicketPackTicket): void {
@@ -228,7 +229,7 @@
   }
 
   .ticket-card-path {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--font-mono);
   }
 
   .ticket-card-side {

@@ -794,6 +794,16 @@ class TestSessionUpdateDecoder:
         assert events == []
         assert state.completed_seen is True
 
+    def test_session_status_busy_is_liveness_only(self) -> None:
+        # The bare "busy" keepalive must be consumed for liveness only — never
+        # surfaced as an "agent busy" progress notice/reasoning step.
+        state, ctx = _ctx("session.status", {"status": {"type": "busy"}})
+        events = self.decoder.decode(
+            "session.status", {"status": {"type": "busy"}}, state, ctx
+        )
+        assert events == []
+        assert state.completed_seen is False
+
 
 class TestErrorDecoder:
     def setup_method(self) -> None:

@@ -2,6 +2,7 @@ import { browser } from '$app/environment';
 import type { ApiError } from '$lib/api/client';
 import {
   canonicalChatIndexWindowKey,
+  previewServicesWindowKey,
   readModelEntityStore,
   repoWorktreeWindowKey,
   type ReadModelEntityState,
@@ -38,10 +39,12 @@ export type ReadModelLoaderResult =
 
 export const readModelEntityTags = {
   chatIndex: 'entity:chat:index',
+  automationWorkspace: 'entity:automation:workspace',
   repoWorktreeIndex: 'entity:repo-worktree:index',
   chat: (chatId: string) => `entity:chat:${chatId}` as const,
   repo: (repoId: string) => `entity:repo:${repoId}` as const,
   worktree: (worktreeId: string) => `entity:worktree:${worktreeId}` as const,
+  serviceIndex: 'entity:service:index',
   ticket: (ticketId: string) => `entity:ticket:${ticketId}` as const,
   ticketIndex: 'entity:ticket:index' as const
 } as const;
@@ -90,6 +93,23 @@ export async function ensureChatDetailLoaded(
   });
 }
 
+export async function ensureAutomationWorkspaceLoaded(
+  options: ReadModelLoaderOptions = {}
+): Promise<ReadModelLoaderResult> {
+  const tags = [readModelEntityTags.automationWorkspace];
+  return ensureSnapshotLoaded({
+    tags,
+    options,
+    isCached: (state) => Boolean(state.automationWorkspace),
+    fetchAndApply: async (client, store) => {
+      const result = await client.automationWorkspaceIndex();
+      if (!result.ok) return result;
+      store.applyAutomationWorkspaceSnapshot(result.data);
+      return result;
+    }
+  });
+}
+
 export async function ensureRepoWorktreeIndexLoaded(
   options: ReadModelLoaderOptions & { limit?: number } = {}
 ): Promise<ReadModelLoaderResult> {
@@ -109,6 +129,24 @@ export async function ensureRepoWorktreeIndexLoaded(
       store.applyRepoWorktreeTopologySnapshot(topology.data);
       store.applyRepoWorktreeRuntimeSnapshot(runtime.data);
       return runtime;
+    }
+  });
+}
+
+export async function ensureServicesLoaded(
+  options: ReadModelLoaderOptions & { scope?: string | null } = {}
+): Promise<ReadModelLoaderResult> {
+  const tags = [readModelEntityTags.serviceIndex];
+  const scope = options.scope ?? null;
+  return ensureSnapshotLoaded({
+    tags,
+    options,
+    isCached: (state) => Boolean(state.previewServices[previewServicesWindowKey(scope)]),
+    fetchAndApply: async (client, store) => {
+      const result = await client.servicesReadModel(scope);
+      if (!result.ok) return result;
+      store.applyServicesReadModelSnapshot(result.data, scope);
+      return result;
     }
   });
 }

@@ -1,5 +1,5 @@
 import { writable, type Readable } from 'svelte/store';
-import type { ChatQueuedTurn } from '$lib/api/client';
+import type { AutomationSummary, AutomationWorkspace, ChatQueuedTurn } from '$lib/api/client';
 import { chatFacetRequestIsEmpty, normalizeChatFacetRequest } from '$lib/api/readModelContracts';
 import type {
   ChatArtifactSummary,
@@ -22,6 +22,8 @@ import type {
   RepoWorktreePatchEvent,
   RepoWorktreeRuntimeSnapshot,
   RepoWorktreeTopologySnapshot,
+  PreviewServiceReadModel,
+  PreviewServicesReadModel,
   RuntimeProjection,
   TicketDetailPatchEvent,
   TicketDetailSnapshot,
@@ -45,6 +47,8 @@ export type EntityKind =
   | 'ticket'
   | 'run'
   | 'artifact'
+  | 'service'
+  | 'automation'
   | 'agent'
   | 'model';
 
@@ -132,6 +136,13 @@ export type RepoWorktreeIndexWindow = {
   lastLoadedAt: string;
 };
 
+export type PreviewServicesCacheEntry = {
+  key: string;
+  scope: string | null;
+  model: PreviewServicesReadModel;
+  lastLoadedAt: string;
+};
+
 export type ReadModelEntityState = {
   activeChatId: string | null;
   cursors: Record<string, ProjectionCursor>;
@@ -156,6 +167,8 @@ export type ReadModelEntityState = {
   worktrees: Record<string, WorktreeTopology>;
   worktreeOrder: string[];
   repoWorktreeWindows: Record<string, RepoWorktreeIndexWindow>;
+  previewServices: Record<string, PreviewServicesCacheEntry>;
+  automationWorkspace: AutomationWorkspace | null;
   runtime: Record<string, RepoWorktreeRuntimeEntity>;
   tickets: Record<string, TicketProjection>;
   ticketSummaries: Record<string, TicketSummary>;
@@ -242,6 +255,8 @@ export function createInitialReadModelState(): ReadModelEntityState {
     worktrees: {},
     worktreeOrder: [],
     repoWorktreeWindows: {},
+    previewServices: {},
+    automationWorkspace: null,
     runtime: {},
     tickets: {},
     ticketSummaries: {},
@@ -264,6 +279,8 @@ export function createInitialReadModelState(): ReadModelEntityState {
       ticket: {},
       run: {},
       artifact: {},
+      service: {},
+      automation: {},
       agent: {},
       model: {}
     },
@@ -665,6 +682,52 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     this.commit(next);
   }
 
+  applyServicesReadModelSnapshot(snapshot: PreviewServicesReadModel, scope: string | null = null): void {
+    const next = cloneState(this.state);
+    const key = previewServicesWindowKey(scope);
+    next.previewServices[key] = {
+      key,
+      scope: normalizedPreviewServicesScope(scope),
+      model: clonePreviewServicesReadModel(snapshot),
+      lastLoadedAt: new Date().toISOString()
+    };
+    for (const service of snapshot.services) bump(next, 'service', service.serviceId);
+    this.commit(next);
+  }
+
+  applyAutomationWorkspaceSnapshot(snapshot: AutomationWorkspace): void {
+    const next = cloneState(this.state);
+    next.automationWorkspace = mergeAutomationWorkspaceSnapshot(snapshot, this.state.automationWorkspace);
+    for (const automation of next.automationWorkspace.automations) bump(next, 'automation', automation.id);
+    this.commit(next);
+  }
+
+  replaceAutomationSummary(updated: AutomationSummary): void {
+    if (!this.state.automationWorkspace) return;
+    const next = cloneState(this.state);
+    const workspace = cloneAutomationWorkspace(this.state.automationWorkspace);
+    const existingIndex = workspace.automations.findIndex((automation) => automation.id === updated.id);
+    workspace.automations =
+      existingIndex >= 0
+        ? workspace.automations.map((automation) => (automation.id === updated.id ? cloneAutomationSummary(updated) : automation))
+        : [...workspace.automations, cloneAutomationSummary(updated)];
+    workspace.summary = automationSummaryCounts(workspace.automations);
+    next.automationWorkspace = workspace;
+    bump(next, 'automation', updated.id);
+    this.commit(next);
+  }
+
+  removeAutomationSummary(automationId: string): void {
+    if (!this.state.automationWorkspace) return;
+    const next = cloneState(this.state);
+    const workspace = cloneAutomationWorkspace(this.state.automationWorkspace);
+    workspace.automations = workspace.automations.filter((automation) => automation.id !== automationId);
+    workspace.summary = automationSummaryCounts(workspace.automations);
+    next.automationWorkspace = workspace;
+    bump(next, 'automation', automationId);
+    this.commit(next);
+  }
+
   applyRepoDetailSnapshot(snapshot: RepoWorktreeDetailSnapshot): void {
     const next = cloneState(this.state);
     next.repoDetails[snapshot.ownerId] = snapshot;
@@ -994,6 +1057,8 @@ function cloneState(state: ReadModelEntityState): ReadModelEntityState {
     worktrees: { ...state.worktrees },
     worktreeOrder: [...state.worktreeOrder],
     repoWorktreeWindows: Object.fromEntries(Object.entries(state.repoWorktreeWindows).map(([key, window]) => [key, cloneRepoWorktreeIndexWindow(window)])),
+    previewServices: Object.fromEntries(Object.entries(state.previewServices).map(([key, entry]) => [key, clonePreviewServicesCacheEntry(entry)])),
+    automationWorkspace: state.automationWorkspace ? cloneAutomationWorkspace(state.automationWorkspace) : null,
     runtime: { ...state.runtime },
     tickets: { ...state.tickets },
     ticketSummaries: { ...state.ticketSummaries },
@@ -1016,6 +1081,8 @@ function cloneState(state: ReadModelEntityState): ReadModelEntityState {
       ticket: { ...state.versions.ticket },
       run: { ...state.versions.run },
       artifact: { ...state.versions.artifact },
+      service: { ...state.versions.service },
+      automation: { ...state.versions.automation },
       agent: { ...state.versions.agent },
       model: { ...state.versions.model }
     }
@@ -1057,6 +1124,114 @@ function cloneRepoWorktreeIndexWindow(window: RepoWorktreeIndexWindow): RepoWork
     topologyWindow: window.topologyWindow ? { ...window.topologyWindow } : null,
     runtimeWindow: window.runtimeWindow ? { ...window.runtimeWindow } : null
   };
+}
+
+export function previewServicesWindowKey(scope: string | null | undefined = null): string {
+  return normalizedPreviewServicesScope(scope) ?? 'all';
+}
+
+function normalizedPreviewServicesScope(scope: string | null | undefined): string | null {
+  const trimmed = scope?.trim();
+  return trimmed ? trimmed : null;
+}
+
+export function selectPreviewServicesReadModel(
+  state: ReadModelEntityState,
+  scope: string | null | undefined = null
+): PreviewServicesReadModel | null {
+  return state.previewServices[previewServicesWindowKey(scope)]?.model ?? null;
+}
+
+export function selectAutomationWorkspace(state: ReadModelEntityState): AutomationWorkspace | null {
+  return state.automationWorkspace;
+}
+
+function clonePreviewServicesCacheEntry(entry: PreviewServicesCacheEntry): PreviewServicesCacheEntry {
+  return {
+    ...entry,
+    model: clonePreviewServicesReadModel(entry.model)
+  };
+}
+
+function clonePreviewServicesReadModel(model: PreviewServicesReadModel): PreviewServicesReadModel {
+  return {
+    services: model.services.map((service) => clonePreviewService(service)),
+    counts: { ...model.counts }
+  };
+}
+
+function clonePreviewService(service: PreviewServiceReadModel): PreviewServiceReadModel {
+  return {
+    ...service,
+    scopeLinks: service.scopeLinks.map((link) => ({ ...link })),
+    restartPolicy: { ...service.restartPolicy },
+    healthCheck: service.healthCheck ? { ...service.healthCheck } : null,
+    logs: service.logs ? { ...service.logs } : null,
+    metadata: { ...service.metadata },
+    capabilities: { ...service.capabilities },
+    desiredState: { ...service.desiredState },
+    observedState: { ...service.observedState },
+    raw: { ...service.raw }
+  };
+}
+
+function mergeAutomationWorkspaceSnapshot(
+  snapshot: AutomationWorkspace,
+  previous: AutomationWorkspace | null
+): AutomationWorkspace {
+  if (!previous) return cloneAutomationWorkspace(snapshot);
+  const previousById = new Map(previous.automations.map((automation) => [automation.id, automation]));
+  const next = cloneAutomationWorkspace(snapshot);
+  next.automations = next.automations.map((automation) => {
+    const previousAutomation = previousById.get(automation.id);
+    return shouldKeepHydratedAutomation(previousAutomation, automation)
+      ? cloneAutomationSummary({
+          ...automation,
+          jobs: previousAutomation.jobs,
+          jobCount: Math.max(automation.jobCount, previousAutomation.jobCount, previousAutomation.jobs.length),
+          raw: previousAutomation.raw
+        })
+      : automation;
+  });
+  return next;
+}
+
+function shouldKeepHydratedAutomation(
+  previous: AutomationSummary | undefined,
+  next: AutomationSummary
+): previous is AutomationSummary {
+  if (!previous) return false;
+  const previousJobCount = Math.max(previous.jobs.length, previous.jobCount);
+  const nextJobCount = Math.max(next.jobs.length, next.jobCount);
+  return previous.jobs.length > next.jobs.length || previousJobCount > nextJobCount;
+}
+
+function cloneAutomationWorkspace(workspace: AutomationWorkspace): AutomationWorkspace {
+  return {
+    ...workspace,
+    automations: workspace.automations.map(cloneAutomationSummary),
+    presets: workspace.presets.map((preset) => cloneJson(preset)),
+    summary: { ...workspace.summary },
+    targetOptions: workspace.targetOptions.map((option) => cloneJson(option)),
+    agentDefaults: cloneJson(workspace.agentDefaults)
+  };
+}
+
+function cloneAutomationSummary(automation: AutomationSummary): AutomationSummary {
+  return cloneJson(automation);
+}
+
+function automationSummaryCounts(automations: AutomationSummary[]): AutomationWorkspace['summary'] {
+  return {
+    total: automations.length,
+    active: automations.filter((automation) => automation.enabled).length,
+    paused: automations.filter((automation) => !automation.enabled).length,
+    failedJobs: automations.filter((automation) => automation.lastJob?.effectiveState === 'failed').length
+  };
+}
+
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 function cloneTimelineProjection(timeline: TimelineProjection): TimelineProjection {

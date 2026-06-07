@@ -344,6 +344,7 @@
   let loadingMoreChats = $state(false);
   let refreshingActive = $state(false);
   let sending = $state(false);
+  let stopping = $state(false);
   let creating = $state(false);
   let archiving = $state(false);
   let bulkRetireRequestedCount = $state<number | null>(null);
@@ -810,6 +811,7 @@
   const showStartPicker = $derived(chatDetailDisplay.showStartPicker);
   const hasRunnableDraft = $derived(chatDetailDisplay.hasRunnableDraft);
   const canInterruptWithDraft = $derived(chatDetailDisplay.canInterruptWithDraft);
+  const canStopRun = $derived(chatDetailDisplay.canStopRun);
   const composerWillQueue = $derived(chatDetailDisplay.composerWillQueue);
   const slashSuggestions = $derived<SlashCommandSuggestion[]>(
     buildSlashCommandSuggestions(draft, {
@@ -2139,6 +2141,22 @@
 
   async function interruptWithDraft(): Promise<void> {
     await chatSendController.interruptWithDraft(canInterruptWithDraft);
+  }
+
+  async function stopRun(): Promise<void> {
+    if (!activeChatId || stopping) return;
+    stopping = true;
+    try {
+      const result = await webApi.pma.interruptThread(activeChatId);
+      if (!result.ok) {
+        composeError = result.error;
+      } else {
+        showCommandNotice('Stopping the current turn…');
+        await refreshActive(activeChatId, { quiet: true });
+      }
+    } finally {
+      stopping = false;
+    }
   }
 
   async function cancelQueuedTurn(turn: ChatQueuedTurn, options: { confirmed?: boolean } = {}): Promise<void> {
@@ -3617,14 +3635,30 @@
           Interrupt
         </button>
       {/if}
-      <button
-        class="send-button"
-        type="submit"
-        disabled={!hasRunnableDraft}
-        title="Send (⌘/Ctrl+Enter)"
-      >
-        {sending ? (composerWillQueue ? 'Queueing' : 'Sending') : composerWillQueue ? 'Queue' : 'Send'}
-      </button>
+      {#if canStopRun}
+        <button
+          class="send-button stop-button"
+          type="button"
+          disabled={stopping}
+          onclick={stopRun}
+          aria-label="Stop the current turn"
+          title="Stop the current turn"
+        >
+          <svg class="stop-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="7" y="7" width="10" height="10" rx="1.5" />
+          </svg>
+          <span>{stopping ? 'Stopping' : 'Stop'}</span>
+        </button>
+      {:else}
+        <button
+          class="send-button"
+          type="submit"
+          disabled={!hasRunnableDraft}
+          title="Send (⌘/Ctrl+Enter)"
+        >
+          {sending ? (composerWillQueue ? 'Queueing' : 'Sending') : composerWillQueue ? 'Queue' : 'Send'}
+        </button>
+      {/if}
     </form>
     {#if showAgentSetupModal}
       <div class="modal-backdrop" role="presentation" onclick={closeAgentSetupModal}>

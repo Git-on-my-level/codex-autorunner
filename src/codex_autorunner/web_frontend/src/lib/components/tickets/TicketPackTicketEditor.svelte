@@ -316,7 +316,7 @@
     background: var(--color-surface-muted);
     padding: 4px 8px;
     color: var(--color-ink);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: var(--font-size-0);
   }
   .ticket-path-input:focus {

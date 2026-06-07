@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import ContentSkeleton from '$lib/components/ContentSkeleton.svelte';
   import PageHero from '$lib/components/PageHero.svelte';
@@ -35,9 +35,20 @@
     serviceUptimeLabel,
     type ServiceFilters
   } from '$lib/viewModels/services';
+  import {
+    ensureServicesLoaded,
+    readModelEntityStore,
+    selectPreviewServicesReadModel
+  } from '$lib/data';
 
-  let model = $state<PreviewServicesReadModel | null>(null);
-  let loading = $state(true);
+  let { data = { status: 'cold' as const, tags: [] } } = $props();
+  let readModelState = $state(readModelEntityStore.snapshot());
+  let unsubscribeReadModels: (() => void) | null = null;
+  const model = $derived<PreviewServicesReadModel | null>(selectPreviewServicesReadModel(readModelState));
+  const hasCachedServices = $derived(Boolean(model));
+  let refreshing = $state(false);
+  let coldHydrating = $state(true);
+  const loading = $derived((data.status === 'cold' && coldHydrating && !hasCachedServices) || (refreshing && !hasCachedServices));
   let actionId = $state<string | null>(null);
   let error = $state<ApiError | null>(null);
   let notice = $state<string | null>(null);
@@ -113,31 +124,38 @@
   const createModeHint = $derived(createModeHints[createMode]);
 
   onMount(() => {
-    void loadServices();
+    unsubscribeReadModels = readModelEntityStore.subscribe((state) => {
+      readModelState = state;
+    });
+    void loadServices({ showLoading: data.status === 'cold' && !hasCachedServices });
     return () => {
       if (copyTimer) clearTimeout(copyTimer);
     };
   });
 
-  async function loadServices(): Promise<void> {
-    loading = true;
+  onDestroy(() => {
+    unsubscribeReadModels?.();
+  });
+
+  async function loadServices(options: { showLoading?: boolean } = {}): Promise<void> {
+    if (options.showLoading !== false) refreshing = true;
     error = null;
-    const result = await webApi.hub.getServicesReadModel();
-    loading = false;
-    if (!result.ok) {
-      error = result.error;
-      return;
+    try {
+      const result = await ensureServicesLoaded({ refresh: true });
+      if (result.status === 'error') {
+        error = result.error;
+      }
+    } finally {
+      coldHydrating = false;
+      refreshing = false;
     }
-    model = result.data;
   }
 
   async function refreshServices(): Promise<void> {
-    const result = await webApi.hub.getServicesReadModel();
-    if (!result.ok) {
+    const result = await ensureServicesLoaded({ refresh: true });
+    if (result.status === 'error') {
       error = result.error;
-      return;
     }
-    model = result.data;
   }
 
   async function runLifecycle(service: PreviewServiceReadModel, action: PreviewServiceAction): Promise<void> {
@@ -564,7 +582,7 @@
           {showRegister ? 'Hide register' : '+ Register service'}
         </button>
       {/if}
-      <button class="ghost-button" type="button" onclick={loadServices} disabled={loading}>Refresh</button>
+      <button class="ghost-button" type="button" onclick={() => loadServices()} disabled={loading}>Refresh</button>
     {/snippet}
   </PageHero>
 
@@ -574,7 +592,7 @@
     <div class="state-panel error">
       <strong>Could not load services</strong>
       <p>{error.message}</p>
-      <button class="ghost-button" type="button" onclick={loadServices}>Retry</button>
+      <button class="ghost-button" type="button" onclick={() => loadServices()}>Retry</button>
     </div>
   {:else}
     {#if error}
@@ -688,7 +706,7 @@
               <th>Class</th>
               <th>Target</th>
               <th>Uptime</th>
-              <th>Owner</th>
+              <th class="col-pid">PID</th>
               <th class="col-links">Links</th>
               <th class="col-actions">Actions</th>
             </tr>
@@ -724,7 +742,7 @@
                 </td>
                 <td><span class="truncate cell-muted">{serviceTargetLabel(service)}</span></td>
                 <td class="cell-num">{serviceUptimeLabel(service)}</td>
-                <td class="cell-muted">{service.ownerPid ? `pid ${service.ownerPid}` : service.createdBy ?? '—'}</td>
+                <td class="cell-num col-pid">{service.ownerPid ?? '—'}</td>
                 <td class="col-links">
                   {#if eligibility.canOpen}
                     <div class="link-actions">
@@ -1067,10 +1085,12 @@
     vertical-align: middle;
   }
 
+  .services-table .col-pid,
   .services-table .col-links,
   .services-table .col-actions {
     text-align: right;
     white-space: nowrap;
+    width: 1%;
   }
 
   .services-table tbody tr {
@@ -1217,6 +1237,10 @@
     flex-wrap: nowrap;
     align-items: center;
     gap: var(--space-1);
+  }
+
+  .link-actions {
+    justify-content: flex-end;
   }
 
   .row-actions {

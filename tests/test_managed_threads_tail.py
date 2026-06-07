@@ -97,9 +97,49 @@ def test_runtime_tail_merges_live_stream_deltas_into_stable_progress_item() -> N
         )
         for event in serialized
     ]
+    assert len(timeline_items) == 3
     assert {item["item_id"] for item in timeline_items if item is not None} == {
-        "turn:turn-1:intermediate:progress:assistant_update:0001"
+        "turn:turn-1:intermediate:0001",
+        "turn:turn-1:intermediate:0002",
+        "turn:turn-1:intermediate:0003",
     }
+    assert all(
+        item["identity"]["progress_item_ids"] == ["progress:assistant_update:0001"]
+        for item in timeline_items
+        if item is not None
+    )
+
+
+def test_runtime_tail_suppresses_busy_liveness_heartbeat() -> None:
+    # A bare "busy" session.status is a liveness keepalive: it must not produce
+    # any renderable tail row (which would surface as an empty "agent busy"
+    # reasoning step), while still advancing liveness state so idle/stall
+    # detection keeps working during silent turns.
+    state = tail_stream.RuntimeThreadRunEventState()
+    events = asyncio.run(
+        _serialize_runtime_raw_tail_events(
+            {"method": "session.status", "params": {"status": {"type": "busy"}}},
+            state,
+            level="info",
+            event_id_start=0,
+            default_received_at="2026-04-06T10:00:00+00:00",
+        )
+    )
+    assert events == []
+    assert state.last_runtime_method == "session.status"
+
+    # A genuine non-busy status still surfaces, proving suppression is scoped to
+    # the content-free keepalive rather than all session.status events.
+    running = asyncio.run(
+        _serialize_runtime_raw_tail_events(
+            {"method": "session.status", "params": {"status": {"type": "running"}}},
+            tail_stream.RuntimeThreadRunEventState(),
+            level="info",
+            event_id_start=0,
+            default_received_at="2026-04-06T10:00:00+00:00",
+        )
+    )
+    assert running != []
 
 
 def _seed_managed_thread_with_events(hub_env, app) -> tuple[str, str]:

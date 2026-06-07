@@ -1158,7 +1158,15 @@ class SessionUpdateDecoder(MessageDecoder):
             state.completed_seen = True
             return []
         status_type = acp.session_status or ""
-        if status_type and status_type != "idle":
+        # A bare "busy" status is a liveness heartbeat (see _emit_busy_heartbeats
+        # in agents/opencode/progress_synthesis.py): it carries no content and
+        # exists only to keep silent turns warm. Surfacing it as a progress
+        # notice renders an empty "agent busy" reasoning step downstream and
+        # inflates turn activity counts, so consume it for liveness only. This
+        # mirrors opencode_event_is_progress_signal, which already excludes busy
+        # heartbeats from idle/stall timers; liveness is still recorded via
+        # note_runtime_progress() in normalize_runtime_thread_message().
+        if status_type and status_type.strip().lower() not in {"idle", "busy"}:
             return [
                 RunNotice(
                     timestamp=ts,

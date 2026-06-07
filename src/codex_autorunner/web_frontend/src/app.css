@@ -177,7 +177,6 @@ a {
 
 .brand-row,
 .topbar,
-.chat-header,
 .new-chat-controls,
 .selector-row,
 .filter-row,
@@ -1753,59 +1752,42 @@ a.scope-chip-label:hover {
   padding: var(--space-3) var(--space-4);
 }
 
+/* Two-column grid at every width: title/scope/subtitle in column 1. Tools stay
+   in a single grid cell so the overflow menu + stream status stack with a
+   stable right edge without claiming a full-width row on narrow viewports. */
 .chat-header {
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: var(--space-4);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  grid-template-rows: auto auto auto;
+  column-gap: var(--space-4);
+  row-gap: 2px;
+  align-items: start;
   padding-bottom: var(--space-3);
   border-bottom: 1px solid var(--color-border-subtle);
 }
 
-/* Wide viewports: two-column grid; title/scope/subtitle in column 1. Tools stay
-   in a single grid cell so Retire + stream status stack with a stable right
-   edge (separate grid items + display:contents could shrink the Retire row
-   when “Connecting…” appears). */
-@media (min-width: 761px) {
-  .chat-header {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) max-content;
-    grid-template-rows: auto auto auto;
-    column-gap: var(--space-4);
-    row-gap: 2px;
-    justify-content: initial;
-    align-items: start;
-  }
+.chat-header-copy {
+  display: contents;
+}
 
-  .chat-header-copy {
-    display: contents;
-  }
+.chat-header-copy > h1,
+.chat-header-copy > .chat-title-button,
+.chat-header-copy > .chat-title-editor {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+}
 
-  .chat-header-tools {
-    grid-column: 2;
-    grid-row: 1 / -1;
-    justify-self: end;
-    align-self: start;
-  }
+.chat-header-copy > .chat-header-scope-line {
+  grid-column: 1;
+  grid-row: 2;
+  min-width: 0;
+}
 
-  .chat-header-copy > h1,
-  .chat-header-copy > .chat-title-button,
-  .chat-header-copy > .chat-title-editor {
-    grid-column: 1;
-    grid-row: 1;
-    min-width: 0;
-  }
-
-  .chat-header-copy > .chat-header-scope-line {
-    grid-column: 1;
-    grid-row: 2;
-    min-width: 0;
-  }
-
-  .chat-header-copy > .chat-header-subtitle {
-    grid-column: 1;
-    grid-row: 3;
-    min-width: 0;
-  }
+.chat-header-copy > .chat-header-subtitle {
+  grid-column: 1;
+  grid-row: 3;
+  min-width: 0;
 }
 
 .chat-header h1,
@@ -1854,20 +1836,16 @@ a.scope-chip-label:hover {
   box-shadow: 0 0 0 2px var(--color-accent-soft);
 }
 
-.chat-header-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
 .chat-header-tools {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   justify-content: flex-start;
   gap: 4px;
-  flex: 0 0 auto;
+  grid-column: 2;
+  grid-row: 1 / -1;
+  justify-self: end;
+  align-self: start;
   min-width: 0;
 }
 
@@ -2987,10 +2965,24 @@ textarea:hover {
   overflow-wrap: anywhere;
 }
 
+/* Expanded turn activity reads as a single vertical thread: a hairline rail
+   runs down the left gutter so the sequence of reasoning steps and tool calls
+   is scannable as one ordered timeline rather than a flat stack of rows. */
 .turn-summary-trace {
+  position: relative;
   display: grid;
-  gap: 2px;
-  padding: var(--space-1) 0 var(--space-2) calc(8px + var(--space-2));
+  gap: var(--space-1);
+  padding: var(--space-1) 0 var(--space-2) calc(8px + var(--space-3));
+}
+
+.turn-summary-trace::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 2px;
+  bottom: var(--space-2);
+  width: 1px;
+  background: var(--color-border-subtle);
 }
 
 .thinking-trace-body {
@@ -5203,6 +5195,28 @@ textarea {
   color: var(--color-warning);
 }
 
+.stop-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-color: color-mix(in srgb, var(--color-danger) 55%, var(--color-border));
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.stop-button:hover:not(:disabled) {
+  border-color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 16%, var(--color-surface));
+  box-shadow: none;
+}
+
+.stop-icon {
+  width: 13px;
+  height: 13px;
+  fill: currentColor;
+}
+
 .send-button:hover:not(:disabled),
 .new-chat-button:hover:not(:disabled) {
   box-shadow: none;
@@ -7113,7 +7127,6 @@ textarea:disabled {
     justify-content: flex-start;
   }
 
-  .chat-header,
   .composer {
     align-items: stretch;
     flex-direction: column;
