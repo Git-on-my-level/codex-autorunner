@@ -8,6 +8,8 @@
    * Pattern follows DropdownSelect for outside-click + escape behavior.
    */
 
+  import { tick } from 'svelte';
+  import { overflowMenuPosition } from './OverflowMenu';
   import type { OverflowMenuItem } from './OverflowMenu';
 
   let {
@@ -24,15 +26,37 @@
   let activeIndex = $state(0);
   let triggerEl = $state<HTMLButtonElement | null>(null);
   let panelEl = $state<HTMLDivElement | null>(null);
+  let panelPortalParent: HTMLElement | null = null;
+  let panelTop = $state(0);
+  let panelLeft = $state(0);
 
   const selectableItems = $derived(items.filter((item) => !item.disabled));
 
-  function openPanel(): void {
+  const panelStyle = $derived(`top: ${panelTop}px; left: ${panelLeft}px;`);
+
+  function updatePanelPosition(): void {
+    if (typeof window === 'undefined' || !triggerEl) return;
+    const rect = triggerEl.getBoundingClientRect();
+    const panelRect = panelEl?.getBoundingClientRect();
+    const position = overflowMenuPosition({
+      triggerRect: rect,
+      panelWidth: panelRect?.width ?? 180,
+      panelHeight: panelRect?.height ?? 0,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight
+    });
+    panelTop = position.top;
+    panelLeft = position.left;
+  }
+
+  async function openPanel(): Promise<void> {
     if (selectableItems.length === 0) return;
     open = true;
     const firstEnabled = items.findIndex((item) => !item.disabled);
     activeIndex = firstEnabled >= 0 ? firstEnabled : 0;
-    queueMicrotask(() => panelEl?.focus());
+    await tick();
+    updatePanelPosition();
+    panelEl?.focus();
   }
 
   function closePanel(): void {
@@ -43,7 +67,7 @@
     event.preventDefault();
     event.stopPropagation();
     if (open) closePanel();
-    else openPanel();
+    else void openPanel();
   }
 
   function selectItem(item: OverflowMenuItem): void {
@@ -66,7 +90,7 @@
   function handleTriggerKeydown(event: KeyboardEvent): void {
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
-      openPanel();
+      void openPanel();
     }
   }
 
@@ -95,6 +119,29 @@
     if (triggerEl?.contains(target) || panelEl?.contains(target)) return;
     closePanel();
   }
+
+  $effect(() => {
+    if (!open || typeof window === 'undefined') return;
+    updatePanelPosition();
+    window.addEventListener('resize', updatePanelPosition);
+    window.addEventListener('scroll', updatePanelPosition, true);
+    return () => {
+      window.removeEventListener('resize', updatePanelPosition);
+      window.removeEventListener('scroll', updatePanelPosition, true);
+    };
+  });
+
+  $effect(() => {
+    if (!panelEl || typeof document === 'undefined') return;
+    panelPortalParent = document.body;
+    document.body.appendChild(panelEl);
+    return () => {
+      const parent = panelPortalParent;
+      if (parent && panelEl && panelEl.parentNode === parent) {
+        parent.removeChild(panelEl);
+      }
+    };
+  });
 </script>
 
 <svelte:window onpointerdown={onWindowPointerDown} />
@@ -127,6 +174,7 @@
       role="menu"
       aria-label={ariaLabel}
       tabindex="-1"
+      style={panelStyle}
       onkeydown={handlePanelKeydown}
     >
       {#each items as item, idx (item.label)}
@@ -198,13 +246,14 @@
   }
 
   .overflow-menu-panel {
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 0;
+    position: fixed;
     z-index: 40;
     display: flex;
     flex-direction: column;
-    min-width: 180px;
+    min-width: min(180px, calc(100vw - 16px));
+    max-width: calc(100vw - 16px);
+    max-height: calc(100vh - 16px);
+    overflow-y: auto;
     padding: 4px;
     background: var(--color-surface);
     border: 1px solid var(--color-border-subtle);
