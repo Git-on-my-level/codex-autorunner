@@ -117,6 +117,21 @@ describe('ChatTranscriptCards', () => {
     expect(body).toContain('Visible user-facing note.');
   });
 
+  it('drops a trace summary that only echoes the kind label', () => {
+    const cards: ChatTranscriptCard[] = [
+      assistantMessageCard('a1', 'Done.'),
+      intermediateCard('echo-1', 'Reticulating', 'Reticulating'),
+      intermediateCard('echo-2', 'Reticulating', 'Reticulating reticulating')
+    ];
+
+    const { body } = render(ChatTranscriptCards, { props: { cards } });
+
+    // The kind label is promoted to the primary slot and the duplicate summary
+    // is dropped, so the row reads "Reticulating" once rather than twice.
+    expect(body).toContain('<strong>Reticulating</strong>');
+    expect(body).not.toContain('<span>Reticulating</span>');
+  });
+
   it('renders context compaction as an expandable retained-context card', () => {
     const cards: ChatTranscriptCard[] = [
       {

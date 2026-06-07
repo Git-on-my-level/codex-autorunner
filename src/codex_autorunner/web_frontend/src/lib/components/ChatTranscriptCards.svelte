@@ -109,6 +109,27 @@
     return traceKindLabel(card);
   }
 
+  // A summary that merely echoes the kind label is noise: a "Foo" trace whose
+  // summary is also "Foo" (or the streamed "FooFoo" repetition of a fragment)
+  // adds nothing. Detect that case so the row shows a single clean label.
+  function isRedundantTraceSummary(summary: string, kindLabel: string): boolean {
+    const norm = (value: string) => value.toLowerCase().replace(/\s+/g, '');
+    const s = norm(summary);
+    const k = norm(kindLabel);
+    if (!s || !k) return false;
+    if (s === k) return true;
+    return s.length % k.length === 0 && k.repeat(s.length / k.length) === s;
+  }
+
+  // The secondary summary line for a generic reasoning trace, or null when it
+  // would only duplicate the kind label.
+  function traceDisplaySummary(card: Extract<ChatTranscriptCard, { kind: 'intermediate' }>): string | null {
+    const summary = traceSummaryLabel(card);
+    if (!summary) return null;
+    if (isRedundantTraceSummary(summary, traceKindLabel(card))) return null;
+    return summary;
+  }
+
   function thinkingTraceLabel(card: Extract<ChatTranscriptCard, { kind: 'intermediate' }>): string {
     const detail = card.detail;
     if (detail) {
@@ -406,10 +427,15 @@
         </div>
       </article>
     {:else}
+      {@const traceSummary = traceDisplaySummary(card)}
       <details class="tool-call-bar trace-update">
         <summary>
-          <span>{traceKindLabel(card)}</span>
-          <strong>{traceSummaryLabel(card)}</strong>
+          {#if traceSummary}
+            <span>{traceKindLabel(card)}</span>
+            <strong>{traceSummary}</strong>
+          {:else}
+            <strong>{traceKindLabel(card)}</strong>
+          {/if}
         </summary>
         <div class="thinking-trace-body markdown-body">
           {@html renderMarkdownToHtml(card.text, { openLinksInNewTab: true })}
@@ -444,10 +470,15 @@
                 </div>
               </article>
             {:else}
+              {@const nestedTraceSummary = traceDisplaySummary(traceCard)}
               <details class="tool-call-bar trace-update nested-trace">
                 <summary>
-                  <span>{traceKindLabel(traceCard)}</span>
-                  <strong>{traceSummaryLabel(traceCard)}</strong>
+                  {#if nestedTraceSummary}
+                    <span>{traceKindLabel(traceCard)}</span>
+                    <strong>{nestedTraceSummary}</strong>
+                  {:else}
+                    <strong>{traceKindLabel(traceCard)}</strong>
+                  {/if}
                 </summary>
                 <div class="thinking-trace-body markdown-body">
                   {@html renderMarkdownToHtml(traceCard.text, { openLinksInNewTab: true })}

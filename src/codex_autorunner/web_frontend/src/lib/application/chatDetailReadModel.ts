@@ -44,6 +44,7 @@ export type ChatDetailDisplayReadModel = {
   showStartPicker: boolean;
   hasRunnableDraft: boolean;
   canInterruptWithDraft: boolean;
+  canStopRun: boolean;
   composerWillQueue: boolean;
   queueDepthForCommands: number;
   runActive: boolean;
@@ -105,6 +106,9 @@ export function buildChatDetailDisplayReadModel(
     hasRunnableDraft,
     canInterruptWithDraft: Boolean(
       input.activeChat && input.displayedProgress?.status === 'running' && hasRunnableDraft
+    ),
+    canStopRun: Boolean(
+      input.activeChat && input.displayedProgress?.status === 'running' && !hasRunnableDraft
     ),
     composerWillQueue,
     queueDepthForCommands: input.queuedTurns.length || input.displayedProgress?.queueDepth || 0,

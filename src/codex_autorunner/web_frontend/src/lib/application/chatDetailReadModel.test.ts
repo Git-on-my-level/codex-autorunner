@@ -55,8 +55,27 @@ describe('chat detail state composition', () => {
     expect(model.showStartPicker).toBe(false);
     expect(model.hasRunnableDraft).toBe(true);
     expect(model.canInterruptWithDraft).toBe(true);
+    expect(model.canStopRun).toBe(false);
     expect(model.composerWillQueue).toBe(true);
     expect(model.queueDepthForCommands).toBe(1);
+  });
+
+  it('offers a stop affordance while a turn runs without a draft', () => {
+    const model = buildChatDetailDisplayReadModel({
+      transcriptCards: [{ ...userCard('turn:run-1:user', 'go', {}), turnId: 'run-1' }],
+      queuedTurns: [],
+      displayedProgress: progress('run-1', 5, []),
+      activeChat: chatSummary('chat-1'),
+      assistantSharedFileCount: 0,
+      streamState: 'connected',
+      loadingActive: false,
+      activeError: null,
+      draft: '',
+      pendingAttachmentCount: 0
+    });
+
+    expect(model.canStopRun).toBe(true);
+    expect(model.canInterruptWithDraft).toBe(false);
   });
 
   it('renders live commentary progress in the transcript for the active turn', () => {

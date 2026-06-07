@@ -424,7 +424,8 @@
   .repo-card-title {
     display: flex;
     align-items: center;
-    gap: var(--space-2);
+    flex-wrap: wrap;
+    gap: 4px var(--space-2);
     min-width: 0;
   }
 
@@ -487,6 +488,7 @@
   .chat-binding-pill {
     display: inline-flex;
     align-items: center;
+    flex: 0 0 auto;
     min-height: 18px;
     padding: 0 6px;
     border-radius: 4px;
@@ -495,12 +497,15 @@
     font-size: 10px;
     font-weight: 650;
     line-height: 1;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
     text-transform: uppercase;
   }
 
   .archive-pill {
     display: inline-flex;
     align-items: center;
+    flex: 0 0 auto;
     min-height: 18px;
     padding: 0 6px;
     border-radius: 4px;
@@ -509,6 +514,8 @@
     font-size: 10px;
     font-weight: 650;
     line-height: 1;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
     text-transform: uppercase;
   }
 
@@ -700,6 +707,15 @@
     text-transform: lowercase;
   }
 
+  /* Status pills sit alongside the name in the title rows; keep them on the
+     baseline of the row (not pinned to the top via the global flex-start) and
+     never let them get squished when the row wraps on narrow screens. */
+  .repo-card-title .status-pill,
+  .worktree-card-title .status-pill {
+    flex: 0 0 auto;
+    align-self: center;
+  }
+
   /* Worktree children — Linear-style nested list with rail */
   .worktree-list {
     --virtual-list-gap: 0;
@@ -829,7 +845,8 @@
   .worktree-card-title {
     display: flex;
     align-items: center;
-    gap: var(--space-2);
+    flex-wrap: wrap;
+    gap: 4px var(--space-2);
     min-width: 0;
   }
 
@@ -864,20 +881,27 @@
       gap: var(--space-2);
       padding: 0;
     }
+    /* Single row: avatar | title | counts. The title truncates so the count
+       chip stays inline rather than claiming its own row. */
     .repo-card {
-      grid-template-columns: auto minmax(0, 1fr);
-      grid-template-rows: auto auto;
-      row-gap: var(--space-2);
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      grid-template-rows: auto;
+      column-gap: var(--space-3);
       padding: var(--space-3) var(--space-4);
     }
+    .repo-avatar-slot {
+      grid-column: 1;
+      grid-row: 1;
+    }
     .repo-card-main {
-      grid-column: 1 / -1;
+      grid-column: 2;
       grid-row: 1;
     }
     .repo-card-counts {
-      grid-column: 1 / -1;
-      grid-row: 2;
-      justify-self: start;
+      grid-column: 3;
+      grid-row: 1;
+      justify-self: end;
+      align-self: center;
     }
     .worktree-list {
       padding: 0 var(--space-4) var(--space-3);
@@ -891,17 +915,29 @@
       left: var(--space-4);
       right: 0;
     }
+    /* Single row: dot | body | counts | actions. The title (body) truncates to
+       absorb the squeeze, so the count chips and buttons stay inline instead of
+       each claiming their own row. */
     .worktree-card {
-      grid-template-columns: 24px minmax(0, 1fr);
-      grid-template-rows: auto auto;
-      row-gap: 4px;
+      grid-template-columns: 24px minmax(0, 1fr) auto auto;
+      grid-template-rows: auto;
+      column-gap: var(--space-2);
+    }
+    .worktree-card-body {
+      grid-column: 2;
+      grid-row: 1;
     }
     .worktree-card-counts {
-      grid-column: 2;
+      grid-column: 3;
+      grid-row: 1;
+      justify-self: end;
+      align-self: center;
     }
     .worktree-card > .repo-action-buttons {
-      grid-column: 2;
+      grid-column: 4;
+      grid-row: 1;
       justify-self: end;
+      align-self: center;
     }
   }
 
