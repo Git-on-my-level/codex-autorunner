@@ -1,4 +1,4 @@
-import { mapResult, webApi, type ApiResult, type WebApiClient } from '$lib/api/client';
+import { mapResult, webApi, type ApiResult, type AutomationWorkspace, type WebApiClient } from '$lib/api/client';
 import type { TicketSummary } from '$lib/viewModels/domain';
 import {
   normalizeChatFacetRequest,
@@ -6,6 +6,7 @@ import {
   type ChatFacetRequest,
   type ChatDetailSnapshot,
   type ChatIndexSnapshot,
+  type PreviewServicesReadModel,
   type RepoWorktreeDetailSnapshot,
   type RepoWorktreeRuntimeSnapshot,
   type RepoWorktreeTopologySnapshot,
@@ -28,10 +29,12 @@ export type ChatIndexRequest = {
 export type ReadModelSnapshotClient = {
   chatIndex(request?: ChatIndexRequest): Promise<ApiResult<ChatIndexSnapshot>>;
   chatDetail(chatId: string, timelineLimit?: number): Promise<ApiResult<ChatDetailSnapshot>>;
+  automationWorkspaceIndex(): Promise<ApiResult<AutomationWorkspace>>;
   repoWorktreeTopology(kind?: 'all' | 'repo' | 'worktree', limit?: number, cursor?: string | null): Promise<ApiResult<RepoWorktreeTopologySnapshot>>;
   repoWorktreeRuntime(kind?: 'all' | 'repo' | 'worktree', limit?: number, cursor?: string | null): Promise<ApiResult<RepoWorktreeRuntimeSnapshot>>;
   repoDetail(repoId: string): Promise<ApiResult<RepoWorktreeDetailSnapshot>>;
   worktreeDetail(worktreeId: string): Promise<ApiResult<RepoWorktreeDetailSnapshot>>;
+  servicesReadModel(scope?: string | null): Promise<ApiResult<PreviewServicesReadModel>>;
   ticketDetail(ticketId: string, owner: { kind: 'repo' | 'worktree'; id: string }): Promise<ApiResult<TicketDetailSnapshot>>;
   ticketIndex(owner?: { repo?: string; worktree?: string }): Promise<ApiResult<TicketSummary[]>>;
 };
@@ -62,10 +65,12 @@ export function createReadModelSnapshotClient(api: WebApiClient = webApi): ReadM
         (payload) => mapReadModelContract<ChatDetailSnapshot>(payload)
       );
     },
+    automationWorkspaceIndex: () => api.hub.getAutomationWorkspaceIndex(),
     repoWorktreeTopology: (kind, limit, cursor) => api.readModels.repoWorktreeTopology(kind, limit, cursor),
     repoWorktreeRuntime: (kind, limit, cursor) => api.readModels.repoWorktreeRuntime(kind, limit, cursor),
     repoDetail: (repoId) => api.readModels.repoDetail(repoId),
     worktreeDetail: (worktreeId) => api.readModels.worktreeDetail(worktreeId),
+    servicesReadModel: (scope) => api.hub.getServicesReadModel(scope),
     ticketDetail: async (ticketId, owner) =>
       mapResult(await api.readModels.ticketDetail(ticketId, owner), (payload) => mapReadModelContract<TicketDetailSnapshot>(payload)),
     ticketIndex: async (owner) => api.ticketFlow.listTickets(owner)

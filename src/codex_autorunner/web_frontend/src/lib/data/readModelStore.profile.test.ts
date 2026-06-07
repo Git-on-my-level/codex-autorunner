@@ -80,6 +80,9 @@ function legacyDeepCloneState(state: ReadModelEntityState): ReadModelEntityState
     repoOrder: [...state.repoOrder],
     worktrees: { ...state.worktrees },
     worktreeOrder: [...state.worktreeOrder],
+    repoWorktreeWindows: legacyCloneRecord(state.repoWorktreeWindows),
+    previewServices: legacyCloneRecord(state.previewServices),
+    automationWorkspace: state.automationWorkspace ? JSON.parse(JSON.stringify(state.automationWorkspace)) : null,
     runtime: { ...state.runtime },
     tickets: { ...state.tickets },
     ticketSummaries: { ...state.ticketSummaries },
@@ -102,6 +105,8 @@ function legacyDeepCloneState(state: ReadModelEntityState): ReadModelEntityState
       ticket: { ...state.versions.ticket },
       run: { ...state.versions.run },
       artifact: { ...state.versions.artifact },
+      service: { ...state.versions.service },
+      automation: { ...state.versions.automation },
       agent: { ...state.versions.agent },
       model: { ...state.versions.model }
     }

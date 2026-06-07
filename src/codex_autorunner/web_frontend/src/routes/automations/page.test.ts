@@ -10,7 +10,7 @@ describe('/automations page', () => {
   }
 
   it('renders the automation workspace shell before client automation data resolves', () => {
-    const { body } = render(Page);
+    const { body } = render(Page, { props: { data: { status: 'cold', tags: [] } } });
 
     expect(body).toContain('Automations workspace');
     expect(body).toContain('skeleton-chat-list');
@@ -57,10 +57,14 @@ describe('/automations page', () => {
     expect(canToggleEnabled).toContain('return Boolean(automation.product.editable.canEnable);');
   });
 
-  it('loads the workspace index before hydrating detail, repo, and agent controls', () => {
+  it('loads cached workspace data before hydrating detail, repo, and agent controls', () => {
     const source = pageSource();
+    const loadSource = readFileSync(fileURLToPath(new URL('./[[ruleId]]/+page.ts', import.meta.url)), 'utf8');
 
-    expect(source).toContain('webApi.hub.getAutomationWorkspaceIndex()');
+    expect(loadSource).toContain('ensureAutomationWorkspaceLoaded({ depends, blocking: false })');
+    expect(source).toContain('selectAutomationWorkspace(readModelState)');
+    expect(source).toContain('ensureAutomationWorkspaceLoaded({ refresh: true })');
+    expect(source).not.toContain('webApi.hub.getAutomationWorkspaceIndex()');
     expect(source).toContain('webApi.hub.getAutomation(ruleId)');
     expect(source).toContain('webApi.hub.getAutomationTargetOptions()');
     expect(source).toContain("const presetTargetOptions = $derived(targetOptions.filter((option) => option.kind === 'repo'))");

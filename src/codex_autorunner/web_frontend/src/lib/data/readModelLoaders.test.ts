@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { READ_MODEL_CONTRACT_VERSION, type ChatDetailSnapshot, type ChatIndexSnapshot, type ProjectionCursor, type RepoWorktreeRuntimeSnapshot, type RepoWorktreeTopologySnapshot, type TicketDetailSnapshot } from '$lib/api/readModelContracts';
-import type { ApiError, ApiResult } from '$lib/api/client';
-import { ReadModelEntityStore, selectChatDetailView } from './readModelStore';
+import { READ_MODEL_CONTRACT_VERSION, type ChatDetailSnapshot, type ChatIndexSnapshot, type PreviewServicesReadModel, type ProjectionCursor, type RepoWorktreeRuntimeSnapshot, type RepoWorktreeTopologySnapshot, type TicketDetailSnapshot } from '$lib/api/readModelContracts';
+import type { ApiError, ApiResult, AutomationWorkspace } from '$lib/api/client';
+import { ReadModelEntityStore, selectAutomationWorkspace, selectChatDetailView, selectPreviewServicesReadModel } from './readModelStore';
 import type { ReadModelSnapshotClient } from './readModelClients';
 import type { TicketSummary } from '$lib/viewModels/domain';
 
@@ -110,6 +110,105 @@ describe('read model loaders', () => {
     expect(result).toEqual({ status: 'cold', tags: ['entity:chat:index'] });
     expect(depends).toHaveBeenCalledWith('entity:chat:index');
     expect(client.chatIndex).not.toHaveBeenCalled();
+  });
+
+  it('hydrates automation workspace snapshots through the shared read model store', async () => {
+    const store = new ReadModelEntityStore();
+    const client = mockClient({
+      automationWorkspaceIndex: vi.fn().mockResolvedValue(ok(automationWorkspace({ active: 1 })))
+    });
+    const depends = vi.fn();
+    const { ensureAutomationWorkspaceLoaded } = await importLoaders(true);
+
+    const result = await ensureAutomationWorkspaceLoaded({ store, client, depends });
+
+    expect(result).toEqual({ status: 'fetched', tags: ['entity:automation:workspace'] });
+    expect(depends).toHaveBeenCalledWith('entity:automation:workspace');
+    expect(client.automationWorkspaceIndex).toHaveBeenCalledWith();
+    expect(selectAutomationWorkspace(store.snapshot())?.summary.active).toBe(1);
+  });
+
+  it('keeps cached automations visible while refreshing in the background', async () => {
+    const store = new ReadModelEntityStore();
+    store.applyAutomationWorkspaceSnapshot(automationWorkspace({ generatedAt: 'cached', active: 1 }));
+    const deferred = createDeferred<ApiResult<AutomationWorkspace>>();
+    const client = mockClient({
+      automationWorkspaceIndex: vi.fn().mockReturnValue(deferred.promise)
+    });
+    const { ensureAutomationWorkspaceLoaded } = await importLoaders(true);
+
+    const result = await ensureAutomationWorkspaceLoaded({ store, client, blocking: false, refresh: true });
+
+    expect(result).toEqual({ status: 'cache-hit', tags: ['entity:automation:workspace'] });
+    expect(selectAutomationWorkspace(store.snapshot())?.generatedAt).toBe('cached');
+    deferred.resolve(ok(automationWorkspace({ generatedAt: 'fresh', active: 2 })));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(selectAutomationWorkspace(store.snapshot())?.generatedAt).toBe('fresh');
+    expect(selectAutomationWorkspace(store.snapshot())?.summary.active).toBe(2);
+  });
+
+  it('can defer automation workspace snapshots for non-blocking page loads', async () => {
+    const store = new ReadModelEntityStore();
+    const client = mockClient({
+      automationWorkspaceIndex: vi.fn().mockResolvedValue(ok(automationWorkspace({ active: 1 })))
+    });
+    const { ensureAutomationWorkspaceLoaded } = await importLoaders(true);
+
+    const result = await ensureAutomationWorkspaceLoaded({ store, client, blocking: false });
+
+    expect(result).toEqual({ status: 'cold', tags: ['entity:automation:workspace'] });
+    expect(client.automationWorkspaceIndex).not.toHaveBeenCalled();
+    expect(selectAutomationWorkspace(store.snapshot())).toBeNull();
+  });
+
+  it('hydrates services snapshots through the shared read model store', async () => {
+    const store = new ReadModelEntityStore();
+    const client = mockClient({
+      servicesReadModel: vi.fn().mockResolvedValue(ok(servicesReadModel('svc_frontend1', 'Frontend')))
+    });
+    const depends = vi.fn();
+    const { ensureServicesLoaded } = await importLoaders(true);
+
+    const result = await ensureServicesLoaded({ store, client, depends });
+
+    expect(result).toEqual({ status: 'fetched', tags: ['entity:service:index'] });
+    expect(depends).toHaveBeenCalledWith('entity:service:index');
+    expect(client.servicesReadModel).toHaveBeenCalledWith(null);
+    expect(selectPreviewServicesReadModel(store.snapshot())?.services[0]?.name).toBe('Frontend');
+  });
+
+  it('keeps cached services visible while refreshing in the background', async () => {
+    const store = new ReadModelEntityStore();
+    store.applyServicesReadModelSnapshot(servicesReadModel('svc_cached1', 'Cached'));
+    const deferred = createDeferred<ApiResult<PreviewServicesReadModel>>();
+    const client = mockClient({
+      servicesReadModel: vi.fn().mockReturnValue(deferred.promise)
+    });
+    const { ensureServicesLoaded } = await importLoaders(true);
+
+    const result = await ensureServicesLoaded({ store, client, blocking: false, refresh: true });
+
+    expect(result).toEqual({ status: 'cache-hit', tags: ['entity:service:index'] });
+    expect(selectPreviewServicesReadModel(store.snapshot())?.services[0]?.name).toBe('Cached');
+    deferred.resolve(ok(servicesReadModel('svc_fresh1', 'Fresh')));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(selectPreviewServicesReadModel(store.snapshot())?.services[0]?.name).toBe('Fresh');
+  });
+
+  it('can defer services snapshots for non-blocking page loads', async () => {
+    const store = new ReadModelEntityStore();
+    const client = mockClient({
+      servicesReadModel: vi.fn().mockResolvedValue(ok(servicesReadModel('svc_frontend1', 'Frontend')))
+    });
+    const { ensureServicesLoaded } = await importLoaders(true);
+
+    const result = await ensureServicesLoaded({ store, client, blocking: false });
+
+    expect(result).toEqual({ status: 'cold', tags: ['entity:service:index'] });
+    expect(client.servicesReadModel).not.toHaveBeenCalled();
+    expect(selectPreviewServicesReadModel(store.snapshot())).toBeNull();
   });
 
   it('hydrates repo-worktree index snapshots from existing snapshot clients', async () => {
@@ -259,14 +358,88 @@ function mockClient(overrides: Partial<Record<keyof ReadModelSnapshotClient, Ret
   return {
     chatIndex: vi.fn().mockResolvedValue(ok(chatIndexSnapshot())),
     chatDetail: vi.fn().mockResolvedValue(ok(chatDetailSnapshot())),
+    automationWorkspaceIndex: vi.fn().mockResolvedValue(ok(automationWorkspace())),
     repoWorktreeTopology: vi.fn().mockResolvedValue(ok(repoWorktreeTopologySnapshot())),
     repoWorktreeRuntime: vi.fn().mockResolvedValue(ok(repoWorktreeRuntimeSnapshot())),
     repoDetail: vi.fn(),
     worktreeDetail: vi.fn(),
+    servicesReadModel: vi.fn().mockResolvedValue(ok(servicesReadModel())),
     ticketDetail: vi.fn().mockResolvedValue(ok(ticketDetailSnapshot())),
     ticketIndex: vi.fn().mockResolvedValue(ok([])),
     ...overrides
   } as ReadModelSnapshotClient;
+}
+
+function automationWorkspace(overrides: { generatedAt?: string; active?: number } = {}): AutomationWorkspace {
+  const active = overrides.active ?? 0;
+  return {
+    automations: [],
+    presets: [],
+    summary: {
+      total: active,
+      active,
+      paused: 0,
+      failedJobs: 0
+    },
+    targetOptions: [],
+    agentDefaults: {
+      defaultAgent: 'codex',
+      defaultProfile: null,
+      defaultModel: null,
+      defaultReasoning: null,
+      raw: {}
+    },
+    generatedAt: overrides.generatedAt ?? now
+  };
+}
+
+function servicesReadModel(serviceId = 'svc_test1', name = 'Test service'): PreviewServicesReadModel {
+  return {
+    services: [
+      {
+        serviceId,
+        name,
+        kind: 'managed_command',
+        serviceClass: 'preview',
+        trustLevel: 'generated',
+        ownership: 'car_managed',
+        networkPolicy: 'loopback_only',
+        status: 'running',
+        createdBy: 'ui',
+        createdAt: now,
+        updatedAt: now,
+        scopeLinks: [],
+        scope: null,
+        carUrl: `/preview/services/${serviceId}/`,
+        previewUrl: null,
+        previewUrlExpiresAt: null,
+        proxyEnabled: true,
+        directUrl: null,
+        host: '127.0.0.1',
+        port: 5173,
+        ownerPid: 123,
+        healthCheck: null,
+        restartPolicy: {},
+        logs: null,
+        metadata: {},
+        capabilities: {},
+        desiredState: {},
+        observedState: {},
+        raw: {}
+      }
+    ],
+    counts: {
+      total: 1,
+      running: 1,
+      attention: 0,
+      managed: 1,
+      static: 0,
+      loopback: 0,
+      preview: 1,
+      application: 0,
+      infrastructure: 0
+    }
+  };
 }
 
 function ok<T>(data: T): ApiResult<T> {
@@ -279,6 +452,14 @@ function fail<T>(error: ApiError): ApiResult<T> {
 
 function apiError(message: string): ApiError {
   return { kind: 'http', status: 503, code: 'unavailable', message };
+}
+
+function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 function cursor(sequence: number, source = 'test'): ProjectionCursor {

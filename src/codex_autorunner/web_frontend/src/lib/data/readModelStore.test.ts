@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { get } from 'svelte/store';
+import type { AutomationSummary, AutomationWorkspace } from '$lib/api/client';
 import {
   READ_MODEL_CONTRACT_VERSION,
   type ChatDetailPatchEvent,
@@ -14,6 +15,7 @@ import type { ChatTranscriptCard } from '$lib/viewModels/chat';
 import {
   LIVE_PROGRESS_EVENT_LIMIT,
   ReadModelEntityStore,
+  selectAutomationWorkspace,
   selectChatDetailView,
   selectChatIndexView,
   selectChatIndexWindowView,
@@ -213,6 +215,46 @@ describe('read model entity store', () => {
     expect(typedWindow.rows.map((row) => row.chatId)).toEqual(['ticket-chat']);
     expect(typedWindow.facetCounts.category.ticket_run).toBe(1);
     expect(selectChatIndexWindowView(store.snapshot(), { facets: { categories: ['automation'] }, limit: 25 }).rows).toEqual([]);
+  });
+
+  it('preserves hydrated automation detail jobs without hiding fresh index fields', () => {
+    const store = new ReadModelEntityStore();
+    store.applyAutomationWorkspaceSnapshot(automationWorkspace([
+      automationSummary({
+        id: 'rule-1',
+        name: 'Cached detail',
+        enabled: false,
+        updatedAt: '2026-05-11T12:00:00Z',
+        jobs: [automationJob('old-1'), automationJob('old-2')],
+        jobCount: 2,
+        lastJob: automationJob('old-2', 'succeeded'),
+        raw: { executor: { prompt: 'full detail prompt' } }
+      })
+    ]));
+
+    store.applyAutomationWorkspaceSnapshot(automationWorkspace([
+      automationSummary({
+        id: 'rule-1',
+        name: 'Fresh index',
+        enabled: true,
+        updatedAt: '2026-05-11T12:05:00Z',
+        jobs: [],
+        jobCount: 0,
+        lastJob: automationJob('fresh-1', 'failed'),
+        raw: { shallow: true }
+      })
+    ]));
+
+    const row = selectAutomationWorkspace(store.snapshot())?.automations[0];
+    expect(row).toMatchObject({
+      name: 'Fresh index',
+      enabled: true,
+      updatedAt: '2026-05-11T12:05:00Z',
+      lastJob: { jobId: 'fresh-1', effectiveState: 'failed' },
+      jobCount: 2,
+      raw: { executor: { prompt: 'full detail prompt' } }
+    });
+    expect(row?.jobs.map((job) => job.jobId)).toEqual(['old-1', 'old-2']);
   });
 
   it('applies chat detail timeline patches and reconciles optimistic sends', () => {
@@ -1162,6 +1204,131 @@ function progressArtifact(id: string, progressItem: Record<string, unknown>): Su
     url: null,
     createdAt: now,
     raw: { progress_item: { item_id: id, title: id, ...progressItem } }
+  };
+}
+
+function automationWorkspace(automations: AutomationSummary[]): AutomationWorkspace {
+  return {
+    automations,
+    presets: [],
+    summary: {
+      total: automations.length,
+      active: automations.filter((automation) => automation.enabled).length,
+      paused: automations.filter((automation) => !automation.enabled).length,
+      failedJobs: automations.filter((automation) => automation.lastJob?.effectiveState === 'failed').length
+    },
+    targetOptions: [],
+    agentDefaults: {
+      defaultAgent: 'codex',
+      defaultProfile: null,
+      defaultModel: null,
+      defaultReasoning: null,
+      raw: {}
+    },
+    generatedAt: now
+  };
+}
+
+function automationSummary(overrides: Partial<AutomationSummary> = {}): AutomationSummary {
+  return {
+    id: 'rule-1',
+    name: 'Automation',
+    enabled: true,
+    systemOwned: false,
+    kind: 'scheduled',
+    executorKind: 'agent_task_turn',
+    targetPolicy: 'repo_required',
+    target: {},
+    metadata: {},
+    schedule: null,
+    lastJob: null,
+    jobs: [],
+    jobCount: 0,
+    createdAt: now,
+    updatedAt: now,
+    product: {
+      productApiVersion: 1,
+      editable: {
+        canEnable: true,
+        canRename: true,
+        canEditSchedule: true,
+        canEditMessage: true,
+        canEditTicketBody: true,
+        canRunNow: true,
+        canEditRaw: true,
+        rawEditBlockedReason: '',
+        managedReason: null,
+        raw: {}
+      },
+      managed: {
+        systemOwned: false,
+        managed: false,
+        reason: null,
+        raw: {}
+      },
+      scheduleEditor: {
+        kind: 'daily',
+        editable: true,
+        summary: 'Daily',
+        timezone: 'UTC',
+        nextFireAt: null,
+        lastFireAt: null,
+        state: 'active',
+        fields: {},
+        raw: {}
+      },
+      triggerSummary: {
+        kind: 'schedule',
+        label: 'Schedule',
+        eventTypes: ['schedule.fire'],
+        filters: {},
+        raw: {}
+      },
+      targetSummary: {},
+      message: {
+        source: 'executor',
+        field: 'prompt',
+        preview: '',
+        template: false,
+        editable: true,
+        raw: {}
+      },
+      messageSource: 'prompt',
+      messagePreview: '',
+      actionPreview: {},
+      executorSummary: {},
+      policySummary: {},
+      diagnostics: [],
+      rawLinks: {}
+    },
+    raw: {},
+    ...overrides
+  };
+}
+
+function automationJob(id: string, effectiveState = 'succeeded') {
+  return {
+    jobId: id,
+    state: effectiveState,
+    rawState: effectiveState,
+    effectiveState,
+    createdAt: now,
+    startedAt: now,
+    finishedAt: now,
+    updatedAt: now,
+    resultSummary: null,
+    errorText: null,
+    attemptCount: 1,
+    blockedByJobId: null,
+    blockedReason: null,
+    blockedAt: null,
+    pmaQueueResult: null,
+    childExecution: null,
+    children: [],
+    runtimeContract: null,
+    terminalReason: null,
+    policyViolations: [],
+    raw: {}
   };
 }
 
