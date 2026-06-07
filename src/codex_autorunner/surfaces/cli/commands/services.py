@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 import webbrowser
 from pathlib import Path
 from typing import Any, Callable, Optional
-from urllib.parse import urlencode, urljoin
+from urllib.parse import urlencode
 
 import httpx
 import typer
+
+from ....core.preview_services.public_urls import resolve_user_facing_preview_url
 
 
 def register_services_commands(
@@ -70,36 +71,8 @@ def register_services_commands(
     def _json(data: dict[str, Any]) -> None:
         typer.echo(json.dumps(data, indent=2, sort_keys=True))
 
-    def _preview_public_base_url(config: Any) -> Optional[str]:
-        env_value = os.environ.get("CAR_PREVIEW_PUBLIC_BASE_URL")
-        if env_value and env_value.strip():
-            return env_value.strip().rstrip("/")
-        preview_cfg = getattr(config, "preview_services", None)
-        if not isinstance(preview_cfg, dict):
-            raw_cfg = getattr(config, "raw", None)
-            preview_cfg = (
-                raw_cfg.get("preview_services")
-                if isinstance(raw_cfg, dict)
-                else preview_cfg
-            )
-        if isinstance(preview_cfg, dict):
-            for key in ("public_base_url", "publicBaseUrl", "base_url", "baseUrl"):
-                value = preview_cfg.get(key)
-                if isinstance(value, str) and value.strip():
-                    return value.strip().rstrip("/")
-        for attr in ("public_base_url", "server_public_url", "external_url"):
-            value = getattr(config, attr, None)
-            if isinstance(value, str) and value.strip():
-                return value.strip().rstrip("/")
-        return None
-
     def _absolute_or_relative_preview_url(config: Any, preview_url: str) -> str:
-        if preview_url.startswith(("http://", "https://")):
-            return preview_url
-        base = _preview_public_base_url(config)
-        if not base:
-            return preview_url
-        return urljoin(f"{base}/", preview_url.lstrip("/"))
+        return resolve_user_facing_preview_url(config, preview_url)
 
     def _with_absolute_preview_urls(config: Any, data: Any) -> Any:
         if isinstance(data, list):

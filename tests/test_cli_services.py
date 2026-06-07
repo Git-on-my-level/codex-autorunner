@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.cli import app
 from codex_autorunner.server import create_hub_app
+from tests.conftest import write_test_config
 
 runner = CliRunner()
 
@@ -472,6 +473,60 @@ def test_services_open_json_uses_absolute_public_base_url(
     assert calls[0]["method"] == "POST"
     assert (
         urlsplit(str(calls[0]["url"])).path == "/hub/services/svc_abc123/preview-token"
+    )
+
+
+def test_services_open_json_derives_public_base_url_from_allowed_origin(
+    tmp_path: Path, monkeypatch
+) -> None:
+    hub_root = _hub_root(tmp_path)
+    write_test_config(
+        hub_root / ".codex-autorunner" / "config.yml",
+        {
+            "version": 2,
+            "mode": "hub",
+            "server": {
+                "host": "127.0.0.1",
+                "port": 4517,
+                "base_path": "/car",
+                "allowed_origins": [
+                    "http://127.0.0.1:4517",
+                    "http://localhost:4517",
+                    "https://davids-mac-mini-m4.tail76ea03.ts.net",
+                ],
+            },
+        },
+    )
+    calls: list[dict[str, object]] = []
+
+    def _fake_request(
+        method, url, json=None, timeout=None, headers=None, follow_redirects=True
+    ):  # type: ignore[no-untyped-def]
+        calls.append({"method": method, "url": url, "json": json})
+        return _mock_response(
+            {
+                "service_id": "svc_abc123",
+                "preview_url": "/preview/p/tok_123/",
+                "expires_at": 123.0,
+            }
+        )
+
+    monkeypatch.setattr("httpx.request", _fake_request)
+
+    result = runner.invoke(
+        app,
+        ["services", "open", "svc_abc123", "--path", str(hub_root), "--json"],
+    )
+
+    assert result.exit_code == 0
+    assert (
+        json.loads(result.output)["preview_url"]
+        == "https://davids-mac-mini-m4.tail76ea03.ts.net/car/preview/p/tok_123/"
+    )
+    assert calls[0]["method"] == "POST"
+    assert (
+        urlsplit(str(calls[0]["url"])).path
+        == "/car/hub/services/svc_abc123/preview-token"
     )
 
 
