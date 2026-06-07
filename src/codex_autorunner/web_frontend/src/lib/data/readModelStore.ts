@@ -1201,6 +1201,7 @@ function shouldKeepHydratedAutomation(
   next: AutomationSummary
 ): previous is AutomationSummary {
   if (!previous) return false;
+  if (previous.jobs.length > next.jobs.length) return true;
   const previousJobCount = previous.jobs.length || previous.jobCount;
   const nextJobCount = next.jobs.length || next.jobCount;
   return previousJobCount > nextJobCount;
