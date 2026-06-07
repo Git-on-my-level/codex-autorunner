@@ -635,9 +635,12 @@ def test_preview_loopback_http_rewrites_html_root_relative_urls(
         opened = client.get(f"/preview/services/{service_id}/")
 
         assert opened.status_code == 200
-        assert opened.headers["content-length"] == str(len(opened.content))
+        assert f'href="/preview/services/{service_id}/"' in opened.text
+        assert f'href="/preview/services/{service_id}/#section"' in opened.text
+        assert f'href="/preview/services/{service_id}/?q=1"' in opened.text
         assert f'src="/preview/services/{service_id}/assets/app.js"' in opened.text
         assert f'href="/preview/services/{service_id}/assets/app.css"' in opened.text
+        assert f'href="/preview/services/{service_id}/docs/"' in opened.text
         assert f"fetch('/preview/services/{service_id}/api/status')" in opened.text
         assert 'href="https://example.test/assets/app.css"' in opened.text
         assert 'src="//cdn.example.test/app.js"' in opened.text
@@ -667,9 +670,12 @@ def test_preview_capability_loopback_http_rewrites_html_to_capability_prefix(
         assert opened.status_code == 200
         assert opened.headers["referrer-policy"] == "no-referrer"
         assert opened.headers["cache-control"] == "no-store, private"
-        assert opened.headers["content-length"] == str(len(opened.content))
+        assert f'href="/car{preview_url}"' in opened.text
+        assert f'href="/car{preview_url}#section"' in opened.text
+        assert f'href="/car{preview_url}?q=1"' in opened.text
         assert f'src="/car{preview_url}assets/app.js"' in opened.text
         assert f'href="/car{preview_url}assets/app.css"' in opened.text
+        assert f'href="/car{preview_url}docs/"' in opened.text
         assert f"fetch('/car{preview_url}api/status')" in opened.text
     finally:
         server.shutdown()
@@ -1457,9 +1463,13 @@ def _start_loopback_spa_server() -> tuple[http.server.ThreadingHTTPServer, int]:
         def do_GET(self) -> None:
             body = (
                 "<!doctype html>"
-                '<html><head><link rel="stylesheet" href="/assets/app.css">'
+                '<html><head><base href="/">'
+                '<link rel="canonical" href="/#section">'
+                '<link rel="search" href="/?q=1">'
+                '<link rel="stylesheet" href="/assets/app.css">'
                 '<link rel="preload" href="https://example.test/assets/app.css">'
                 "</head><body>"
+                '<a href="/docs/">Docs</a>'
                 '<script type="module" src="/assets/app.js"></script>'
                 '<script src="//cdn.example.test/app.js"></script>'
                 "<script>fetch('/api/status')</script>"

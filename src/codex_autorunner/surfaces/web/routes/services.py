@@ -1245,7 +1245,7 @@ async def _proxy_http_request(
                     global_semaphore,
                     service_semaphore,
                 )
-                response_headers["Content-Length"] = str(len(rewritten))
+                _set_header(response_headers, "Content-Length", str(len(rewritten)))
                 return Response(
                     content=rewritten,
                     status_code=upstream.status_code,
@@ -1621,6 +1621,13 @@ def _proxy_response_headers(
     return forwarded
 
 
+def _set_header(headers: dict[str, str], key: str, value: str) -> None:
+    for existing in list(headers):
+        if existing.lower() == key.lower():
+            del headers[existing]
+    headers[key] = value
+
+
 def _should_rewrite_proxy_html(response: httpx.Response) -> bool:
     content_type = response.headers.get("content-type", "")
     return "text/html" in content_type.lower()
@@ -1643,9 +1650,14 @@ def _rewrite_proxy_html_body(
     def replace(match: re.Match[str]) -> str:
         quote = match.group("quote")
         path = match.group("path")
-        return f"{quote}{_join_url_path(prefix, path)}{quote}"
+        return f"{quote}{_prepend_url_path(prefix, path)}{quote}"
 
     return _ROOT_RELATIVE_HTML_URL_RE.sub(replace, text).encode(charset)
+
+
+def _prepend_url_path(prefix: str, suffix: str) -> str:
+    clean_prefix = "/" + prefix.strip("/")
+    return f"{clean_prefix}/{suffix}"
 
 
 def _content_type_charset(content_type: str) -> str:
