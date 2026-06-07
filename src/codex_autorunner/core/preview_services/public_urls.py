@@ -8,23 +8,33 @@ from ..config_parsers import normalize_base_path
 from ..config_validation import is_loopback_host
 
 
-def resolve_public_hub_base_url(config: Any) -> str | None:
+def resolve_public_hub_base_url(
+    config: Any, *, base_path_override: str | None = None
+) -> str | None:
     explicit = _explicit_public_base_url(config)
     if explicit:
         return explicit
-    derived = _public_base_url_from_allowed_origins(config)
+    derived = _public_base_url_from_allowed_origins(
+        config, base_path_override=base_path_override
+    )
     if derived:
         return derived
     return None
 
 
-def resolve_user_facing_preview_url(config: Any, preview_url: str) -> str:
+def resolve_user_facing_preview_url(
+    config: Any, preview_url: str, *, base_path_override: str | None = None
+) -> str:
     if preview_url.startswith(("http://", "https://")):
         return preview_url
-    public_base = resolve_public_hub_base_url(config)
+    public_base = resolve_public_hub_base_url(
+        config, base_path_override=base_path_override
+    )
     if public_base:
         return urljoin(f"{public_base.rstrip('/')}/", preview_url.lstrip("/"))
-    return _base_path_relative_url(config, preview_url)
+    return _base_path_relative_url(
+        config, preview_url, base_path_override=base_path_override
+    )
 
 
 def _explicit_public_base_url(config: Any) -> str | None:
@@ -43,13 +53,17 @@ def _explicit_public_base_url(config: Any) -> str | None:
     return None
 
 
-def _public_base_url_from_allowed_origins(config: Any) -> str | None:
+def _public_base_url_from_allowed_origins(
+    config: Any, *, base_path_override: str | None = None
+) -> str | None:
     origins = _server_allowed_origins(config)
-    candidates = [
-        candidate
-        for origin in origins
-        if (candidate := _origin_base(origin)) is not None
-    ]
+    candidates = list(
+        dict.fromkeys(
+            candidate
+            for origin in origins
+            if (candidate := _origin_base(origin)) is not None
+        )
+    )
     https_candidates = [
         candidate for candidate in candidates if candidate.startswith("https://")
     ]
@@ -60,7 +74,7 @@ def _public_base_url_from_allowed_origins(config: Any) -> str | None:
         selected = candidates[0]
     if selected is None:
         return None
-    base_path = _server_base_path(config)
+    base_path = _server_base_path(config, base_path_override=base_path_override)
     return f"{selected}{base_path}".rstrip("/")
 
 
@@ -77,10 +91,12 @@ def _origin_base(origin: str) -> str | None:
     return urlunsplit((split.scheme, split.netloc, "", "", "")).rstrip("/")
 
 
-def _base_path_relative_url(config: Any, preview_url: str) -> str:
+def _base_path_relative_url(
+    config: Any, preview_url: str, *, base_path_override: str | None = None
+) -> str:
     if not preview_url.startswith("/"):
         return preview_url
-    base_path = _server_base_path(config)
+    base_path = _server_base_path(config, base_path_override=base_path_override)
     if (
         not base_path
         or preview_url == base_path
@@ -90,7 +106,9 @@ def _base_path_relative_url(config: Any, preview_url: str) -> str:
     return f"{base_path}{preview_url}"
 
 
-def _server_base_path(config: Any) -> str:
+def _server_base_path(config: Any, *, base_path_override: str | None = None) -> str:
+    if base_path_override is not None:
+        return normalize_base_path(base_path_override)
     value = getattr(config, "server_base_path", None)
     if not isinstance(value, str):
         server_cfg = _server_config(config)

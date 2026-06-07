@@ -71,22 +71,33 @@ def register_services_commands(
     def _json(data: dict[str, Any]) -> None:
         typer.echo(json.dumps(data, indent=2, sort_keys=True))
 
-    def _absolute_or_relative_preview_url(config: Any, preview_url: str) -> str:
-        return resolve_user_facing_preview_url(config, preview_url)
+    def _absolute_or_relative_preview_url(
+        config: Any, preview_url: str, *, base_path: Optional[str] = None
+    ) -> str:
+        return resolve_user_facing_preview_url(
+            config, preview_url, base_path_override=base_path
+        )
 
-    def _with_absolute_preview_urls(config: Any, data: Any) -> Any:
+    def _with_absolute_preview_urls(
+        config: Any, data: Any, *, base_path: Optional[str] = None
+    ) -> Any:
         if isinstance(data, list):
-            return [_with_absolute_preview_urls(config, item) for item in data]
+            return [
+                _with_absolute_preview_urls(config, item, base_path=base_path)
+                for item in data
+            ]
         if not isinstance(data, dict):
             return data
         normalized: dict[str, Any] = {
-            key: _with_absolute_preview_urls(config, value)
+            key: _with_absolute_preview_urls(config, value, base_path=base_path)
             for key, value in data.items()
         }
         for key in ("preview_url", "car_url"):
             value = normalized.get(key)
             if isinstance(value, str) and value.startswith("/"):
-                normalized[key] = _absolute_or_relative_preview_url(config, value)
+                normalized[key] = _absolute_or_relative_preview_url(
+                    config, value, base_path=base_path
+                )
         return normalized
 
     def _parse_ttl_seconds(value: str) -> int:
@@ -295,7 +306,7 @@ def register_services_commands(
         )
         data = _request("GET", url, config)
         if json_output:
-            _json(_with_absolute_preview_urls(config, data))
+            _json(_with_absolute_preview_urls(config, data, base_path=base_path))
             return
         services = _service_models(data)
         if not services:
@@ -323,7 +334,7 @@ def register_services_commands(
             config,
         )
         if json_output:
-            _json(_with_absolute_preview_urls(config, data))
+            _json(_with_absolute_preview_urls(config, data, base_path=base_path))
             return
         _print_service_detail(_service(data))
 
@@ -842,7 +853,9 @@ def register_services_commands(
                 config,
             )
             preview_url = str(data.get("preview_url") or "")
-        resolved = _absolute_or_relative_preview_url(config, preview_url)
+        resolved = _absolute_or_relative_preview_url(
+            config, preview_url, base_path=base_path
+        )
         if json_output:
             _json({"service_id": service_id, "preview_url": resolved})
             return
@@ -875,7 +888,9 @@ def register_services_commands(
         )
         data = _request("POST", url, config)
         preview_url = str(data.get("preview_url") or "")
-        data["preview_url"] = _absolute_or_relative_preview_url(config, preview_url)
+        data["preview_url"] = _absolute_or_relative_preview_url(
+            config, preview_url, base_path=base_path
+        )
         if json_output:
             _json(data)
             return
