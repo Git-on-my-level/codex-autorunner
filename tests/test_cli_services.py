@@ -530,6 +530,107 @@ def test_services_open_json_derives_public_base_url_from_allowed_origin(
     )
 
 
+def test_services_open_json_honors_base_path_override_in_public_link(
+    tmp_path: Path, monkeypatch
+) -> None:
+    hub_root = _hub_root(tmp_path)
+    write_test_config(
+        hub_root / ".codex-autorunner" / "config.yml",
+        {
+            "version": 2,
+            "mode": "hub",
+            "server": {
+                "host": "127.0.0.1",
+                "port": 4517,
+                "allowed_origins": [
+                    "https://davids-mac-mini-m4.tail76ea03.ts.net",
+                ],
+            },
+        },
+    )
+    calls: list[dict[str, object]] = []
+
+    def _fake_request(
+        method, url, json=None, timeout=None, headers=None, follow_redirects=True
+    ):  # type: ignore[no-untyped-def]
+        calls.append({"method": method, "url": url, "json": json})
+        return _mock_response(
+            {
+                "service_id": "svc_abc123",
+                "preview_url": "/preview/p/tok_123/",
+                "expires_at": 123.0,
+            }
+        )
+
+    monkeypatch.setattr("httpx.request", _fake_request)
+
+    result = runner.invoke(
+        app,
+        [
+            "services",
+            "open",
+            "svc_abc123",
+            "--path",
+            str(hub_root),
+            "--base-path",
+            "/car",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert (
+        json.loads(result.output)["preview_url"]
+        == "https://davids-mac-mini-m4.tail76ea03.ts.net/car/preview/p/tok_123/"
+    )
+    assert (
+        urlsplit(str(calls[0]["url"])).path
+        == "/car/hub/services/svc_abc123/preview-token"
+    )
+
+
+def test_services_issue_link_honors_base_path_override_for_relative_fallback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    hub_root = _hub_root(tmp_path)
+    calls: list[dict[str, object]] = []
+
+    def _fake_request(
+        method, url, json=None, timeout=None, headers=None, follow_redirects=True
+    ):  # type: ignore[no-untyped-def]
+        calls.append({"method": method, "url": url, "json": json})
+        return _mock_response(
+            {
+                "service_id": "svc_abc123",
+                "preview_url": "/preview/p/tok_123/",
+                "expires_at": 123.0,
+            }
+        )
+
+    monkeypatch.setattr("httpx.request", _fake_request)
+
+    result = runner.invoke(
+        app,
+        [
+            "services",
+            "issue-link",
+            "svc_abc123",
+            "--path",
+            str(hub_root),
+            "--base-path",
+            "/car",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.output)["preview_url"] == "/car/preview/p/tok_123/"
+    assert (
+        urlsplit(str(calls[0]["url"])).path
+        == "/car/hub/services/svc_abc123/preview-token"
+    )
+
+
 def test_services_open_direct_uses_diagnostic_service_url(
     tmp_path: Path, monkeypatch
 ) -> None:
