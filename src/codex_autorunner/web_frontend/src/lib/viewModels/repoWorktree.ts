@@ -65,8 +65,6 @@ export type RepoWorktreeIndexRow = {
   signalActive: number;
   /** Deep-link into chats with the new-chat scope picker preset for PMA mediation. */
   chatHref: string;
-  /** Deep-link into chats with the new-chat scope picker preset for direct agent control. */
-  codingAgentChatHref: string;
   hasCarState: boolean;
   unboundManagedThreadCount: number;
   chatBound: boolean;
@@ -107,8 +105,6 @@ export type RepoWorktreeChildRow = {
   ticketHref: string | null;
   /** Deep-link into chats with PMA mediation scoped to this worktree. */
   chatHref: string;
-  /** Deep-link into chats with direct agent control scoped to this worktree. */
-  codingAgentChatHref: string;
   /** chats + ticket-flow runs scoped to this worktree. */
   signalWaiting: number;
   signalFailed: number;
@@ -348,7 +344,6 @@ export type RepoWorktreeDetailViewModel = {
   missingIndexHref: string;
   missingIndexLabel: string;
   chatHref: string;
-  codingAgentChatHref: string;
   /** Chats list URL filtered to this detail's scope kind. */
   scopedChatListHref: string;
   /** "+ New ticket" URL for the scoped tickets/new route. */
@@ -520,7 +515,6 @@ export function buildRepoWorktreeDetailViewModel(
     missingIndexHref: kind === 'repo' ? '/repos' : '/worktrees',
     missingIndexLabel: kind === 'repo' ? 'Back to repos' : 'Back to worktrees',
     chatHref: scopedNewChatRoute(kind, id, 'pma'),
-    codingAgentChatHref: scopedNewChatRoute(kind, id, 'agent'),
     scopedChatListHref: scopedChatListHrefForKind(kind),
     newTicketHref:
       scopedNewTicketRoute(kind, id, parentRepoId) ?? `${scopedTicketHref(kind, id, parentRepoId)}/new`,
@@ -591,7 +585,6 @@ function missingDetailViewModel(kind: RepoWorktreeKind, id: string): RepoWorktre
     missingIndexHref: kind === 'repo' ? '/repos' : '/worktrees',
     missingIndexLabel: kind === 'repo' ? 'Back to repos' : 'Back to worktrees',
     chatHref: '/chats',
-    codingAgentChatHref: '/chats',
     scopedChatListHref: scopedChatListHrefForKind(kind),
     newTicketHref: kind === 'repo' ? '/repos' : '/worktrees',
     gitStatus: null,
@@ -800,7 +793,6 @@ function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source:
     signalFailed: 0,
     signalActive: 0,
     chatHref: scopedNewChatRoute('repo', repo.id, 'pma'),
-    codingAgentChatHref: scopedNewChatRoute('repo', repo.id, 'agent'),
     hasCarState: boolFromRaw(repo.raw, 'has_car_state'),
     unboundManagedThreadCount: numberFromRaw(repo.raw, 'unbound_managed_thread_count'),
     chatBound: boolFromRaw(repo.raw, 'chat_bound'),
@@ -859,7 +851,6 @@ function worktreeToNavChildRow(
     href: worktreeRoute(worktree.id, worktree.repoId),
     ticketHref: worktreeTicketRoute(worktree.id, worktree.repoId),
     chatHref: scopedNewChatRoute('worktree', worktree.id, 'pma'),
-    codingAgentChatHref: scopedNewChatRoute('worktree', worktree.id, 'agent'),
     signalWaiting: signals.waiting,
     signalFailed: signals.failed,
     signalActive: signals.active,
@@ -907,7 +898,6 @@ function worktreeToIndexRow(worktree: WorktreeSummary, source: RepoWorktreeSourc
     signalFailed: 0,
     signalActive: 0,
     chatHref: scopedNewChatRoute('worktree', worktree.id, 'pma'),
-    codingAgentChatHref: scopedNewChatRoute('worktree', worktree.id, 'agent'),
     hasCarState: boolFromRaw(worktree.raw, 'has_car_state'),
     unboundManagedThreadCount: numberFromRaw(worktree.raw, 'unbound_managed_thread_count'),
     chatBound: boolFromRaw(worktree.raw, 'chat_bound'),
