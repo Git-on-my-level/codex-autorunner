@@ -618,6 +618,70 @@ def test_preview_loopback_http_service_proxies_method_path_query_and_body(
         server.server_close()
 
 
+def test_preview_loopback_http_rewrites_html_root_relative_urls(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    server, port = _start_loopback_spa_server()
+    client = TestClient(create_hub_app(hub_root))
+    try:
+        created = client.post(
+            "/hub/services/loopback-url",
+            json={"url": f"http://127.0.0.1:{port}/", "name": "SPA"},
+        )
+        service_id = created.json()["service"]["service_id"]
+
+        opened = client.get(f"/preview/services/{service_id}/")
+
+        assert opened.status_code == 200
+        assert f'href="/preview/services/{service_id}/"' in opened.text
+        assert f'href="/preview/services/{service_id}/#section"' in opened.text
+        assert f'href="/preview/services/{service_id}/?q=1"' in opened.text
+        assert f'src="/preview/services/{service_id}/assets/app.js"' in opened.text
+        assert f'href="/preview/services/{service_id}/assets/app.css"' in opened.text
+        assert f'href="/preview/services/{service_id}/docs/"' in opened.text
+        assert f"fetch('/preview/services/{service_id}/api/status')" in opened.text
+        assert 'href="https://example.test/assets/app.css"' in opened.text
+        assert 'src="//cdn.example.test/app.js"' in opened.text
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_preview_capability_loopback_http_rewrites_html_to_capability_prefix(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    server, port = _start_loopback_spa_server()
+    client = TestClient(create_hub_app(hub_root, base_path="/car"))
+    try:
+        created = client.post(
+            "/car/hub/services/loopback-url",
+            json={"url": f"http://127.0.0.1:{port}/", "name": "SPA"},
+        )
+        service_id = created.json()["service"]["service_id"]
+        issued = client.post(f"/car/hub/services/{service_id}/preview-token")
+        preview_url = issued.json()["preview_url"]
+
+        opened = client.get(f"/car{preview_url}")
+
+        assert opened.status_code == 200
+        assert opened.headers["referrer-policy"] == "no-referrer"
+        assert opened.headers["cache-control"] == "no-store, private"
+        assert f'href="/car{preview_url}"' in opened.text
+        assert f'href="/car{preview_url}#section"' in opened.text
+        assert f'href="/car{preview_url}?q=1"' in opened.text
+        assert f'src="/car{preview_url}assets/app.js"' in opened.text
+        assert f'href="/car{preview_url}assets/app.css"' in opened.text
+        assert f'href="/car{preview_url}docs/"' in opened.text
+        assert f"fetch('/car{preview_url}api/status')" in opened.text
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_preview_capability_proxy_strips_token_leak_headers(
     tmp_path: Path,
 ) -> None:
@@ -1384,6 +1448,38 @@ def _start_loopback_capture_server() -> tuple[http.server.ThreadingHTTPServer, i
             self.send_header("Service-Worker-Allowed", "/")
             self.end_headers()
             self.wfile.write(content)
+
+        def log_message(self, *args: object) -> None:
+            return
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, int(server.server_address[1])
+
+
+def _start_loopback_spa_server() -> tuple[http.server.ThreadingHTTPServer, int]:
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            body = (
+                "<!doctype html>"
+                '<html><head><base href="/">'
+                '<link rel="canonical" href="/#section">'
+                '<link rel="search" href="/?q=1">'
+                '<link rel="stylesheet" href="/assets/app.css">'
+                '<link rel="preload" href="https://example.test/assets/app.css">'
+                "</head><body>"
+                '<a href="/docs/">Docs</a>'
+                '<script type="module" src="/assets/app.js"></script>'
+                '<script src="//cdn.example.test/app.js"></script>'
+                "<script>fetch('/api/status')</script>"
+                "</body></html>"
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
         def log_message(self, *args: object) -> None:
             return
