@@ -634,6 +634,14 @@ export class WebApiClient {
       mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}`), (payload) =>
         mapChatSummary(asRecord(payload.thread))
       ),
+    renameChat: async (chatId: string, title: string): Promise<ApiResult<ChatSummary>> =>
+      mapResult(
+        await this.requestJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/title`, {
+          method: 'PATCH',
+          body: { title }
+        }),
+        (payload) => mapChatSummary(asRecord(payload.thread ?? payload))
+      ),
     sendMessage: async (chatId: string, body: unknown): Promise<ApiResult<ChatMessage>> =>
       mapResult(
         await this.requestJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/messages`, {

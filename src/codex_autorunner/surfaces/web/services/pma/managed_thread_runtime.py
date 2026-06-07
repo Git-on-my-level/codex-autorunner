@@ -45,6 +45,10 @@ from .....core.orchestration.runtime_threads import (
     RuntimeThreadExecution,
     begin_runtime_thread_execution,
 )
+from .....core.orchestration.thread_titles import (
+    EXPLICIT_TITLE_SOURCE,
+    UNSET_TITLE_SOURCE,
+)
 from .....core.text_utils import _truncate_text
 from ...schemas import ManagedThreadMessageRequest, ManagedThreadStartMessageRequest
 from ...services.pma.automation import notify_managed_thread_terminal_transition
@@ -160,6 +164,10 @@ async def _create_managed_thread_for_first_message(
             resolved,
             provisioned_workspace,
         )
+        display_name = normalize_optional_text(payload.name)
+        metadata["title_source"] = (
+            EXPLICIT_TITLE_SOURCE if display_name else UNSET_TITLE_SOURCE
+        )
         try:
             if resolved.scope is not None:
                 thread = service.create_thread_target(
@@ -167,7 +175,7 @@ async def _create_managed_thread_for_first_message(
                     provisioned_workspace.workspace_root,
                     thread_target_id=normalize_optional_text(payload.managed_thread_id),
                     scope=resolved.scope,
-                    display_name=normalize_optional_text(payload.name),
+                    display_name=display_name,
                     metadata=metadata,
                 )
             else:
@@ -178,7 +186,7 @@ async def _create_managed_thread_for_first_message(
                     repo_id=resolved.repo_id,
                     resource_kind=resolved.resource_kind,
                     resource_id=resolved.resource_id,
-                    display_name=normalize_optional_text(payload.name),
+                    display_name=display_name,
                     metadata=metadata,
                 )
         except Exception:

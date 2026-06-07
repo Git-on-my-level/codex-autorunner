@@ -1787,7 +1787,9 @@ a.scope-chip-label:hover {
     align-self: start;
   }
 
-  .chat-header-copy > h1 {
+  .chat-header-copy > h1,
+  .chat-header-copy > .chat-title-button,
+  .chat-header-copy > .chat-title-editor {
     grid-column: 1;
     grid-row: 1;
     min-width: 0;
@@ -1807,10 +1809,49 @@ a.scope-chip-label:hover {
 }
 
 .chat-header h1,
-.chat-header h2 {
+.chat-header h2,
+.chat-title-button,
+.chat-title-editor {
   font-size: var(--font-size-3);
   font-weight: 600;
-  letter-spacing: -0.012em;
+  letter-spacing: 0;
+}
+
+.chat-title-button {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: text;
+}
+
+.chat-title-button:hover,
+.chat-title-button:focus-visible {
+  color: var(--color-accent);
+  outline: none;
+}
+
+.chat-title-editor {
+  width: min(100%, 760px);
+  min-height: 32px;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  outline: none;
+}
+
+.chat-title-editor:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-soft);
 }
 
 .chat-header-copy {

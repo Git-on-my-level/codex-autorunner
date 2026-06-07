@@ -3,17 +3,35 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 _TITLE_LIMIT = 80
 _GENERIC_TITLES = {
     "chat",
     "new chat",
+    "new coding agent chat",
     "new managed thread",
     "pma",
     "untitled",
     "untitled chat",
 }
+ThreadTitleSource = Literal[
+    "unset",
+    "user_explicit",
+    "provider",
+    "first_user_message",
+    "system_generated",
+]
+REPLACEABLE_TITLE_SOURCES: set[str] = {
+    "unset",
+    "provider",
+    "first_user_message",
+    "system_generated",
+}
+EXPLICIT_TITLE_SOURCE: ThreadTitleSource = "user_explicit"
+FIRST_MESSAGE_TITLE_SOURCE: ThreadTitleSource = "first_user_message"
+PROVIDER_TITLE_SOURCE: ThreadTitleSource = "provider"
+UNSET_TITLE_SOURCE: ThreadTitleSource = "unset"
 _CAR_TICKET_ID_RE = re.compile(r"\bTICKET-\d+[A-Za-z0-9_-]*\b")
 _THREAD_ID_RE = re.compile(r"^(?:thread|chat|run|exec|turn)[-_:][A-Za-z0-9_.:-]+$")
 _PROTOCOL_ID_RE = re.compile(r"^(?:discord|telegram):\S+$", re.IGNORECASE)
@@ -26,6 +44,7 @@ _TRANSPORT_MARKER_RE = re.compile(
 @dataclass(frozen=True)
 class ManagedThreadTitleInputs:
     stored_title: Any = None
+    stored_title_source: Any = None
     provider_title: Any = None
     user_visible_title_seed: Any = None
     chat_display_name: Any = None
@@ -94,6 +113,14 @@ def resolve_managed_thread_display_title(
     last-resort fallbacks.
     """
 
+    if (
+        normalize_thread_title_source(inputs.stored_title_source)
+        == EXPLICIT_TITLE_SOURCE
+    ):
+        explicit_title = normalize_thread_title(inputs.stored_title)
+        if explicit_title is not None:
+            return explicit_title
+
     fallback_id = normalize_thread_title(inputs.fallback_id)
     for candidate in (
         inputs.stored_title,
@@ -139,6 +166,26 @@ def choose_owned_thread_title(
             fallback_id=fallback,
         )
     )
+
+
+def normalize_thread_title_source(value: Any) -> Optional[ThreadTitleSource]:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if normalized in {
+        "unset",
+        "user_explicit",
+        "provider",
+        "first_user_message",
+        "system_generated",
+    }:
+        return normalized  # type: ignore[return-value]
+    return None
+
+
+def thread_title_source_allows_replacement(value: Any) -> bool:
+    source = normalize_thread_title_source(value)
+    return source is not None and source in REPLACEABLE_TITLE_SOURCES
 
 
 def provider_title_metadata(

@@ -77,10 +77,14 @@ from .orchestration.runtime_bindings import (
     set_runtime_thread_binding,
 )
 from .orchestration.thread_titles import (
+    EXPLICIT_TITLE_SOURCE,
+    FIRST_MESSAGE_TITLE_SOURCE,
     choose_owned_thread_title,
     is_deprioritized_thread_title,
     is_generic_thread_title,
     normalize_thread_title,
+    normalize_thread_title_source,
+    thread_title_source_allows_replacement,
 )
 from .orchestration.turn_assistant_output import TurnAssistantOutput
 from .orchestration.turn_execution_contract import (
@@ -1278,12 +1282,14 @@ class ManagedThreadStore:
             current_metadata = _sanitize_thread_metadata(
                 dict(thread.get("metadata") or {})
             )
-            current_title_source = _coerce_text(
-                current_metadata.get("car_title_source")
-            )
+            current_title_source = _coerce_text(current_metadata.get("title_source"))
+            if current_title_source is None:
+                current_title_source = _coerce_text(
+                    current_metadata.get("car_title_source")
+                )
             incoming_title = normalize_thread_title(title)
             may_replace_preview_title = (
-                current_title_source == "message_preview"
+                current_title_source in {"message_preview", FIRST_MESSAGE_TITLE_SOURCE}
                 and incoming_title is not None
                 and not is_generic_thread_title(incoming_title)
             )
@@ -1300,13 +1306,34 @@ class ManagedThreadStore:
                 and next_title != current_title
                 and (
                     not only_if_generic
-                    or is_generic_thread_title(current_title)
-                    or is_deprioritized_thread_title(current_title)
+                    or thread_title_source_allows_replacement(current_title_source)
                     or may_replace_preview_title
+                    or (
+                        current_title_source is None
+                        and (
+                            is_generic_thread_title(current_title)
+                            or is_deprioritized_thread_title(current_title)
+                        )
+                    )
                 )
             )
-            if not should_update_title and "car_title_source" in metadata_patch:
+            if not should_update_title and (
+                "car_title_source" in metadata_patch or "title_source" in metadata_patch
+            ):
                 metadata_patch = dict(metadata_patch)
+                metadata_patch.pop("car_title_source", None)
+                metadata_patch.pop("title_source", None)
+            if should_update_title and "title_source" not in metadata_patch:
+                source = normalize_thread_title_source(
+                    metadata_patch.get("car_title_source")
+                )
+                if (
+                    source is None
+                    and metadata_patch.get("car_title_source") == "message_preview"
+                ):
+                    source = FIRST_MESSAGE_TITLE_SOURCE
+                metadata_patch = dict(metadata_patch)
+                metadata_patch["title_source"] = source or EXPLICIT_TITLE_SOURCE
                 metadata_patch.pop("car_title_source", None)
             updated_metadata = dict(current_metadata)
             updated_metadata.update(metadata_patch)

@@ -50,6 +50,7 @@ import {
   chatScopeTagView,
   chatSurfaceFilterOptions,
   chatSurfaceFilterToken,
+  localChatScopeOption,
   mergeLocalChatPlaceholders,
   progressPercent,
   reconcileChatSurfaceEvent,
@@ -2414,39 +2415,33 @@ describe('chat view helpers', () => {
     expect(buildManagedThreadCreatePayload('codex', local)).toEqual({
       agent: 'codex',
       chat_kind: 'pma',
-      name: 'New chat',
       scope_urn: 'hub'
     });
     expect(buildManagedThreadCreatePayload('codex', repo)).toEqual({
       agent: 'codex',
       chat_kind: 'pma',
-      name: 'New chat',
       scope_urn: 'repo:repo-1'
     });
     expect(buildManagedThreadCreatePayload('codex', worktree)).toEqual({
       agent: 'codex',
       chat_kind: 'pma',
-      name: 'New chat',
       scope_urn: 'worktree:repo-1/worktree-1'
     });
     expect(buildManagedThreadCreatePayload('opencode', local, 'New chat', 'zai/glm')).toEqual({
       agent: 'opencode',
       chat_kind: 'pma',
       model: 'zai/glm',
-      name: 'New chat',
       scope_urn: 'hub'
     });
     expect(buildManagedThreadCreatePayload('hermes', local, 'New chat', '', 'planning')).toEqual({
       agent: 'hermes',
       chat_kind: 'pma',
-      name: 'New chat',
       profile: 'planning',
       scope_urn: 'hub'
     });
     expect(buildManagedThreadCreatePayload('codex', repo, 'New coding agent chat', '', '', 'coding_agent')).toEqual({
       agent: 'codex',
       chat_kind: 'coding_agent',
-      name: 'New coding agent chat',
       scope_urn: 'repo:repo-1'
     });
   });
@@ -2612,7 +2607,12 @@ describe('chat view helpers', () => {
     expect(buildManagedThreadCreatePayload('codex')).toEqual({
       agent: 'codex',
       chat_kind: 'pma',
-      name: 'New chat',
+      scope_urn: 'hub'
+    });
+    expect(buildManagedThreadCreatePayload('codex', localChatScopeOption(), 'Release planning')).toEqual({
+      agent: 'codex',
+      chat_kind: 'pma',
+      name: 'Release planning',
       scope_urn: 'hub'
     });
     const attachments = [

@@ -210,6 +210,10 @@
   let linkDialogOpen = $state(false);
   let fileDrawerOpen = $state(false);
   let linkDraft = $state('');
+  let titleEditingChatId = $state<string | null>(null);
+  let titleDraft = $state('');
+  let titleSaving = $state(false);
+  let titleInput = $state<HTMLInputElement | null>(null);
   let artifactDeliveries = $state<ArtifactDelivery[]>([]);
   let loadingArtifactDeliveries = $state(false);
   let artifactDeliveryError = $state<ApiError | null>(null);
@@ -583,6 +587,7 @@
   let followBottom = true;
 
   const activeChat = $derived(activeChatId ? chatSummaryForId(activeChatId) : null);
+  const titleEditorOpen = $derived(Boolean(activeChat && titleEditingChatId === activeChat.id));
   const activeSurfaceDeliveries = $derived<ArtifactDelivery[]>(artifactDeliveriesForActiveSurface(activeChat, artifactDeliveries));
   const assistantSharedFiles = $derived<ArtifactDelivery[]>(activeSurfaceDeliveries.slice(0, 4));
   let expandedRunGroups = $state<Record<string, boolean>>({});
@@ -2013,6 +2018,59 @@
     scroller.scrollTop = scroller.scrollHeight;
   }
 
+  async function beginTitleEdit(): Promise<void> {
+    if (!activeChat || isLocalDraft(activeChat.id) || isChatArchived(activeChat)) return;
+    titleEditingChatId = activeChat.id;
+    titleDraft = activeChat.title;
+    await tick();
+    titleInput?.focus();
+    titleInput?.select();
+  }
+
+  function cancelTitleEdit(): void {
+    titleEditingChatId = null;
+    titleDraft = '';
+  }
+
+  async function commitTitleEdit(): Promise<void> {
+    if (!activeChat || titleEditingChatId !== activeChat.id || titleSaving) return;
+    const nextTitle = titleDraft.trim();
+    if (!nextTitle) {
+      cancelTitleEdit();
+      return;
+    }
+    if (nextTitle === activeChat.title) {
+      cancelTitleEdit();
+      return;
+    }
+    titleSaving = true;
+    composeError = null;
+    const chatId = activeChat.id;
+    const result = await webApi.pma.renameChat(chatId, nextTitle);
+    titleSaving = false;
+    if (!result.ok) {
+      composeError = result.error;
+      await tick();
+      titleInput?.focus();
+      return;
+    }
+    titleEditingChatId = null;
+    titleDraft = '';
+    await invalidateChatMutation(chatId);
+    await refreshActive(chatId, { quiet: true });
+  }
+
+  function handleTitleKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void commitTitleEdit();
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      cancelTitleEdit();
+    }
+  }
+
   function updateTranscriptScrollState(atBottom: boolean): void {
     transcriptAtBottom = atBottom;
     followBottom = atBottom;
@@ -2920,7 +2978,28 @@
   <div class="active-chat">
     <div class="chat-header">
       <div class="chat-header-copy">
-        <h1>{activeChat?.title ?? 'Chats'}</h1>
+        {#if activeChat && titleEditorOpen}
+          <input
+            bind:this={titleInput}
+            class="chat-title-editor"
+            bind:value={titleDraft}
+            disabled={titleSaving}
+            aria-label="Chat title"
+            onkeydown={handleTitleKeydown}
+            onblur={() => void commitTitleEdit()}
+          />
+        {:else if activeChat && !isLocalDraft(activeChat.id) && !isChatArchived(activeChat)}
+          <button
+            class="chat-title-button"
+            type="button"
+            title="Rename chat"
+            onclick={() => void beginTitleEdit()}
+          >
+            {activeChat.title}
+          </button>
+        {:else}
+          <h1>{activeChat?.title ?? 'Chats'}</h1>
+        {/if}
         {#if activeChat}
           <div class="chat-header-scope-line">
             <span class="chat-header-scope-primary">

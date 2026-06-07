@@ -22,6 +22,10 @@ from .....core.orchestration.managed_thread_timeline import (
     MAX_MANAGED_THREAD_TIMELINE_LIMIT,
     build_managed_thread_timeline,
 )
+from .....core.orchestration.thread_titles import (
+    EXPLICIT_TITLE_SOURCE,
+    UNSET_TITLE_SOURCE,
+)
 from .....core.orchestration.turn_timeline import list_turn_timeline
 from .....core.pma_automation_services import PmaAutomationThreadNotFoundError
 from .....core.text_utils import _truncate_text
@@ -30,6 +34,7 @@ from ...schemas import (
     ManagedThreadCompactRequest,
     ManagedThreadCreateRequest,
     ManagedThreadForkRequest,
+    ManagedThreadRenameRequest,
     ManagedThreadResumeRequest,
     PmaAutomationSubscriptionCreateRequest,
     PmaAutomationTimerCancelRequest,
@@ -365,6 +370,10 @@ def build_managed_thread_crud_routes(
                 resolved,
                 provisioned_workspace,
             )
+            display_name = normalize_optional_text(payload.name)
+            metadata["title_source"] = (
+                EXPLICIT_TITLE_SOURCE if display_name else UNSET_TITLE_SOURCE
+            )
             try:
                 if resolved.scope is not None:
                     thread = service.create_thread_target(
@@ -374,7 +383,7 @@ def build_managed_thread_crud_routes(
                             payload.managed_thread_id
                         ),
                         scope=resolved.scope,
-                        display_name=normalize_optional_text(payload.name),
+                        display_name=display_name,
                         metadata=metadata,
                     )
                 else:
@@ -387,7 +396,7 @@ def build_managed_thread_crud_routes(
                         repo_id=resolved.repo_id,
                         resource_kind=resolved.resource_kind,
                         resource_id=resolved.resource_id,
-                        display_name=normalize_optional_text(payload.name),
+                        display_name=display_name,
                         metadata=metadata,
                     )
             except Exception:
@@ -523,6 +532,39 @@ def build_managed_thread_crud_routes(
         )
         return {
             "thread": serialized_thread,
+        }
+
+    @router.patch("/threads/{managed_thread_id}/title")
+    def rename_managed_thread(
+        managed_thread_id: str,
+        request: Request,
+        payload: ManagedThreadRenameRequest,
+    ) -> dict[str, Any]:
+        context = get_pma_request_context(request)
+        store = context.thread_store()
+        title = normalize_optional_text(payload.title)
+        if title is None:
+            raise HTTPException(status_code=400, detail="title is required")
+        updated = store.update_thread_title(
+            managed_thread_id,
+            title,
+            metadata={"title_source": EXPLICIT_TITLE_SOURCE},
+            only_if_generic=False,
+        )
+        if updated is None:
+            raise HTTPException(status_code=404, detail="Managed thread not found")
+        store.append_action(
+            "managed_thread_rename",
+            managed_thread_id=managed_thread_id,
+            payload_json=json.dumps({"title": title}, ensure_ascii=True),
+        )
+        binding_metadata = _load_chat_binding_metadata_by_thread(context.hub_root)
+        return {
+            "thread": _apply_chat_binding_fields(
+                _serialize_managed_thread(updated),
+                managed_thread_id=managed_thread_id,
+                binding_metadata_by_thread=binding_metadata,
+            )
         }
 
     @router.post("/threads/{managed_thread_id}/compact")
