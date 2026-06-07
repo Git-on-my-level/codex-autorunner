@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import re
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Iterable, Optional
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
@@ -58,6 +59,11 @@ PROXY_STREAM_ACQUIRE_TIMEOUT_SECONDS = 0.1
 _GLOBAL_PROXY_SEMAPHORE: asyncio.Semaphore | None = None
 _GLOBAL_PROXY_SEMAPHORE_LIMIT: int | None = None
 _SERVICE_PROXY_SEMAPHORES: dict[str, tuple[int, asyncio.Semaphore]] = {}
+_ROOT_RELATIVE_HTML_URL_RE = re.compile(
+    r"(?P<quote>[\"'])/(?!(?:/|[a-zA-Z][a-zA-Z0-9+.-]*:))"
+    r"(?P<path>[^\"'<> \t\r\n]*)"
+    r"(?P=quote)"
+)
 
 
 class ServiceScopeLinkPayload(BaseModel):
@@ -1226,6 +1232,25 @@ async def _proxy_http_request(
                 record=record,
                 preview_prefix=preview_prefix,
             )
+            if _should_rewrite_proxy_html(upstream):
+                content = await upstream.aread()
+                rewritten = _rewrite_proxy_html_body(
+                    content,
+                    content_type=upstream.headers.get("content-type", ""),
+                    preview_prefix=preview_prefix,
+                )
+                await _close_proxy_response(
+                    upstream,
+                    client,
+                    global_semaphore,
+                    service_semaphore,
+                )
+                response_headers["Content-Length"] = str(len(rewritten))
+                return Response(
+                    content=rewritten,
+                    status_code=upstream.status_code,
+                    headers=response_headers,
+                )
             return StreamingResponse(
                 upstream.aiter_bytes(),
                 status_code=upstream.status_code,
@@ -1594,6 +1619,43 @@ def _proxy_response_headers(
         forwarded[key] = value
     _apply_capability_preview_header_values(forwarded, preview_prefix=preview_prefix)
     return forwarded
+
+
+def _should_rewrite_proxy_html(response: httpx.Response) -> bool:
+    content_type = response.headers.get("content-type", "")
+    return "text/html" in content_type.lower()
+
+
+def _rewrite_proxy_html_body(
+    content: bytes,
+    *,
+    content_type: str,
+    preview_prefix: str,
+) -> bytes:
+    charset = _content_type_charset(content_type)
+    try:
+        text = content.decode(charset, errors="replace")
+    except LookupError:
+        charset = "utf-8"
+        text = content.decode(charset, errors="replace")
+    prefix = "/" + preview_prefix.strip("/")
+
+    def replace(match: re.Match[str]) -> str:
+        quote = match.group("quote")
+        path = match.group("path")
+        if not path or path.startswith("#") or path.startswith("?"):
+            return match.group(0)
+        return f"{quote}{_join_url_path(prefix, path)}{quote}"
+
+    return _ROOT_RELATIVE_HTML_URL_RE.sub(replace, text).encode(charset)
+
+
+def _content_type_charset(content_type: str) -> str:
+    for part in content_type.split(";")[1:]:
+        key, separator, value = part.strip().partition("=")
+        if separator and key.lower() == "charset" and value.strip():
+            return value.strip().strip("\"'")
+    return "utf-8"
 
 
 def _is_capability_preview_prefix(preview_prefix: str) -> bool:
