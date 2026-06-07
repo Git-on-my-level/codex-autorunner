@@ -87,6 +87,7 @@ from .runtime_payload_shapes import (
     canonicalize_token_usage,
 )
 from .runtime_retry_semantics import is_retrying_turn_error
+from .stream_text_merge import append_assistant_stream_text_readably
 
 
 @dataclass
@@ -179,6 +180,55 @@ def _extract_session_update_text(update: dict[str, Any]) -> str:
 
 def _extract_acp_progress_message(params: dict[str, Any]) -> str:
     return _shared_acp_progress_message(params)
+
+
+_THOUGHT_BUFFER_SUFFIX = ":thought"
+
+
+def _thought_chunk_buffer_key(params: dict[str, Any]) -> str:
+    session_id = str(params.get("sessionId") or params.get("session_id") or "").strip()
+    turn_id = str(params.get("turnId") or params.get("turn_id") or "").strip()
+    parts = [part for part in (session_id, turn_id) if part]
+    prefix = ":".join(parts) if parts else "default"
+    return f"{prefix}{_THOUGHT_BUFFER_SUFFIX}"
+
+
+def _is_thought_prefix_growth(buffer: str, incoming: str) -> bool:
+    """True when ``incoming`` is a genuine cumulative-snapshot extension of ``buffer``.
+
+    Requires real prefix growth (``incoming`` strictly longer and starting with
+    ``buffer``) AND that the continuation begins at a word boundary, so token
+    streams like ``"The"`` -> ``"There"`` are not mistaken for a snapshot (which
+    would drop the accumulated ``"The"``).
+    """
+    if len(incoming) <= len(buffer):
+        return False
+    if not incoming.startswith(buffer):
+        return False
+    if buffer[-1].isspace():
+        return True
+    continuation = incoming[len(buffer)]
+    return continuation.isspace() or not continuation.isalnum()
+
+
+def _reset_thought_buffers(
+    state: RuntimeThreadRunEventState, session_id: Optional[str]
+) -> None:
+    """Drop per-turn thought accumulators so a new turn never bleeds into the next.
+
+    Mirrors how Codex pops ``reasoning_buffers`` at ``item/completed``. When the
+    session id is known only the matching session's thought keys are cleared;
+    otherwise all thought keys are reset conservatively.
+    """
+    session = str(session_id or "").strip()
+    session_prefix = f"{session}:" if session else ""
+    for store in (state.reasoning_buffers, state.reasoning_last_emitted):
+        for key in list(store):
+            if not key.endswith(_THOUGHT_BUFFER_SUFFIX):
+                continue
+            if session_prefix and not key.startswith(session_prefix):
+                continue
+            store.pop(key, None)
 
 
 def _request_id_for_event(method: str, params: dict[str, Any]) -> str:
@@ -894,6 +944,8 @@ class LifecycleBoundaryDecoder(MessageDecoder):
         )
 
     def decode(self, method, params, state, ctx):
+        if method in {"turn/started", "prompt/started"}:
+            _reset_thought_buffers(state, ctx.acp_lifecycle.session_id)
         return []
 
 
@@ -975,6 +1027,7 @@ class ACPPromptTurnDecoder(MessageDecoder):
             ]
 
         if method in self._FAILED_METHODS:
+            _reset_thought_buffers(state, acp.session_id)
             error_message = _shared_acp_error_message(params)
             state.last_error_message = error_message or "Turn error"
             return [
@@ -984,6 +1037,7 @@ class ACPPromptTurnDecoder(MessageDecoder):
                 )
             ]
 
+        _reset_thought_buffers(state, acp.session_id)
         events: list[RunEvent] = []
         content = acp.assistant_text
         if content:
@@ -1150,11 +1204,13 @@ class SessionUpdateDecoder(MessageDecoder):
             return self._decode_session_update(params, state, ts, acp)
 
         if method == "session.idle":
+            _reset_thought_buffers(state, acp.session_id)
             if acp.runtime_terminal_status == "ok":
                 state.completed_seen = True
             return []
 
         if acp.runtime_terminal_status == "ok":
+            _reset_thought_buffers(state, acp.session_id)
             state.completed_seen = True
             return []
         status_type = acp.session_status or ""
@@ -1175,6 +1231,39 @@ class SessionUpdateDecoder(MessageDecoder):
                 )
             ]
         return []
+
+    def _thought_chunk_run_notice(
+        self,
+        *,
+        update: dict[str, Any],
+        params: dict[str, Any],
+        state: RuntimeThreadRunEventState,
+        ts: str,
+    ) -> list[RunEvent]:
+        incoming = _extract_session_update_text(update)
+        if not incoming:
+            return []
+        key = _thought_chunk_buffer_key(params)
+        buffer = state.reasoning_buffers.get(key, "")
+        if incoming == buffer:
+            return []
+        if not buffer:
+            accumulated = incoming
+        elif _is_thought_prefix_growth(buffer, incoming):
+            accumulated = incoming
+        else:
+            accumulated = append_assistant_stream_text_readably(buffer, incoming)
+        if accumulated == state.reasoning_last_emitted.get(key, ""):
+            return []
+        state.reasoning_buffers[key] = accumulated
+        state.reasoning_last_emitted[key] = accumulated
+        return [
+            RunNotice(
+                timestamp=ts,
+                kind="thinking",
+                message=accumulated,
+            )
+        ]
 
     def _decode_session_update(self, params, state, ts, acp):
         update = _shared_acp_session_update(params)
@@ -1202,16 +1291,12 @@ class SessionUpdateDecoder(MessageDecoder):
                 preserve_word_boundaries=True,
             )
         if update_kind == "agent_thought_chunk":
-            progress_message = _extract_session_update_text(update)
-            if not progress_message:
-                return []
-            return [
-                RunNotice(
-                    timestamp=ts,
-                    kind="progress",
-                    message=progress_message,
-                )
-            ]
+            return self._thought_chunk_run_notice(
+                update=update,
+                params=params,
+                state=state,
+                ts=ts,
+            )
         if update_kind == "usage_update":
             session_usage = _extract_usage(update)
             if session_usage is None:

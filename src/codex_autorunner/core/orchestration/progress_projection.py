@@ -22,7 +22,10 @@ from ..ports.run_event import (
 from ..redaction import redact_text
 from ..text_utils import _truncate_text
 from .run_notice_visibility import is_internal_run_notice_kind
-from .stream_text_merge import merge_assistant_stream_text
+from .stream_text_merge import (
+    append_assistant_stream_text_readably,
+    merge_assistant_stream_text,
+)
 
 PROGRESS_PROJECTION_VERSION = "pma_progress_projection.v1"
 
@@ -167,7 +170,23 @@ def _merge_streamed_item_summary(
     previous_summary = previous.summary or ""
     incoming_summary = current.summary or ""
     if current.merge_strategy == RUN_EVENT_STREAM_MODE_SNAPSHOT:
-        return merge_assistant_stream_text(previous_summary, incoming_summary)
+        merged = merge_assistant_stream_text(previous_summary, incoming_summary)
+        # Cumulative thinking snapshots may have been coalesced to append-only
+        # deltas in hot storage (turn_timeline._maybe_coalesce_hot_event). On
+        # replay those deltas are projected with the snapshot strategy, so a
+        # genuine non-overlapping continuation degenerates to a raw concat that
+        # glues words (``"The user"`` + ``"is accessing"`` -> ``"Theuseris..."``).
+        # Mirror AssistantTextAccumulator.merge_snapshot and re-join readably.
+        if (
+            previous_summary
+            and incoming_summary
+            and merged == f"{previous_summary}{incoming_summary}"
+            and not incoming_summary.startswith(previous_summary)
+        ):
+            return append_assistant_stream_text_readably(
+                previous_summary, incoming_summary
+            )
+        return merged
     if not previous_summary:
         return incoming_summary
     return f"{previous_summary}{incoming_summary}"

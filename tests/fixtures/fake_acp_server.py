@@ -377,18 +377,34 @@ class FakeACPServer:
                 {"type": "text", "text": "fixture"},
                 {"type": "output_text", "text": " reply"},
             ]
-        self.send(
-            {
-                "method": "session/update",
-                "params": {
-                    "sessionId": session_id,
-                    "update": {
-                        "sessionUpdate": "agent_thought_chunk",
-                        "content": thought_content,
+        thought_chunks: list[Any] = [thought_content]
+        if self._scenario == "official_thought_cumulative_snapshots":
+            thought_chunks = [
+                {"type": "text", "text": "The user"},
+                {"type": "text", "text": "The user is accessing"},
+                {"type": "text", "text": "The user is accessing the dashboard"},
+            ]
+        elif self._scenario == "official_thought_token_deltas":
+            thought_chunks = [
+                {"type": "text", "text": "The "},
+                {"type": "text", "text": "user "},
+                {"type": "text", "text": "is accessing"},
+            ]
+        for chunk_content in thought_chunks:
+            self.send(
+                {
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": session_id,
+                        "update": {
+                            "sessionUpdate": "agent_thought_chunk",
+                            "content": chunk_content,
+                        },
                     },
-                },
-            }
-        )
+                }
+            )
+            if len(thought_chunks) > 1:
+                time.sleep(_OFFICIAL_STREAM_UPDATE_DELAY_SECONDS)
         if prompt == "stdout noise":
             _write_raw_stdout(self._lock, "\n")
             _write_raw_stdout(self._lock, "  Password (hidden): \n")

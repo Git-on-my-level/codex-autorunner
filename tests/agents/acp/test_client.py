@@ -399,6 +399,59 @@ async def test_client_supports_official_acp_session_and_prompt_flow(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scenario", "expected_thinking"),
+    [
+        (
+            "official_thought_cumulative_snapshots",
+            "The user is accessing the dashboard",
+        ),
+        ("official_thought_token_deltas", "The user is accessing"),
+    ],
+)
+async def test_client_multi_chunk_thoughts_decode_to_clean_thinking(
+    tmp_path: Path,
+    scenario: str,
+    expected_thinking: str,
+) -> None:
+    from codex_autorunner.core.orchestration.runtime_thread_events import (
+        RuntimeThreadRunEventState,
+        normalize_runtime_thread_raw_event,
+    )
+    from codex_autorunner.core.ports.run_event import RunNotice
+
+    client = ACPClient(fixture_command(scenario), cwd=tmp_path)
+    try:
+        await client.start()
+        created = await client.create_session(cwd=str(tmp_path))
+        handle = await client.start_prompt(created.session_id, "explain the slowdown")
+        raw_events = [event async for event in handle.events()]
+        await handle.wait()
+    finally:
+        await client.close()
+
+    state = RuntimeThreadRunEventState()
+    thinking_messages: list[str] = []
+    for event in raw_events:
+        raw_notification = dict(event.raw_notification or {})
+        if not raw_notification.get("method"):
+            continue
+        decoded = await normalize_runtime_thread_raw_event(
+            {"message": raw_notification},
+            state,
+        )
+        for run_event in decoded:
+            if isinstance(run_event, RunNotice) and run_event.kind == "thinking":
+                thinking_messages.append(run_event.message)
+
+    assert thinking_messages, "expected at least one thinking notice"
+    assert thinking_messages[-1] == expected_thinking
+    # Clean text: no glued words and no duplicated full snapshot.
+    assert "Theuser" not in thinking_messages[-1]
+    assert thinking_messages[-1].count(expected_thinking) == 1
+
+
+@pytest.mark.asyncio
 async def test_client_accepts_official_load_session_empty_object_result(
     tmp_path: Path,
 ) -> None:

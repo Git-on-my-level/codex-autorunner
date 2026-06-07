@@ -10,6 +10,10 @@ from tests.runtime_lifecycle_sequences import (
 )
 
 from codex_autorunner.agents.types import TerminalTurnResult
+from codex_autorunner.core.orchestration.progress_projection import (
+    ProgressProjectionInput,
+    project_progress_events,
+)
 from codex_autorunner.core.orchestration.runtime_thread_events import (
     DECODE_FAILURE_REASON_EMPTY_METHOD,
     DECODE_FAILURE_REASON_REGISTRY_MISS,
@@ -648,7 +652,7 @@ async def test_normalize_runtime_thread_raw_event_handles_official_session_updat
     )
 
     assert isinstance(progress[0], RunNotice)
-    assert progress[0].kind == "progress"
+    assert progress[0].kind == "thinking"
     assert progress[0].message == "thinking"
     assert isinstance(output[0], OutputDelta)
     assert output[0].content == "hello"
@@ -773,6 +777,79 @@ async def test_normalize_runtime_thread_raw_event_handles_official_session_updat
     assert len(output) == 1
     assert isinstance(output[0], OutputDelta)
     assert output[0].content == "hello world"
+
+
+async def _normalize_thought_chunks(
+    chunks: tuple[str, ...],
+    *,
+    state: RuntimeThreadRunEventState,
+) -> list[RunNotice]:
+    notices: list[RunNotice] = []
+    for chunk in chunks:
+        events = await normalize_runtime_thread_raw_event(
+            {
+                "message": {
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": "session-1",
+                        "turnId": "turn-1",
+                        "update": {
+                            "sessionUpdate": "agent_thought_chunk",
+                            "content": {"type": "text", "text": chunk},
+                        },
+                    },
+                }
+            },
+            state,
+        )
+        for event in events:
+            if isinstance(event, RunNotice) and event.kind == "thinking":
+                notices.append(event)
+    return notices
+
+
+async def test_normalize_runtime_thread_raw_event_accumulates_multi_chunk_thoughts() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    cumulative = await _normalize_thought_chunks(
+        (
+            "The user",
+            "The user is accessing",
+            "The user is accessing the dashboard",
+            "The user is accessing the dashboard",
+        ),
+        state=state,
+    )
+    assert [notice.message for notice in cumulative] == [
+        "The user",
+        "The user is accessing",
+        "The user is accessing the dashboard",
+    ]
+    assert "Theuser" not in cumulative[-1].message
+
+    state = RuntimeThreadRunEventState()
+    token_deltas = await _normalize_thought_chunks(
+        ("The ", "user ", "is accessing"),
+        state=state,
+    )
+    assert token_deltas[-1].message == "The user is accessing"
+    assert "Theuser" not in token_deltas[-1].message
+
+    projected = project_progress_events(
+        [
+            ProgressProjectionInput(
+                event_id=index,
+                timestamp=f"2026-05-06T10:00:0{index}Z",
+                event=notice,
+            )
+            for index, notice in enumerate(cumulative, start=1)
+        ]
+    )
+    assert len(projected) == 1
+    assert projected[0].kind == "assistant_update"
+    assert projected[0].summary == "The user is accessing the dashboard"
 
 
 async def test_normalize_runtime_thread_raw_event_preserves_hermes_token_boundaries() -> (

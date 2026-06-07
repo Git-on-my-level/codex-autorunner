@@ -527,6 +527,69 @@ def test_preview_static_workspace_source_registers_workspace_artifact(
     assert opened.text == "workspace artifact"
 
 
+def test_create_preview_workspace_makes_managed_directory(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    client = TestClient(create_hub_app(hub_root))
+
+    created = client.post("/hub/services/workspaces", json={})
+    assert created.status_code == 200
+    body = created.json()
+    workspace_id = body["workspace_id"]
+    assert workspace_id.startswith("ws_")
+    assert body["created"] is True
+    workspace_root = hub_root / ".codex-autorunner" / "workspaces" / workspace_id
+    assert Path(body["path"]) == workspace_root
+    assert workspace_root.is_dir()
+
+    again = client.post("/hub/services/workspaces", json={"workspace_id": workspace_id})
+    assert again.status_code == 200
+    assert again.json()["created"] is False
+
+
+def test_create_preview_workspace_rejects_unsafe_id(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    client = TestClient(create_hub_app(hub_root))
+
+    response = client.post(
+        "/hub/services/workspaces", json={"workspace_id": "../escape"}
+    )
+    assert response.status_code == 400
+
+
+def test_register_static_workspace_root_serves_managed_artifact(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    client = TestClient(create_hub_app(hub_root))
+
+    created_workspace = client.post("/hub/services/workspaces", json={})
+    workspace_id = created_workspace.json()["workspace_id"]
+    workspace_root = Path(created_workspace.json()["path"])
+    (workspace_root / "index.html").write_text("managed root", encoding="utf-8")
+
+    registered = client.post(
+        "/hub/services/static",
+        json={
+            "path": ".",
+            "source": {
+                "type": "workspace",
+                "workspace_id": workspace_id,
+                "path": ".",
+            },
+            "kind": "static_dir",
+            "name": "Managed artifact",
+        },
+    )
+    assert registered.status_code == 200
+    service_id = registered.json()["service"]["service_id"]
+    opened = client.get(f"/preview/services/{service_id}/")
+    assert opened.status_code == 200
+    assert opened.text == "managed root"
+
+
 def test_preview_static_workspace_scope_does_not_expand_registration_roots(
     tmp_path: Path,
 ) -> None:

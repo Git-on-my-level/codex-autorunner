@@ -296,6 +296,30 @@ def test_progress_projection_dedupes_cumulative_thinking_snapshots() -> None:
     assert items[0].event_ids == (1, 2, 3)
 
 
+def test_progress_projection_dedupes_cumulative_agent_thought_chunk_snapshots() -> None:
+    items = _project(
+        RunNotice(
+            timestamp="2026-05-06T10:00:01Z", kind="thinking", message="The user"
+        ),
+        RunNotice(
+            timestamp="2026-05-06T10:00:02Z",
+            kind="thinking",
+            message="The user is accessing",
+        ),
+        RunNotice(
+            timestamp="2026-05-06T10:00:03Z",
+            kind="thinking",
+            message="The user is accessing the dashboard",
+        ),
+    )
+
+    assert len(items) == 1
+    assert items[0].kind == "assistant_update"
+    assert items[0].summary == "The user is accessing the dashboard"
+    assert items[0].merge_strategy == RUN_EVENT_STREAM_MODE_SNAPSHOT
+    assert items[0].event_ids == (1, 2, 3)
+
+
 def test_high_volume_stream_deltas_reduce_to_bounded_visible_projection() -> None:
     events = [
         ProgressProjectionInput(

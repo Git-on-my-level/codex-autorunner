@@ -15,6 +15,42 @@ Hosted/no-subdomain deployments copy and open preview capability URLs such as
 `/preview/p/<token>/`; those tokens authorize preview access only and do not
 grant hub API access.
 
+## Where Generated Web Artifacts Go
+
+Agents and operators that scaffold a new static site, single-page app, or other
+generated web artifact should write it into a **CAR-managed preview workspace**,
+not into a repository's source tree.
+
+- Create a managed workspace directory and write the build output there:
+
+```bash
+car services create-workspace --name "Tetris"
+# prints: ws_xxxxxxxx<TAB>/abs/path/.codex-autorunner/workspaces/ws_xxxxxxxx
+```
+
+- Register the workspace (or a subdirectory of it) as a static preview:
+
+```bash
+car services register-static --workspace ws_xxxxxxxx --kind static-dir --name "Tetris"
+car services open SERVICE_ID
+```
+
+Managed workspaces live under `<hub>/.codex-autorunner/workspaces/<workspace_id>/`,
+which is durable CAR state outside the git-tracked source tree.
+
+Prescriptions:
+
+- Do **not** create new top-level directories (for example `static/`) in a
+  managed repository to hold generated artifacts. That bleeds disposable output
+  into source control.
+- Do **not** edit CAR's own UI source (for example the Services page) to add
+  launchers or hardcode a `service_id`. Service IDs are ephemeral registry
+  records; surface previews through the Services page and capability links, not
+  product code.
+- Registering a path that happens to sit under an allowed root (such as the repo
+  root) works, but prefer a managed workspace so the artifact is portable and
+  clearly disposable.
+
 ## Configuration
 
 Preview Services are configured on the hub:
@@ -62,6 +98,14 @@ Register a static directory:
 
 ```bash
 car services register-static ./dist --name "Built site" --kind static-dir
+```
+
+Create a CAR-managed workspace and register generated output from it (preferred
+for newly scaffolded sites; see [Where Generated Web Artifacts Go](#where-generated-web-artifacts-go)):
+
+```bash
+car services create-workspace --name "Built site"
+car services register-static --workspace ws_xxxxxxxx --kind static-dir --name "Built site"
 ```
 
 Register an existing local API or web server:

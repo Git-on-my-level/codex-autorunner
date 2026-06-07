@@ -145,6 +145,8 @@ async def test_persist_turn_timeline_dedupes_repeated_agent_thought_chunk_messag
         events=events,
     )
 
+    assert len(events) == 2
+
     timeline = list_turn_timeline(tmp_path, execution_id="turn-thought-chunk")
     assert [entry["event"]["message"] for entry in timeline] == ["thinking", " more"]
 
@@ -152,7 +154,10 @@ async def test_persist_turn_timeline_dedupes_repeated_agent_thought_chunk_messag
     assert checkpoint is not None
     assert checkpoint.progress_text_preview == "thinking more"
     assert checkpoint.progress_char_count == len("thinking more")
-    assert checkpoint.hot_projection_state["deduped_counts"]["run_notice"] == 1
+    assert (
+        checkpoint.hot_projection_state.get("deduped_counts", {}).get("run_notice", 0)
+        == 0
+    )
 
 
 def test_persist_turn_timeline_bounds_hot_run_notice_growth_and_updates_checkpoint(

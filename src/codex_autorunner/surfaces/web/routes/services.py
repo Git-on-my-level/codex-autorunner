@@ -38,6 +38,10 @@ from ....core.preview_services import (
 from ....core.preview_services import (
     services_read_model as build_services_read_model,
 )
+from ....core.preview_services.ids import (
+    generate_workspace_id,
+    validate_workspace_id,
+)
 from ....core.state_roots import resolve_hub_state_root
 from ..app_state import HubAppContext
 from ..services.preview_capabilities import (
@@ -113,6 +117,16 @@ class RegisterStaticServiceRequest(BaseModel):
         default=None,
         validation_alias=AliasChoices("network_policy", "networkPolicy"),
     )
+
+
+class CreatePreviewWorkspaceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    workspace_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("workspace_id", "workspaceId"),
+    )
+    name: Optional[str] = None
 
 
 class RegisterLoopbackServiceRequest(BaseModel):
@@ -293,6 +307,30 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             record,
             events=await asyncio.to_thread(manager.events, service_id),
         )
+
+    @router.post("/hub/services/workspaces")
+    async def create_preview_workspace(
+        payload: CreatePreviewWorkspaceRequest,
+    ) -> dict[str, Any]:
+        try:
+            workspace_id = (
+                validate_workspace_id(payload.workspace_id)
+                if payload.workspace_id
+                else generate_workspace_id()
+            )
+            root = _workspace_static_root(context, workspace_id)
+        except ValueError as exc:
+            raise _bad_request(exc) from exc
+        existed = root.exists()
+        try:
+            await asyncio.to_thread(lambda: root.mkdir(parents=True, exist_ok=True))
+        except OSError as exc:
+            raise _bad_request(exc) from exc
+        return {
+            "workspace_id": workspace_id,
+            "path": str(root),
+            "created": not existed,
+        }
 
     @router.post("/hub/services/static")
     async def register_static(
@@ -788,7 +826,7 @@ def _static_registration_path(
         raise ValueError("workspace static source requires workspace_id")
     relative = _workspace_source_relative_path(source.path)
     root = _workspace_static_root(context, source.workspace_id)
-    return root / relative
+    return root if relative is None else root / relative
 
 
 def _reject_static_registration_symlink_target(path: Path) -> None:
@@ -859,10 +897,10 @@ def _static_source_metadata(payload: RegisterStaticServiceRequest) -> dict[str, 
     }
 
 
-def _workspace_source_relative_path(path: str) -> Path:
+def _workspace_source_relative_path(path: str) -> Path | None:
     value = path.strip()
-    if not value:
-        raise ValueError("workspace static source path must be non-empty")
+    if value in {"", "."}:
+        return None
     pure = PurePosixPath(value)
     if pure.is_absolute() or any(part in {"", ".", ".."} for part in pure.parts):
         raise ValueError("workspace static source path must be relative")

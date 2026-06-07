@@ -2191,6 +2191,34 @@ def test_render_hub_snapshot_includes_compact_preview_services() -> None:
     assert "SECRET_TOKEN" not in result
 
 
+def test_render_hub_snapshot_guides_managed_workspace_when_no_services() -> None:
+    from codex_autorunner.core.pma_context import _render_hub_snapshot
+
+    snapshot = _snapshot(generated_at="2026-03-16T00:00:00Z", action_queue=[])
+    snapshot["services"] = {
+        "counts": {
+            "total": 0,
+            "running": 0,
+            "attention": 0,
+            "managed": 0,
+            "static": 0,
+            "loopback": 0,
+            "preview": 0,
+            "application": 0,
+            "infrastructure": 0,
+        },
+        "running_sample": [],
+        "attention_sample": [],
+        "drilldown_commands": [],
+    }
+
+    result = _render_hub_snapshot(snapshot)
+
+    assert "Preview Services: none registered" in result
+    assert "car services create-workspace" in result
+    assert "register-static --workspace" in result
+
+
 def test_format_pma_prompt_includes_artifact_delivery_contract(tmp_path: Path) -> None:
     result = _format_seeded_pma_prompt(tmp_path)
 

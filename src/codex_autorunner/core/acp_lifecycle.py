@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal, Mapping, Optional
 
+from .orchestration.stream_text_merge import append_assistant_stream_text_readably
 from .text_utils import _normalize_optional_text
 
 _SESSION_TURN_ID_FALLBACK_METHODS = frozenset(
@@ -148,7 +149,12 @@ def _string_from_value(
             )
             if nested:
                 parts.append(nested)
-        return "".join(parts) or None
+        if not parts:
+            return None
+        merged = parts[0]
+        for part in parts[1:]:
+            merged = append_assistant_stream_text_readably(merged, part)
+        return merged or None
     return None
 
 

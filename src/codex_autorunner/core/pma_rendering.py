@@ -701,6 +701,15 @@ def _render_preview_services_section(
         if isinstance(item, Mapping)
     ]
     if total <= 0 and not running_sample and not attention_sample:
+        lines.append("Preview Services: none registered")
+        lines.append(
+            "- to publish a generated web app, create a CAR-managed workspace "
+            "(`car services create-workspace`), write files into the returned "
+            "path, then `car services register-static --workspace <id> "
+            "--kind static-dir`. Do not write generated apps into the repo "
+            "source tree or edit CAR's own UI source to expose them."
+        )
+        lines.append("")
         return
     lines.append("Preview Services:")
     lines.append(

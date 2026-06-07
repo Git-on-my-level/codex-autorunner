@@ -338,17 +338,13 @@ def register_services_commands(
             return
         _print_service_detail(_service(data))
 
-    @services_app.command("register-static")
-    def register_static(
-        static_path: Path = typer.Argument(..., help="Static file or directory path."),
+    @services_app.command("create-workspace")
+    def create_workspace(
+        workspace_id: Optional[str] = typer.Option(
+            None, "--id", help="Workspace id; auto-generated when omitted (ws_...)."
+        ),
         name: Optional[str] = typer.Option(
-            None, "--name", help="Service display name."
-        ),
-        scope: list[str] = typer.Option(
-            [], "--scope", help="Scope link, repeatable; e.g. repo:car."
-        ),
-        kind: Optional[str] = typer.Option(
-            None, "--kind", help="static-file or static-dir."
+            None, "--name", help="Optional human label for the workspace."
         ),
         path: Optional[Path] = typer.Option(
             None, "--path", help="Hub root or config path."
@@ -358,15 +354,93 @@ def register_services_commands(
         ),
         json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
     ) -> None:
-        """Register a static file or directory as a preview service."""
+        """Create a CAR-managed preview workspace directory for generated artifacts.
+
+        Write generated web artifacts into the returned path, then register them
+        with `register-static --workspace <id>`. This keeps generated apps out of
+        the repository source tree.
+        """
+        payload = {"workspace_id": workspace_id, "name": name}
+        config = _load_config(path)
+        data = _request(
+            "POST",
+            _url(config, "/hub/services/workspaces", base_path=base_path),
+            config,
+            payload=payload,
+        )
+        if json_output:
+            _json(data)
+            return
+        typer.echo(f"{data.get('workspace_id', '')}\t{data.get('path', '')}")
+
+    @services_app.command("register-static")
+    def register_static(
+        static_path: Optional[Path] = typer.Argument(
+            None, help="Static file or directory path (omit when using --workspace)."
+        ),
+        name: Optional[str] = typer.Option(
+            None, "--name", help="Service display name."
+        ),
+        scope: list[str] = typer.Option(
+            [], "--scope", help="Scope link, repeatable; e.g. repo:car."
+        ),
+        kind: Optional[str] = typer.Option(
+            None, "--kind", help="static-file or static-dir."
+        ),
+        workspace: Optional[str] = typer.Option(
+            None,
+            "--workspace",
+            help="Register from a CAR-managed preview workspace id (ws_...).",
+        ),
+        workspace_path: str = typer.Option(
+            ".",
+            "--workspace-path",
+            help="Relative path inside the workspace to serve (default: root).",
+        ),
+        path: Optional[Path] = typer.Option(
+            None, "--path", help="Hub root or config path."
+        ),
+        base_path: Optional[str] = typer.Option(
+            None, "--base-path", help="Override configured hub base path."
+        ),
+        json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
+    ) -> None:
+        """Register a static file or directory as a preview service.
+
+        Prefer a CAR-managed workspace (`create-workspace` then
+        `--workspace <id>`) over registering paths inside the repository source
+        tree.
+        """
         kind_value = kind.replace("-", "_") if kind else None
-        payload = {
-            "path": _client_resolved_path(static_path),
-            "name": name,
-            "kind": kind_value,
-            "scope_links": _scope_links(scope),
-            "created_by": "cli",
-        }
+        if workspace:
+            if static_path is not None:
+                raise_exit("Pass either a static path or --workspace, not both.")
+            payload: dict[str, Any] = {
+                "path": workspace_path,
+                "source": {
+                    "type": "workspace",
+                    "workspace_id": workspace,
+                    "path": workspace_path,
+                },
+                "name": name,
+                "kind": kind_value,
+                "scope_links": _scope_links(scope),
+                "created_by": "cli",
+            }
+        else:
+            if static_path is None:
+                raise_exit(
+                    "register-static requires a static path or --workspace <id>."
+                )
+            assert static_path is not None
+            resolved_static_path = static_path
+            payload = {
+                "path": _client_resolved_path(resolved_static_path),
+                "name": name,
+                "kind": kind_value,
+                "scope_links": _scope_links(scope),
+                "created_by": "cli",
+            }
         config = _load_config(path)
         data = _request(
             "POST",

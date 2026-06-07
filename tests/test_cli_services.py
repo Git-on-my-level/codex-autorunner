@@ -137,6 +137,118 @@ def test_services_register_static_payload_normalizes_kind_and_scope(
     assert "/preview/p/tok_static1/" in result.output
 
 
+def test_services_create_workspace_posts_and_prints_path(
+    tmp_path: Path, monkeypatch
+) -> None:
+    hub_root = _hub_root(tmp_path)
+    calls: list[dict[str, object]] = []
+
+    def _fake_request(
+        method, url, json=None, timeout=None, headers=None, follow_redirects=True
+    ):  # type: ignore[no-untyped-def]
+        calls.append({"method": method, "url": url, "json": json})
+        return _mock_response(
+            {
+                "workspace_id": "ws_abc123",
+                "path": "/hub/.codex-autorunner/workspaces/ws_abc123",
+                "created": True,
+            }
+        )
+
+    monkeypatch.setattr("httpx.request", _fake_request)
+
+    result = runner.invoke(
+        app,
+        ["services", "create-workspace", "--path", str(hub_root), "--name", "Game"],
+    )
+
+    assert result.exit_code == 0
+    assert calls[0]["method"] == "POST"
+    assert urlsplit(str(calls[0]["url"])).path == "/hub/services/workspaces"
+    assert calls[0]["json"] == {"workspace_id": None, "name": "Game"}
+    assert "ws_abc123" in result.output
+    assert "/hub/.codex-autorunner/workspaces/ws_abc123" in result.output
+
+
+def test_services_register_static_workspace_source_payload(
+    tmp_path: Path, monkeypatch
+) -> None:
+    hub_root = _hub_root(tmp_path)
+    calls: list[dict[str, object]] = []
+
+    def _fake_request(
+        method, url, json=None, timeout=None, headers=None, follow_redirects=True
+    ):  # type: ignore[no-untyped-def]
+        calls.append({"method": method, "url": url, "json": json})
+        return _mock_response(
+            {
+                "service": {
+                    "service_id": "svc_ws1",
+                    "name": "Game",
+                    "kind": "static_dir",
+                    "status": "registered",
+                    "exposure": {"car_url": "/preview/services/svc_ws1/"},
+                }
+            }
+        )
+
+    monkeypatch.setattr("httpx.request", _fake_request)
+
+    result = runner.invoke(
+        app,
+        [
+            "services",
+            "register-static",
+            "--path",
+            str(hub_root),
+            "--workspace",
+            "ws_abc123",
+            "--kind",
+            "static-dir",
+            "--name",
+            "Game",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert urlsplit(str(calls[0]["url"])).path == "/hub/services/static"
+    assert calls[0]["json"] == {
+        "path": ".",
+        "source": {
+            "type": "workspace",
+            "workspace_id": "ws_abc123",
+            "path": ".",
+        },
+        "name": "Game",
+        "kind": "static_dir",
+        "scope_links": [],
+        "created_by": "cli",
+    }
+
+
+def test_services_register_static_rejects_path_and_workspace_together(
+    tmp_path: Path,
+) -> None:
+    hub_root = _hub_root(tmp_path)
+    static_file = tmp_path / "index.html"
+    static_file.write_text("<h1>hi</h1>", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "services",
+            "register-static",
+            str(static_file),
+            "--path",
+            str(hub_root),
+            "--workspace",
+            "ws_abc123",
+        ],
+    )
+
+    assert result.exit_code != 0
+
+
 def test_services_start_managed_payload_includes_command_port_env_and_start(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -8,6 +8,7 @@
     type ChatTranscriptCard,
     type ChatToolCallCard
   } from '$lib/viewModels/chat';
+  import { collapseRepeatedParagraphs } from '$lib/viewModels/traceText';
   import type { MessageCapsuleRef } from '$lib/viewModels/domain';
   import type { ArtifactDelivery, SurfaceArtifact } from '$lib/viewModels/domain';
 
@@ -128,6 +129,14 @@
     if (!summary) return null;
     if (isRedundantTraceSummary(summary, traceKindLabel(card))) return null;
     return summary;
+  }
+
+  // Defense-in-depth for private reasoning bodies only: collapse obvious
+  // exact-duplicate repetition (a backend merge miss). Never applied to
+  // commentary or other user-visible trace bodies, where repeated lines may be
+  // intentional.
+  function thinkingTraceBodyText(text: string): string {
+    return collapseRepeatedParagraphs(text);
   }
 
   function thinkingTraceLabel(card: Extract<ChatTranscriptCard, { kind: 'intermediate' }>): string {
@@ -416,7 +425,7 @@
           <strong>{thinkingTraceLabel(card)}</strong>
         </summary>
         <div class="thinking-trace-body markdown-body">
-          {@html renderMarkdownToHtml(card.text, { openLinksInNewTab: true })}
+          {@html renderMarkdownToHtml(thinkingTraceBodyText(card.text), { openLinksInNewTab: true })}
         </div>
       </details>
     {:else if isCommentaryTrace(card)}
@@ -459,7 +468,7 @@
                   <strong>{thinkingTraceLabel(traceCard)}</strong>
                 </summary>
                 <div class="thinking-trace-body markdown-body">
-                  {@html renderMarkdownToHtml(traceCard.text, { openLinksInNewTab: true })}
+                  {@html renderMarkdownToHtml(thinkingTraceBodyText(traceCard.text), { openLinksInNewTab: true })}
                 </div>
               </details>
             {:else if isCommentaryTrace(traceCard)}

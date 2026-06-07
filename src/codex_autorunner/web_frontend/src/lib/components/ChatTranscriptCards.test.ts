@@ -500,6 +500,32 @@ describe('ChatTranscriptCards', () => {
     expect(body).toContain('tool-status-started');
   });
 
+  it('collapses repeated reasoning trace bodies to a single paragraph', () => {
+    const paragraph =
+      'The user is accessing through a Tailscale URL and wants to inspect the repository state.';
+    const repeated = Array.from({ length: 10 }, () => paragraph).join('\n\n');
+
+    const { body } = render(ChatTranscriptCards, {
+      props: { cards: [intermediateCard('thinking-dup', 'thinking', repeated)] }
+    });
+
+    expect(body).toContain(paragraph);
+    expect(body).not.toContain(`${paragraph}\n\n${paragraph}`);
+  });
+
+  it('does not collapse repeated commentary bodies (user-visible content)', () => {
+    const line = 'Repeating this on purpose for emphasis.';
+    const repeated = Array.from({ length: 3 }, () => line).join('\n\n');
+
+    const { body } = render(ChatTranscriptCards, {
+      props: { cards: [intermediateCard('commentary-dup', 'commentary', repeated)] }
+    });
+
+    expect(body).toContain('class="message commentary"');
+    const occurrences = body.split(line).length - 1;
+    expect(occurrences).toBe(3);
+  });
+
   it('renders thinking summaries as plain text, not raw markdown', () => {
     const { body } = render(ChatTranscriptCards, {
       props: {

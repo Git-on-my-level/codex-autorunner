@@ -179,6 +179,18 @@ def _build_templates_snapshot(
     return payload
 
 
+_SERVICES_DRILLDOWN_COMMANDS: tuple[str, ...] = (
+    "car services list --json",
+    "car services get SERVICE_ID --json",
+    "car services logs SERVICE_ID --tail 200",
+    (
+        "car services create-workspace --json  "
+        "# managed dir for generated web artifacts; write files there, then "
+        "register-static --workspace <id> --kind static-dir"
+    ),
+)
+
+
 def _empty_services_snapshot() -> dict[str, Any]:
     return {
         "counts": {
@@ -194,11 +206,7 @@ def _empty_services_snapshot() -> dict[str, Any]:
         },
         "running_sample": [],
         "attention_sample": [],
-        "drilldown_commands": [
-            "car services list --json",
-            "car services get SERVICE_ID --json",
-            "car services logs SERVICE_ID --tail 200",
-        ],
+        "drilldown_commands": list(_SERVICES_DRILLDOWN_COMMANDS),
     }
 
 
@@ -256,11 +264,7 @@ def _build_services_snapshot(hub_root: Optional[Path]) -> dict[str, Any]:
         "counts": counts,
         "running_sample": running_sample,
         "attention_sample": attention_sample,
-        "drilldown_commands": [
-            "car services list --json",
-            "car services get SERVICE_ID --json",
-            "car services logs SERVICE_ID --tail 200",
-        ],
+        "drilldown_commands": list(_SERVICES_DRILLDOWN_COMMANDS),
     }
 
 

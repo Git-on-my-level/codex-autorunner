@@ -745,7 +745,171 @@ class TestSessionUpdateDecoder:
         )
         assert len(events) == 1
         assert isinstance(events[0], RunNotice)
-        assert events[0].kind == "progress"
+        assert events[0].kind == "thinking"
+        assert events[0].message == "thinking"
+
+    def test_session_update_thought_chunk_cumulative_snapshots(self) -> None:
+        state, ctx = _ctx(
+            "session/update",
+            {
+                "sessionId": "session-1",
+                "turnId": "turn-1",
+                "update": {
+                    "sessionUpdate": "agent_thought_chunk",
+                    "content": {"text": "The user"},
+                },
+            },
+        )
+        snapshots = (
+            "The user",
+            "The user is accessing",
+            "The user is accessing the dashboard",
+            "The user is accessing the dashboard",
+        )
+        messages: list[str] = []
+        for snapshot in snapshots:
+            events = self.decoder.decode(
+                "session/update",
+                {
+                    "sessionId": "session-1",
+                    "turnId": "turn-1",
+                    "update": {
+                        "sessionUpdate": "agent_thought_chunk",
+                        "content": {"text": snapshot},
+                    },
+                },
+                state,
+                ctx,
+            )
+            if events:
+                assert len(events) == 1
+                assert isinstance(events[0], RunNotice)
+                assert events[0].kind == "thinking"
+                messages.append(events[0].message)
+        assert messages == [
+            "The user",
+            "The user is accessing",
+            "The user is accessing the dashboard",
+        ]
+        assert "Theuser" not in messages[-1]
+
+    def test_session_update_thought_chunk_token_deltas(self) -> None:
+        state, ctx = _ctx(
+            "session/update",
+            {
+                "sessionId": "session-1",
+                "turnId": "turn-1",
+                "update": {
+                    "sessionUpdate": "agent_thought_chunk",
+                    "content": {"text": "The "},
+                },
+            },
+        )
+        deltas = ("The ", "user ", "is accessing")
+        messages: list[str] = []
+        for delta in deltas:
+            events = self.decoder.decode(
+                "session/update",
+                {
+                    "sessionId": "session-1",
+                    "turnId": "turn-1",
+                    "update": {
+                        "sessionUpdate": "agent_thought_chunk",
+                        "content": {"text": delta},
+                    },
+                },
+                state,
+                ctx,
+            )
+            assert len(events) == 1
+            assert isinstance(events[0], RunNotice)
+            assert events[0].kind == "thinking"
+            messages.append(events[0].message)
+        assert messages[-1] == "The user is accessing"
+        assert "Theuser" not in messages[-1]
+
+    def test_session_update_thought_chunk_prefix_lookalike_is_not_snapshot(
+        self,
+    ) -> None:
+        # "The" -> "There" shares a prefix but is NOT cumulative growth; the
+        # accumulated "The" must not be dropped.
+        state, ctx = _ctx(
+            "session/update",
+            {
+                "sessionId": "session-1",
+                "turnId": "turn-1",
+                "update": {
+                    "sessionUpdate": "agent_thought_chunk",
+                    "content": {"text": "The"},
+                },
+            },
+        )
+        messages: list[str] = []
+        for chunk in ("The", "There"):
+            events = self.decoder.decode(
+                "session/update",
+                {
+                    "sessionId": "session-1",
+                    "turnId": "turn-1",
+                    "update": {
+                        "sessionUpdate": "agent_thought_chunk",
+                        "content": {"text": chunk},
+                    },
+                },
+                state,
+                ctx,
+            )
+            assert len(events) == 1
+            assert isinstance(events[0], RunNotice)
+            assert events[0].kind == "thinking"
+            messages.append(events[0].message)
+        # Prior "The" is preserved (not replaced by "There").
+        assert messages[0] == "The"
+        assert messages[1] == "The There"
+        assert "There" in messages[1]
+        assert messages[1].startswith("The ")
+
+    def test_session_update_thought_chunk_resets_between_turns(self) -> None:
+        registry = build_default_decoder_registry()
+        state = RuntimeThreadRunEventState()
+
+        def _decode(method: str, params: dict[str, Any]) -> list[Any]:
+            _, ctx = _ctx(method, params, state=state)
+            return registry.decode(method, params, state, ctx)
+
+        first = _decode(
+            "session/update",
+            {
+                "sessionId": "session-1",
+                "update": {
+                    "sessionUpdate": "agent_thought_chunk",
+                    "content": {"text": "first turn thought"},
+                },
+            },
+        )
+        assert first[0].message == "first turn thought"
+
+        _decode(
+            "prompt/completed",
+            {"sessionId": "session-1", "turnId": "turn-1", "status": "completed"},
+        )
+
+        second = _decode(
+            "session/update",
+            {
+                "sessionId": "session-1",
+                "update": {
+                    "sessionUpdate": "agent_thought_chunk",
+                    "content": {"text": "second turn thought"},
+                },
+            },
+        )
+        assert len(second) == 1
+        assert isinstance(second[0], RunNotice)
+        assert second[0].kind == "thinking"
+        # New turn must not prepend or dedup against the previous turn's thought.
+        assert second[0].message == "second turn thought"
+        assert "first turn thought" not in second[0].message
 
     def test_session_update_usage(self) -> None:
         state, ctx = _ctx(

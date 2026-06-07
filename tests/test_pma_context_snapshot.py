@@ -27,6 +27,7 @@ from tests.pma_context_support import (
     test_render_hub_snapshot_caps_pma_file_action_summaries,
     test_render_hub_snapshot_distinguishes_run_dispatch_vs_pma_files,
     test_render_hub_snapshot_empty_both,
+    test_render_hub_snapshot_guides_managed_workspace_when_no_services,
     test_render_hub_snapshot_includes_all_next_action_types,
     test_render_hub_snapshot_includes_repo_destination,
     test_render_hub_snapshot_marks_stale_pma_files_as_review_only,

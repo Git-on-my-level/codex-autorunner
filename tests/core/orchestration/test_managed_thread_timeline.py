@@ -19,6 +19,10 @@ from codex_autorunner.core.orchestration.managed_thread_timeline import (
     build_managed_thread_timeline,
     timeline_item_from_tail_event,
 )
+from codex_autorunner.core.orchestration.runtime_thread_events import (
+    RuntimeThreadRunEventState,
+    normalize_runtime_thread_message,
+)
 from codex_autorunner.core.orchestration.turn_timeline import persist_turn_timeline
 from codex_autorunner.core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
@@ -181,6 +185,84 @@ def test_completed_timeline_separates_intermediate_and_final_output(
         item["payload"].get("source_event_type") == "output_delta"
         for item in payload["items"]
     )
+
+
+def test_multi_chunk_agent_thought_stream_projects_single_clean_reasoning(
+    tmp_path: Path,
+) -> None:
+    hub_root, store, thread_id = _store(tmp_path)
+    turn = create_test_turn(store, thread_id, prompt="why is the dashboard slow?")
+    turn_id = str(turn["managed_turn_id"])
+
+    state = RuntimeThreadRunEventState()
+    events: list = []
+    snapshots = (
+        "The user",
+        "The user is accessing",
+        "The user is accessing the dashboard",
+        "The user is accessing the dashboard",
+    )
+    for index, snapshot in enumerate(snapshots):
+        events.extend(
+            normalize_runtime_thread_message(
+                "session/update",
+                {
+                    "sessionId": "session-1",
+                    "update": {
+                        "sessionUpdate": "agent_thought_chunk",
+                        "content": {"type": "text", "text": snapshot},
+                    },
+                },
+                state,
+                timestamp=f"2026-05-06T10:00:0{index}Z",
+            )
+        )
+    events.append(
+        Completed(
+            timestamp="2026-05-06T10:00:09Z",
+            final_message="The dashboard is slow because of N+1 queries.",
+        )
+    )
+
+    thinking_events = [
+        event
+        for event in events
+        if isinstance(event, RunNotice) and event.kind == "thinking"
+    ]
+    assert thinking_events, "expected accumulated thinking notices"
+    assert all("Theuser" not in event.message for event in thinking_events)
+
+    persist_turn_timeline(
+        hub_root,
+        execution_id=turn_id,
+        target_kind="thread_target",
+        target_id=thread_id,
+        events=events,
+    )
+    assert store.mark_turn_finished(
+        turn_id,
+        status="ok",
+        assistant_text="The dashboard is slow because of N+1 queries.",
+    )
+
+    payload = build_managed_thread_timeline(
+        hub_root,
+        thread_store=store,
+        managed_thread_id=thread_id,
+    )
+
+    intermediates = [
+        item
+        for item in payload["items"]
+        if item["kind"] == "intermediate"
+        and item["payload"].get("intermediate_kind") == "thinking"
+    ]
+    assert len(intermediates) == 1
+    reasoning_text = intermediates[0]["payload"]["text"]
+    assert reasoning_text == "The user is accessing the dashboard"
+    assert "Theuser" not in reasoning_text
+    # No 10x repetition: the snapshot must appear exactly once.
+    assert reasoning_text.count("The user is accessing the dashboard") == 1
 
 
 def test_commentary_notice_projects_as_canonical_intermediate(
