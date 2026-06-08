@@ -39,6 +39,13 @@ LOG_PATH="$(dirname "${UPDATE_STATUS_PATH}")/update-standalone.log"
 REPO_URL="${REPO_URL:-https://github.com/cursor/codex-autorunner.git}"
 REPO_REF="${REPO_REF:-main}"
 
+PACKAGE_SRC_ROOT="$("${HELPER_PYTHON}" -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).expanduser().resolve(strict=False))' "${PACKAGE_SRC}")"
+PACKAGE_SRC_PYTHONPATH="${PACKAGE_SRC_ROOT}/src"
+if [[ -n "${PYTHONPATH:-}" ]]; then
+  export PYTHONPATH="${PACKAGE_SRC_PYTHONPATH}:${PYTHONPATH}"
+else
+  export PYTHONPATH="${PACKAGE_SRC_PYTHONPATH}"
+fi
 export HELPER_PYTHON
 export PACKAGE_SRC
 export UPDATE_STATUS_PATH

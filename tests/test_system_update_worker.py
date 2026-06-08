@@ -352,11 +352,29 @@ def test_spawn_update_process_writes_status(tmp_path: Path, monkeypatch) -> None
     def fake_popen(*args, **kwargs):  # type: ignore[no-untyped-def]
         calls["cmd"] = args[0] if args else kwargs.get("cmd")
         calls["cwd"] = kwargs.get("cwd") or (args[1] if len(args) > 1 else None)
+        calls["env"] = kwargs.get("env")
         return _FakeProc()
+
+    def fake_prepare_update_source(
+        update_dir: Path,
+        repo_url: str,
+        repo_ref: str,
+        logger: logging.Logger,
+    ) -> None:
+        calls["prepared"] = {
+            "update_dir": update_dir,
+            "repo_url": repo_url,
+            "repo_ref": repo_ref,
+        }
+        (update_dir / "src").mkdir(parents=True)
 
     monkeypatch.setattr(
         "codex_autorunner.core.update._facade.subprocess.Popen",
         fake_popen,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.update._facade.prepare_update_source",
+        fake_prepare_update_source,
     )
     monkeypatch.setattr(
         "codex_autorunner.core.update._facade._capture_update_identity_hint",
@@ -386,6 +404,11 @@ def test_spawn_update_process_writes_status(tmp_path: Path, monkeypatch) -> None
     assert payload["notify_platform"] == "discord"
     assert payload["notify_context"] == {"chat_id": "channel-1"}
     assert "log_path" in payload
+    assert calls["prepared"] == {
+        "update_dir": update_dir,
+        "repo_url": "https://example.com/repo.git",
+        "repo_ref": "main",
+    }
     cmd = calls["cmd"]
     assert "--repo-url" in cmd
     assert str(update_dir) in cmd
@@ -397,6 +420,9 @@ def test_spawn_update_process_writes_status(tmp_path: Path, monkeypatch) -> None
     assert "car-discord" in cmd
     assert "codex_autorunner.core.update.runner" in cmd
     assert "--identity-hint" in cmd
+    env = calls["env"]
+    assert isinstance(env, dict)
+    assert str(update_dir / "src") in str(env.get("PYTHONPATH", ""))
 
 
 def test_system_update_worker_rejects_invalid_target(
