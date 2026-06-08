@@ -23,6 +23,7 @@ from codex_autorunner.adapters.telegram.handlers.commands import (
     execution as telegram_execution,
 )
 from codex_autorunner.browser.runtime import BrowserRuntime
+from codex_autorunner.core.automation.builtins import _normalize_reactive_event_types
 from codex_autorunner.core.chat_bindings import active_chat_binding_metadata_by_thread
 from codex_autorunner.core.pma_automation_store import PmaAutomationStore
 from codex_autorunner.surfaces.web.routes.pma_routes.managed_threads import (
@@ -974,6 +975,11 @@ class ChatSurfaceScenarioRunner:
             ), f"create_automation_subscription failed: {response.status_code} {response.text}"
             payload = response.json()
             subscription = payload.get("subscription") or {}
+            _mirror_unified_subscription_for_lab_wakeup(
+                context.harness.root,
+                request_payload=dict(action.payload),
+                subscription=subscription,
+            )
             delivery_target = (
                 subscription.get("metadata", {}).get("delivery_target")
                 if isinstance(subscription.get("metadata"), dict)
@@ -1028,12 +1034,25 @@ class ChatSurfaceScenarioRunner:
         if action.kind == "emit_automation_transition":
             store = PmaAutomationStore(context.harness.root)
             payload = dict(action.payload)
+            original_event_type = self._normalize_optional_text(
+                payload.get("event_type")
+            )
+            normalized_event_type = _normalize_lab_lifecycle_event_type(
+                original_event_type
+            )
+            if normalized_event_type is not None:
+                payload["event_type"] = normalized_event_type
+            if (
+                original_event_type is not None
+                and original_event_type != normalized_event_type
+            ):
+                payload["original_event_type"] = original_event_type
             if self._normalize_optional_text(
                 payload.get("thread_id")
             ) is None and self._normalize_optional_text(payload.get("event_type")) in {
-                "managed_thread_completed",
-                "managed_thread_failed",
-                "managed_thread_interrupted",
+                "lifecycle.flow_completed",
+                "lifecycle.flow_failed",
+                "lifecycle.flow_stopped",
             }:
                 current_thread_id = self._resolve_current_thread_target_id(context)
                 if current_thread_id is not None:
@@ -1084,7 +1103,14 @@ class ChatSurfaceScenarioRunner:
             context.surface_metadata["wakeup_delivery_surface_key"] = (
                 delivery_target.get("surface_key")
             )
-            context.latest_wakeup = dict(matching_wakeup)
+            wakeup_for_publish = dict(matching_wakeup)
+            if isinstance(wakeup_metadata, dict):
+                original_wakeup_event_type = self._normalize_optional_text(
+                    wakeup_metadata.get("original_event_type")
+                )
+                if original_wakeup_event_type is not None:
+                    wakeup_for_publish["event_type"] = original_wakeup_event_type
+            context.latest_wakeup = wakeup_for_publish
             return
 
         if action.kind == "publish_latest_wakeup_result":
@@ -2472,6 +2498,65 @@ def _build_automation_route_client(
     router = app.router
     build_automation_routes(router, lambda: runtime_state)
     return TestClient(app)
+
+
+def _normalize_lab_lifecycle_event_type(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = _normalize_reactive_event_types([value])
+    return normalized[0] if normalized else value.strip().lower()
+
+
+def _normalize_lab_lifecycle_event_types(payload: dict[str, Any]) -> list[str]:
+    raw_event_types = payload.get("event_types")
+    if isinstance(raw_event_types, list):
+        return _normalize_reactive_event_types(raw_event_types)
+    raw_event_type = payload.get("event_type")
+    if raw_event_type is None:
+        return []
+    return _normalize_reactive_event_types([raw_event_type])
+
+
+def _mirror_unified_subscription_for_lab_wakeup(
+    hub_root: Path,
+    *,
+    request_payload: dict[str, Any],
+    subscription: dict[str, Any],
+) -> None:
+    """Bridge route-created automation rules into the lab wakeup publisher.
+
+    Production routes enqueue subscription wakeups through the hub automation
+    worker. The scenario runner builds only the PMA route app, so mirror the
+    normalized subscription into the compatibility store used by
+    ``publish_latest_wakeup_result``.
+    """
+
+    event_types = _normalize_lab_lifecycle_event_types(request_payload)
+    metadata = (
+        dict(subscription.get("metadata") or {})
+        if isinstance(subscription.get("metadata"), dict)
+        else None
+    )
+    PmaAutomationStore(hub_root).create_subscription(
+        {
+            "event_types": event_types,
+            "repo_id": request_payload.get("repo_id"),
+            "run_id": request_payload.get("run_id"),
+            "thread_id": request_payload.get("thread_id"),
+            "lane_id": subscription.get("lane_id"),
+            "from_state": request_payload.get("from_state"),
+            "to_state": request_payload.get("to_state"),
+            "reason": request_payload.get("reason"),
+            "idempotency_key": (
+                f"surface-lab:{subscription.get('subscription_id')}"
+                if subscription.get("subscription_id")
+                else None
+            ),
+            "notify_once": request_payload.get("notify_once"),
+            "max_matches": request_payload.get("max_matches"),
+            "metadata": metadata,
+        }
+    )
 
 
 def _discord_command_interaction(

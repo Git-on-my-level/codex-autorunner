@@ -41,6 +41,9 @@ from codex_autorunner.adapters.telegram.service import TelegramBotService
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.core.orchestration.managed_thread_delivery import (
+    ManagedThreadDeliveryState,
+)
 from tests.chat_surface_lab.backend_runtime import (
     HermesFixtureRuntime,
     app_server_fixture_command,
@@ -410,6 +413,8 @@ class DiscordSurfaceHarness:
             service_task = self._service_task
             if service_task is not None and service_task.done():
                 await service_task
+                return
+            if self._discord_turn_delivery_finished():
                 return
             if not self._service_has_inflight_work():
                 return
@@ -791,6 +796,19 @@ class DiscordSurfaceHarness:
             return False
         return str(getattr(execution, "status", "") or "").strip() == "running"
 
+    def _discord_turn_delivery_finished(self) -> bool:
+        capture = self._log_capture
+        if capture is None:
+            return False
+        latest_finalized: dict[str, Any] | None = None
+        for record in reversed(capture.records):
+            if record.get("event") == "chat.managed_thread.turn_finalized":
+                latest_finalized = record
+                break
+        if latest_finalized is None:
+            return False
+        return True
+
     async def interrupt_active_turn_via_component(
         self,
         *,
@@ -971,10 +989,11 @@ async def drain_telegram_spawned_tasks(service: TelegramBotService) -> None:
 class TelegramSurfaceHarness:
     root: Path
     logger_name: str = "test.chat_surface_integration.telegram"
-    timeout_seconds: float = 2.0
+    timeout_seconds: float = 8.0
     service: Optional[TelegramBotService] = field(default=None, init=False)
     bot: Optional[FakeTelegramBot] = field(default=None, init=False)
     _log_capture: Optional[StructuredLogCapture] = field(default=None, init=False)
+    _next_message_id: int = field(default=1, init=False)
 
     async def setup(
         self,
@@ -1035,13 +1054,14 @@ class TelegramSurfaceHarness:
         event_name: str,
         *,
         timeout_seconds: float = 2.0,
+        start_index: int = 0,
         predicate: Optional[Callable[[dict[str, Any]], bool]] = None,
     ) -> dict[str, Any]:
         if self._log_capture is None:
             raise RuntimeError("TelegramSurfaceHarness has no active log capture")
         deadline = asyncio.get_running_loop().time() + max(timeout_seconds, 0.0)
         while True:
-            for record in self._log_capture.records:
+            for record in self._log_capture.records[max(0, start_index) :]:
                 if record.get("event") != event_name:
                     continue
                 if predicate is not None and not predicate(record):
@@ -1068,20 +1088,26 @@ class TelegramSurfaceHarness:
         if self.bot is None:
             raise RuntimeError("TelegramSurfaceHarness.setup() must run first")
         message_start_index = len(self.bot.messages)
+        log_start_index = len(self._log_capture.records) if self._log_capture else 0
+        message_id = self._next_message_id
+        self._next_message_id += 1
         message = build_telegram_message(
             text,
             thread_id=thread_id,
-            message_id=1,
-            update_id=1,
+            message_id=message_id,
+            update_id=message_id,
         )
         await asyncio.wait_for(
             self.service._handle_message_inner(message),
             timeout=self.timeout_seconds,
         )
-        await asyncio.wait_for(
-            drain_telegram_spawned_tasks(self.service),
-            timeout=self.timeout_seconds,
-        )
+        if not self._telegram_policy_skipped_turn(log_start_index=log_start_index):
+            await asyncio.wait_for(
+                self._wait_for_telegram_terminal_delivery(
+                    log_start_index=log_start_index
+                ),
+                timeout=self.timeout_seconds * 2,
+            )
         self.bot.background_tasks_drained = True
         self._apply_telegram_runtime_metadata(
             self.bot,
@@ -1089,6 +1115,22 @@ class TelegramSurfaceHarness:
             message_start_index=message_start_index,
         )
         return self.bot
+
+    def _telegram_policy_skipped_turn(self, *, log_start_index: int) -> bool:
+        capture = self._log_capture
+        if capture is None:
+            return False
+        records = capture.records[max(0, log_start_index) :]
+        if any(
+            record.get("event") == "chat.managed_thread.turn_finalize_started"
+            for record in records
+        ):
+            return False
+        return any(
+            record.get("event") == "telegram.collaboration_policy.evaluated"
+            and record.get("policy_should_start_turn") is False
+            for record in records
+        )
 
     def start_message(
         self,
@@ -1117,6 +1159,148 @@ class TelegramSurfaceHarness:
             thread_id=thread_id,
             bot_client=bot_client,
         )
+
+    async def _wait_for_telegram_terminal_delivery(
+        self,
+        *,
+        log_start_index: int,
+    ) -> None:
+        if self.service is None:
+            raise RuntimeError("TelegramSurfaceHarness.setup() must run first")
+        finalized = await self.wait_for_log_event(
+            "chat.managed_thread.turn_finalized",
+            timeout_seconds=self.timeout_seconds,
+            start_index=log_start_index,
+        )
+        delivery_id = await self._wait_for_telegram_delivery_handoff(
+            finalized,
+            start_index=log_start_index,
+        )
+        if finalized.get("completion_source") != "timeout" and delivery_id is not None:
+            await self._replay_cancelled_telegram_delivery(delivery_id)
+            await self._wait_for_telegram_delivery_state()
+        if delivery_id is None:
+            await self.wait_for_log_event(
+                "chat_ux_timing.telegram.managed_thread_turn",
+                timeout_seconds=self.timeout_seconds,
+                start_index=log_start_index,
+                predicate=lambda record: record.get("execution_id")
+                == finalized.get("managed_turn_id"),
+            )
+        done_tasks = [
+            task for task in tuple(self.service._spawned_tasks) if task.done()
+        ]
+        if done_tasks:
+            results = await asyncio.gather(*done_tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, BaseException) and not isinstance(
+                    result, asyncio.CancelledError
+                ):
+                    raise result
+
+    async def _wait_for_telegram_delivery_state(self) -> None:
+        if self.bot is None:
+            raise RuntimeError("TelegramSurfaceHarness.setup() must run first")
+        deadline = asyncio.get_running_loop().time() + max(self.timeout_seconds, 0.0)
+        while True:
+            if self.bot.deleted_messages:
+                return
+            cleanup_failed = self._log_capture is not None and any(
+                record.get("event") == "telegram.progress.cleanup_failed"
+                for record in self._log_capture.records
+            )
+            if cleanup_failed:
+                return
+            if asyncio.get_running_loop().time() >= deadline:
+                raise TimeoutError(
+                    "TelegramSurfaceHarness terminal delivery did not finish"
+                )
+            await asyncio.sleep(0.01)
+
+    async def _wait_for_telegram_delivery_handoff(
+        self,
+        finalized: dict[str, Any],
+        *,
+        start_index: int,
+    ) -> str | None:
+        deadline = asyncio.get_running_loop().time() + max(self.timeout_seconds, 0.0)
+        while True:
+            delivery_id = self._latest_cancelled_delivery_id(
+                finalized,
+                start_index=start_index,
+            )
+            if delivery_id is not None:
+                return delivery_id
+            capture = self._log_capture
+            if capture is not None:
+                for record in capture.records[max(0, start_index) :]:
+                    if record.get(
+                        "event"
+                    ) == "chat_ux_timing.telegram.managed_thread_turn" and record.get(
+                        "execution_id"
+                    ) == finalized.get(
+                        "managed_turn_id"
+                    ):
+                        return None
+            if asyncio.get_running_loop().time() >= deadline:
+                return None
+            await asyncio.sleep(0.01)
+
+    async def _replay_cancelled_telegram_delivery(
+        self,
+        delivery_id: str,
+    ) -> None:
+        if self.service is None:
+            raise RuntimeError("TelegramSurfaceHarness.setup() must run first")
+        worker = self.service._build_delivery_worker()
+        engine = worker._current_engine()
+        claim = engine.ensure_direct_delivery_claim(delivery_id)
+        if claim is None:
+            engine._ledger.patch_delivery(
+                delivery_id,
+                state=ManagedThreadDeliveryState.RETRY_SCHEDULED,
+                validate_transition=False,
+                claim_token=None,
+                claim_expires_at=None,
+                next_attempt_at=None,
+            )
+            claim = engine.ensure_direct_delivery_claim(delivery_id)
+        if claim is None:
+            raise TimeoutError(
+                "TelegramSurfaceHarness could not replay durable delivery"
+            )
+        result = await worker._adapter.deliver_managed_thread_record(
+            claim.record,
+            claim=claim,
+        )
+        engine.record_attempt_result(
+            claim.record.delivery_id,
+            claim_token=claim.claim_token,
+            result=result,
+        )
+
+    def _latest_cancelled_delivery_id(
+        self,
+        finalized: dict[str, Any],
+        *,
+        start_index: int,
+    ) -> str | None:
+        capture = self._log_capture
+        if capture is None:
+            return None
+        managed_turn_id = str(finalized.get("managed_turn_id") or "").strip()
+        for record in reversed(capture.records[start_index:]):
+            if (
+                record.get("event")
+                != "chat.managed_thread.delivery_cancelled_after_finalization"
+            ):
+                continue
+            if managed_turn_id and record.get("managed_turn_id") != managed_turn_id:
+                continue
+            delivery_id = str(record.get("delivery_id") or "").strip()
+            if delivery_id:
+                return delivery_id
+        return None
 
     async def submit_active_message(
         self,

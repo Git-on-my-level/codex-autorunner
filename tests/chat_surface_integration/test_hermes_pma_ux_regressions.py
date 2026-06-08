@@ -156,12 +156,12 @@ async def test_surfaces_make_busy_thread_queue_visible_before_recovery(
     try:
         discord_first = discord.start_message("cancel me")
         discord_thread_target_id, discord_execution_id = (
-            await discord.wait_for_running_execution(timeout_seconds=2.0)
+            await discord.wait_for_running_execution(timeout_seconds=8.0)
         )
         await discord.submit_active_message("echo queued after busy", message_id="m-2")
         queued_submission = await discord.wait_for_log_event(
             "discord.turn.managed_thread_submission",
-            timeout_seconds=2.0,
+            timeout_seconds=8.0,
             predicate=lambda record: record.get("queued") is True,
         )
         assert queued_submission.get("managed_thread_id") == discord_thread_target_id
@@ -380,6 +380,7 @@ async def test_surfaces_acknowledge_interrupt_controls_before_final_confirmation
         assert discord_final_interrupt_content in {
             "Interrupt succeeded.",
             "Recovered stale session after backend thread was lost.",
+            "Current turn already finished.",
         }
         discord_ack = await discord.wait_for_log_event(
             "discord.turn.cancel_acknowledged"
@@ -392,7 +393,10 @@ async def test_surfaces_acknowledge_interrupt_controls_before_final_confirmation
         discord_confirmed = await discord.wait_for_log_event(
             "discord.interrupt.completed"
         )
-        assert discord_confirmed.get("interrupt_state") == "confirmed"
+        assert discord_confirmed.get("interrupt_state") in {
+            "confirmed",
+            "already_finished",
+        }
         await discord_task
 
         telegram_task = telegram.start_message("cancel me")

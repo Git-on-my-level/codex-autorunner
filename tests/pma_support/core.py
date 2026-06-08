@@ -1022,14 +1022,17 @@ def test_pma_chat_github_injection_uses_raw_user_message(
 async def test_pma_chat_idempotency_key_uses_full_message(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
-    blocker = asyncio.Event()
+    first_started = asyncio.Event()
+    second_started = asyncio.Event()
+    releases: list[asyncio.Event] = []
 
     class FakeTurnHandle:
-        def __init__(self) -> None:
-            self.turn_id = "turn-1"
+        def __init__(self, turn_id: str, release: asyncio.Event) -> None:
+            self.turn_id = turn_id
+            self._release = release
 
         async def wait(self, timeout=None):
-            await blocker.wait()
+            await self._release.wait()
             return type(
                 "Result",
                 (),
@@ -1037,6 +1040,9 @@ async def test_pma_chat_idempotency_key_uses_full_message(hub_env) -> None:
             )()
 
     class FakeClient:
+        def __init__(self) -> None:
+            self.turn_count = 0
+
         async def thread_resume(self, thread_id: str) -> None:
             return None
 
@@ -1052,7 +1058,14 @@ async def test_pma_chat_idempotency_key_uses_full_message(hub_env) -> None:
             **turn_kwargs,
         ):
             _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
-            return FakeTurnHandle()
+            self.turn_count += 1
+            release = asyncio.Event()
+            releases.append(release)
+            if self.turn_count == 1:
+                first_started.set()
+            elif self.turn_count == 2:
+                second_started.set()
+            return FakeTurnHandle(f"turn-{self.turn_count}", release)
 
     class FakeSupervisor:
         def __init__(self) -> None:
@@ -1065,6 +1078,12 @@ async def test_pma_chat_idempotency_key_uses_full_message(hub_env) -> None:
     app.state.app_server_supervisor = FakeSupervisor()
     app.state.app_server_events = object()
 
+    async def _fast_snapshot(_supervisor: Any, *, hub_root: Path) -> dict[str, Any]:
+        _ = hub_root
+        return {}
+
+    app.state.pma_container.ports.build_hub_snapshot = _fast_snapshot
+
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport, base_url="http://testserver"
@@ -1075,13 +1094,17 @@ async def test_pma_chat_idempotency_key_uses_full_message(hub_env) -> None:
         task_one = asyncio.create_task(
             client.post("/hub/pma/chat", json={"message": message_one})
         )
-        await anyio.sleep(0.05)
+        with anyio.fail_after(5):
+            await first_started.wait()
         task_two = asyncio.create_task(
             client.post("/hub/pma/chat", json={"message": message_two})
         )
-        await anyio.sleep(0.05)
+        await anyio.sleep(0)
         assert not task_two.done()
-        blocker.set()
+        releases[0].set()
+        with anyio.fail_after(5):
+            await second_started.wait()
+        releases[1].set()
         with anyio.fail_after(5):
             resp_one = await task_one
             resp_two = await task_two
@@ -1095,6 +1118,7 @@ async def test_pma_chat_idempotency_key_uses_full_message(hub_env) -> None:
 async def test_pma_interrupt_route_interrupts_running_turn(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
+    turn_started = asyncio.Event()
 
     class FakeTurnHandle:
         def __init__(self) -> None:
@@ -1125,6 +1149,7 @@ async def test_pma_interrupt_route_interrupts_running_turn(hub_env) -> None:
             **turn_kwargs,
         ):
             _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            turn_started.set()
             return FakeTurnHandle()
 
         async def turn_interrupt(
@@ -1144,6 +1169,12 @@ async def test_pma_interrupt_route_interrupts_running_turn(hub_env) -> None:
     app.state.app_server_supervisor = fake_supervisor
     app.state.app_server_events = object()
 
+    async def _fast_snapshot(_supervisor: Any, *, hub_root: Path) -> dict[str, Any]:
+        _ = hub_root
+        return {}
+
+    app.state.pma_container.ports.build_hub_snapshot = _fast_snapshot
+
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport, base_url="http://testserver"
@@ -1154,6 +1185,8 @@ async def test_pma_interrupt_route_interrupts_running_turn(hub_env) -> None:
                 json={"message": "interrupt me", "client_turn_id": "turn-interrupt"},
             )
         )
+        with anyio.fail_after(10):
+            await turn_started.wait()
         with anyio.fail_after(2):
             while True:
                 active_resp = await client.get("/hub/pma/active")
@@ -1176,7 +1209,7 @@ async def test_pma_interrupt_route_interrupts_running_turn(hub_env) -> None:
 
         assert chat_resp.status_code == 200
         assert chat_resp.json()["status"] == "interrupted"
-        assert chat_resp.json()["detail"] == "chat interrupted"
+        assert chat_resp.json()["detail"] == "Managed thread interrupted"
 
         with anyio.fail_after(2):
             while True:
@@ -1306,6 +1339,7 @@ async def test_pma_active_updates_during_running_turn(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
     blocker = asyncio.Event()
+    turn_started = asyncio.Event()
 
     class FakeTurnHandle:
         def __init__(self) -> None:
@@ -1335,6 +1369,7 @@ async def test_pma_active_updates_during_running_turn(hub_env) -> None:
             **turn_kwargs,
         ):
             _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            turn_started.set()
             return FakeTurnHandle()
 
     class FakeSupervisor:
@@ -1348,6 +1383,12 @@ async def test_pma_active_updates_during_running_turn(hub_env) -> None:
     app.state.app_server_supervisor = FakeSupervisor()
     app.state.app_server_events = object()
 
+    async def _fast_snapshot(_supervisor: Any, *, hub_root: Path) -> dict[str, Any]:
+        _ = hub_root
+        return {}
+
+    app.state.pma_container.ports.build_hub_snapshot = _fast_snapshot
+
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport, base_url="http://testserver"
@@ -1356,6 +1397,8 @@ async def test_pma_active_updates_during_running_turn(hub_env) -> None:
             client.post("/hub/pma/chat", json={"message": "hi"})
         )
         try:
+            with anyio.fail_after(10):
+                await turn_started.wait()
             with anyio.fail_after(2):
                 while True:
                     resp = await client.get("/hub/pma/active")
@@ -2290,6 +2333,7 @@ def test_pma_chat_hermes_reuses_agent_scoped_registry_binding(hub_env) -> None:
                     "assistant_text": "hermes reply",
                     "raw_events": [],
                     "errors": [],
+                    "effective_runtime": {},
                 },
             )()
 
@@ -2363,6 +2407,7 @@ def test_pma_chat_hermes_profile_uses_profile_scoped_registry_binding(
                     "assistant_text": "hermes profile reply",
                     "raw_events": [],
                     "errors": [],
+                    "effective_runtime": {},
                 },
             )()
 

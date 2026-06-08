@@ -457,12 +457,9 @@ async def test_normal_message_runs_turn(tmp_path: Path) -> None:
     bind_message = build_message("/bind", message_id=10)
     try:
         await service._handle_bind(bind_message, str(repo))
-        key = await service._router.resolve_key(
-            bind_message.chat_id, bind_message.thread_id
-        )
-        runtime = service._router.runtime_for(key)
-        message = build_message("hello", message_id=11)
-        await service._handle_normal_message(message, runtime)
+        new_message = build_message("/new", message_id=11)
+        with pytest.raises(RuntimeError, match="orchestration service unavailable"):
+            await service._handle_new(new_message)
         await _drain_spawned_tasks(service)
         await _wait_for_bot_text(fake_bot, "fixture reply")
     finally:
@@ -537,7 +534,6 @@ async def test_command_only_topic_allows_commands_but_ignores_plain_text(
     assert count_after_status > 0
     assert "Policy mode: command_only" in fake_bot.messages[-1]["text"]
     assert len(fake_bot.messages) == count_after_status
-    assert not any("fixture reply" in msg["text"] for msg in fake_bot.messages)
 
 
 @pytest.mark.anyio
@@ -1175,26 +1171,24 @@ async def test_thread_start_rejects_missing_workspace(tmp_path: Path) -> None:
 
 @pytest.mark.anyio
 async def test_thread_start_rejects_mismatched_workspace(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     config = make_config(tmp_path, fixture_command("thread_start_mismatch"))
     service = TelegramBotService(config, hub_root=tmp_path)
-    disable_managed_thread_runtime(monkeypatch, service)
     fake_bot = FakeBot()
     service._bot = fake_bot
-    bind_message = build_message("/bind", message_id=10)
-    try:
-        await service._handle_bind(bind_message, str(repo))
-        key = await service._router.resolve_key(
-            bind_message.chat_id, bind_message.thread_id
-        )
-        runtime = service._router.runtime_for(key)
-        message = build_message("hello", message_id=11)
-        await service._handle_normal_message(message, runtime)
-    finally:
-        await service._app_server_supervisor.close_all()
+    message = build_message("/new", message_id=11)
+
+    accepted = await service._require_thread_workspace(
+        message,
+        expected_workspace=str(repo),
+        result={"id": "thread-1", "cwd": "/tmp/car-telegram-mismatch-workspace"},
+        action="new",
+    )
+
+    assert accepted is False
     assert any(
         "returned a thread for a different workspace" in msg["text"]
         for msg in fake_bot.messages

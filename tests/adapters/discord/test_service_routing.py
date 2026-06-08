@@ -872,7 +872,7 @@ async def test_discord_notification_reply_routes_to_managed_thread_with_context(
         def __init__(self) -> None:
             self._store = _StoreStub()
             self._logger = logging.getLogger("test")
-            self._config = SimpleNamespace(root=tmp_path)
+            self._config = SimpleNamespace(root=tmp_path, max_message_length=2000)
             self._hub_supervisor = object()
             self._hub_client = _HubClientStub()
             self._background_tasks: set[asyncio.Task[Any]] = set()
@@ -901,6 +901,7 @@ async def test_discord_notification_reply_routes_to_managed_thread_with_context(
             *,
             link_source_text: str,
             allow_cross_repo: bool,
+            **_kwargs: object,
         ) -> tuple[str, bool]:
             captured["github_workspace_root"] = _workspace_root
             captured["allow_cross_repo"] = allow_cross_repo
@@ -1004,7 +1005,13 @@ async def test_discord_notification_reply_routes_to_managed_thread_with_context(
         build_ticket_flow_controller_fn=lambda *_args, **_kwargs: None,
         ensure_worker_fn=lambda *_args, **_kwargs: None,
     )
-    await asyncio.gather(*list(service._background_tasks), return_exceptions=True)
+    background_results = await asyncio.gather(
+        *list(service._background_tasks), return_exceptions=True
+    )
+    background_errors = [
+        result for result in background_results if isinstance(result, BaseException)
+    ]
+    assert background_errors == []
 
     run_turn_kwargs = captured.get("run_turn_kwargs")
     assert isinstance(run_turn_kwargs, dict)

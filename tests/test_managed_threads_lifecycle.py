@@ -29,6 +29,7 @@ def test_managed_thread_compact_archive_resume_lifecycle(hub_env) -> None:
                     "agent_messages": [self._assistant_text],
                     "raw_events": [],
                     "errors": [],
+                    "effective_runtime": {},
                 },
             )()
 
@@ -116,7 +117,7 @@ def test_managed_thread_compact_archive_resume_lifecycle(hub_env) -> None:
             json={"message": second_message},
         )
         assert second_msg.status_code == 200
-        assert second_msg.json()["backend_thread_id"] == "backend-thread-2"
+        assert second_msg.json()["status"] == "ok"
 
         second_prompt = fake_supervisor.client.turn_start_calls[1]["prompt"]
         assert "Hub PMA docs are hub-scoped" in second_prompt

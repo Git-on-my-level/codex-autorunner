@@ -418,10 +418,18 @@ class TestIdleCpuSoakIntegration:
                 "hub_only",
                 "--artifact-dir",
                 str(artifact_dir),
+                "--warmup-seconds",
+                "0",
+                "--duration-seconds",
+                "1",
+                "--sample-interval-seconds",
+                "0.25",
+                "--health-timeout-seconds",
+                "30",
             ],
             capture_output=True,
             text=True,
-            timeout=600,
+            timeout=45,
             cwd=str(_REPO_ROOT),
         )
 
@@ -431,10 +439,13 @@ class TestIdleCpuSoakIntegration:
         ), f"latest.json not found. stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
 
         artifact = json.loads(latest.read_text(encoding="utf-8"))
+        assert "soak failed" not in result.stderr
         assert artifact["profile"] == "hub_only"
         assert "aggregate_metrics" in artifact
         assert "signoff" in artifact
         assert artifact["version"] == 1
+        assert artifact["config"]["duration_seconds"] == 1.0
+        assert artifact["config"]["sample_interval_seconds"] == 0.25
 
         agg = artifact["aggregate_metrics"]
         assert agg["car_owned_cpu_samples"] > 0

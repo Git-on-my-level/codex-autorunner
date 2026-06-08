@@ -236,6 +236,8 @@ class ChatRunMirror:
 
         store = self._open_flow_store()
         try:
+            if store.get_flow_run(run_id) is None:
+                return
             existing = store.get_artifacts(run_id)
             if any(artifact.kind == kind for artifact in existing):
                 return

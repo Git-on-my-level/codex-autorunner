@@ -1241,6 +1241,7 @@ async def _execute_discord_thread_message(
     if dispatch.pending_compact_seed:
         prompt_text = f"{dispatch.pending_compact_seed}\n\n{prompt_text}"
 
+    turn_envelope: Optional[ChatTurnEnvelope] = None
     turn_input_items: Optional[list[dict[str, Any]]] = None
     if attachment_input_items:
         turn_input_items = [

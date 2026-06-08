@@ -20,6 +20,7 @@ from codex_autorunner.adapters.github.polling_events import emit_new_conditions
 from codex_autorunner.core.automation import AutomationEvent
 from codex_autorunner.core.automation.store import AutomationStore
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration.migrations import ORCHESTRATION_SCHEMA_VERSION
 from codex_autorunner.core.orchestration.sqlite import (
@@ -1680,6 +1681,59 @@ def test_backfill_binding_thread_targets_claims_active_matching_thread(
     assert counts["bindings_updated"] == 1
     assert binding is not None
     assert binding.thread_target_id == thread["managed_thread_id"]
+
+
+def test_backfill_binding_thread_targets_refreshes_stale_thread_branch(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace_root = tmp_path / "repo"
+    workspace_root.mkdir(parents=True)
+    run_git(["init"], workspace_root, check=True)
+    run_git(["config", "user.email", "test@example.com"], workspace_root, check=True)
+    run_git(["config", "user.name", "Test User"], workspace_root, check=True)
+    (workspace_root / "README.md").write_text("fixture\n", encoding="utf-8")
+    run_git(["add", "README.md"], workspace_root, check=True)
+    run_git(["commit", "-m", "fixture"], workspace_root, check=True)
+    run_git(["checkout", "-b", "feature/refreshed"], workspace_root, check=True)
+    thread = ManagedThreadStore(hub_root).create_thread(
+        "codex",
+        workspace_root,
+        repo_id="repo-1",
+        metadata={"head_branch": "feature/stale"},
+    )
+    PrBindingStore(hub_root).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        repo_id="repo-1",
+        pr_number=17,
+        pr_state="open",
+        head_branch="feature/refreshed",
+        base_branch="main",
+    )
+
+    service = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(),
+    )
+
+    counts = service.backfill_binding_thread_targets(limit=10)
+    binding = PrBindingStore(hub_root).get_binding_by_pr(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=17,
+    )
+    refreshed_thread = ManagedThreadStore(hub_root).get_thread(
+        str(thread["managed_thread_id"])
+    )
+
+    assert counts["threads_scanned"] == 1
+    assert counts["bindings_matched"] == 1
+    assert counts["bindings_updated"] == 1
+    assert binding is not None
+    assert binding.thread_target_id == thread["managed_thread_id"]
+    assert refreshed_thread is not None
+    assert refreshed_thread["metadata"]["head_branch"] == "feature/refreshed"
 
 
 def test_backfill_binding_thread_targets_skips_already_bound_binding(

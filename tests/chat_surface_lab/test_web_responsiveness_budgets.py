@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from itertools import count
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,8 @@ pytestmark = pytest.mark.slow
 def test_web_responsiveness_budget_smoke_writes_actionable_diagnostics(
     tmp_path: Path,
 ) -> None:
+    ticks = count()
+
     result = run_web_responsiveness_budget_smoke(
         hub_root=tmp_path / "hub",
         artifact_dir=tmp_path / "diagnostics" / "web-responsiveness-budgets",
@@ -26,6 +29,7 @@ def test_web_responsiveness_budget_smoke_writes_actionable_diagnostics(
             "timeline_event_count": 70,
             "journal_event_count": 180,
         },
+        clock=lambda: next(ticks) * 0.001,
     )
 
     assert result.passed is True

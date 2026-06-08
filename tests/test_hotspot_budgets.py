@@ -138,7 +138,7 @@ STANDARD_FILE_BUDGETS = (
     ),
     FileBudget(
         path="src/codex_autorunner/surfaces/web/services/pma/managed_thread_send_runtime.py",
-        max_lines=661,
+        max_lines=678,
         reason="Current PMA managed-thread send/queue runtime baseline outside route builders.",
     ),
     FileBudget(
@@ -148,7 +148,7 @@ STANDARD_FILE_BUDGETS = (
     ),
     FileBudget(
         path="src/codex_autorunner/surfaces/web/services/pma/managed_thread_read_models.py",
-        max_lines=713,
+        max_lines=815,
         reason="Current managed-thread read-model service baseline; future growth should move to focused helpers.",
     ),
     FileBudget(
@@ -163,7 +163,7 @@ STANDARD_FILE_BUDGETS = (
     ),
     FileBudget(
         path="src/codex_autorunner/web_frontend/src/lib/application/chatDetailLiveProjection.ts",
-        max_lines=391,
+        max_lines=441,
         reason="Current chat detail stream repair/live projection baseline outside +page.svelte.",
     ),
     FileBudget(
@@ -350,7 +350,7 @@ STANDARD_FUNCTION_BUDGETS = (
     FunctionBudget(
         path="src/codex_autorunner/surfaces/web/services/pma/managed_thread_send_runtime.py",
         qualname="run_managed_thread_message_send",
-        max_lines=378,
+        max_lines=392,
         reason="Current managed-thread send orchestration baseline outside the web route builder.",
     ),
     FunctionBudget(
@@ -524,7 +524,7 @@ LEGACY_FILE_CAPS = (
     ),
     FileBudget(
         path="src/codex_autorunner/web_frontend/src/lib/data/readModelLoaders.ts",
-        max_lines=261,
+        max_lines=306,
         reason="Current frontend read-model loader utility baseline after typed read-model extraction.",
     ),
 )

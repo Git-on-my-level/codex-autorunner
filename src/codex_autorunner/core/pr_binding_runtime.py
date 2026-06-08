@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..manifest import ManifestError
-from .git_utils import git_branch
+from .git_utils import git_available, git_branch
 from .hub_topology import HubTopologyRepository
 from .managed_thread_store import ManagedThreadStore
 from .pr_bindings import PrBinding, PrBindingStore
@@ -150,6 +150,20 @@ def thread_head_branch_hint(thread_payload: Mapping[str, Any]) -> Optional[str]:
             if candidate is not None:
                 return candidate
     return None
+
+
+def _thread_workspace_root(thread_payload: Mapping[str, Any]) -> Optional[Path]:
+    workspace_root = _normalize_text(thread_payload.get("workspace_root"))
+    if workspace_root is None:
+        return None
+    return Path(workspace_root)
+
+
+def _refreshable_thread_workspace(thread_payload: Mapping[str, Any]) -> Optional[Path]:
+    workspace_root = _thread_workspace_root(thread_payload)
+    if workspace_root is None or not git_available(workspace_root):
+        return None
+    return workspace_root
 
 
 def resolve_head_branch(
@@ -387,7 +401,14 @@ def backfill_pr_binding_thread_target_ids(
         if managed_thread_id is None or repo_id is None:
             continue
         counts["threads_scanned"] += 1
-        head_branch = store.refresh_thread_head_branch(managed_thread_id)
+        workspace_root = _refreshable_thread_workspace(thread)
+        if workspace_root is not None:
+            head_branch = store.refresh_thread_head_branch(
+                managed_thread_id,
+                workspace_root=workspace_root,
+            )
+        else:
+            head_branch = thread_head_branch_hint(thread)
         if head_branch is None:
             head_branch = _normalize_text(
                 _mapping(thread.get("metadata")).get("head_branch")
