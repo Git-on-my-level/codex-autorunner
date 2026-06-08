@@ -13,7 +13,7 @@ from typing import Any, Optional, Union
 from urllib.parse import unquote, urlparse
 
 from ..git_utils import GitError, run_git
-from ..locks import process_matches_identity
+from ..locks import process_alive, process_matches_identity
 from ..update_paths import resolve_update_paths
 from ..update_targets import (
     UpdateTargetDefinition,
@@ -607,12 +607,16 @@ def _update_lock_active() -> Optional[dict]:
         return None
     pid = lock.get("pid")
     if isinstance(pid, int):
-        pid_matches = process_matches_identity(
-            pid,
-            expected_cmd_substrings=_UPDATE_LOCK_CMD_HINTS,
-        )
-        if pid_matches:
-            return lock
+        if lock.get("bootstrap"):
+            if process_alive(pid):
+                return lock
+        else:
+            pid_matches = process_matches_identity(
+                pid,
+                expected_cmd_substrings=_UPDATE_LOCK_CMD_HINTS,
+            )
+            if pid_matches:
+                return lock
     try:
         _update_lock_path().unlink()
     except OSError:
@@ -621,7 +625,12 @@ def _update_lock_active() -> Optional[dict]:
 
 
 def _acquire_update_lock(
-    *, repo_url: str, repo_ref: str, update_target: str, logger: logging.Logger
+    *,
+    repo_url: str,
+    repo_ref: str,
+    update_target: str,
+    logger: logging.Logger,
+    bootstrap: bool = False,
 ) -> bool:
     lock_path = _update_lock_path()
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -632,6 +641,8 @@ def _acquire_update_lock(
         "repo_ref": repo_ref,
         "update_target": update_target,
     }
+    if bootstrap:
+        payload["bootstrap"] = True
     try:
         fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError as exc:
@@ -908,11 +919,16 @@ def _spawn_update_process(
     server_port: int = 4173,
     server_base_path: str = "",
 ) -> None:
-    active = _update_lock_active()
-    if active:
-        raise UpdateInProgressError(
-            f"Update already running (pid {active.get('pid')})."
+    try:
+        _acquire_update_lock(
+            repo_url=repo_url,
+            repo_ref=repo_ref,
+            update_target=update_target,
+            logger=logger,
+            bootstrap=True,
         )
+    except UpdateInProgressError:
+        raise
     status_path = _update_status_path()
     log_path = status_path.parent / "update-standalone.log"
     _write_update_status(
@@ -980,6 +996,7 @@ def _spawn_update_process(
         cmd.append("--no-skip-checks")
     try:
         prepare_update_source(update_dir, repo_url, repo_ref, logger)
+        _release_update_lock()
         env = _env_with_source_pythonpath(update_dir)
         with log_path.open("a", encoding="utf-8") as log_file:
             subprocess.Popen(
@@ -992,6 +1009,7 @@ def _spawn_update_process(
             )
     except Exception:  # intentional: top-level error handler
         logger.exception("Failed to spawn update worker")
+        _release_update_lock()
         _write_update_status(
             "error",
             "Failed to spawn update worker; see hub logs for details.",
