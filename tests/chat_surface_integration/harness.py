@@ -1103,7 +1103,9 @@ class TelegramSurfaceHarness:
         )
         if not self._telegram_policy_skipped_turn(log_start_index=log_start_index):
             await asyncio.wait_for(
-                self._wait_for_telegram_terminal_delivery(log_start_index=log_start_index),
+                self._wait_for_telegram_terminal_delivery(
+                    log_start_index=log_start_index
+                ),
                 timeout=self.timeout_seconds * 2,
             )
         self.bot.background_tasks_drained = True
@@ -1119,7 +1121,10 @@ class TelegramSurfaceHarness:
         if capture is None:
             return False
         records = capture.records[max(0, log_start_index) :]
-        if any(record.get("event") == "chat.managed_thread.turn_finalize_started" for record in records):
+        if any(
+            record.get("event") == "chat.managed_thread.turn_finalize_started"
+            for record in records
+        ):
             return False
         return any(
             record.get("event") == "telegram.collaboration_policy.evaluated"
@@ -1207,7 +1212,9 @@ class TelegramSurfaceHarness:
             if cleanup_failed:
                 return
             if asyncio.get_running_loop().time() >= deadline:
-                raise TimeoutError("TelegramSurfaceHarness terminal delivery did not finish")
+                raise TimeoutError(
+                    "TelegramSurfaceHarness terminal delivery did not finish"
+                )
             await asyncio.sleep(0.01)
 
     async def _wait_for_telegram_delivery_handoff(
@@ -1227,11 +1234,12 @@ class TelegramSurfaceHarness:
             capture = self._log_capture
             if capture is not None:
                 for record in capture.records[max(0, start_index) :]:
-                    if (
-                        record.get("event")
-                        == "chat_ux_timing.telegram.managed_thread_turn"
-                        and record.get("execution_id")
-                        == finalized.get("managed_turn_id")
+                    if record.get(
+                        "event"
+                    ) == "chat_ux_timing.telegram.managed_thread_turn" and record.get(
+                        "execution_id"
+                    ) == finalized.get(
+                        "managed_turn_id"
                     ):
                         return None
             if asyncio.get_running_loop().time() >= deadline:
@@ -1258,7 +1266,9 @@ class TelegramSurfaceHarness:
             )
             claim = engine.ensure_direct_delivery_claim(delivery_id)
         if claim is None:
-            raise TimeoutError("TelegramSurfaceHarness could not replay durable delivery")
+            raise TimeoutError(
+                "TelegramSurfaceHarness could not replay durable delivery"
+            )
         result = await worker._adapter.deliver_managed_thread_record(
             claim.record,
             claim=claim,
@@ -1280,7 +1290,10 @@ class TelegramSurfaceHarness:
             return None
         managed_turn_id = str(finalized.get("managed_turn_id") or "").strip()
         for record in reversed(capture.records[start_index:]):
-            if record.get("event") != "chat.managed_thread.delivery_cancelled_after_finalization":
+            if (
+                record.get("event")
+                != "chat.managed_thread.delivery_cancelled_after_finalization"
+            ):
                 continue
             if managed_turn_id and record.get("managed_turn_id") != managed_turn_id:
                 continue

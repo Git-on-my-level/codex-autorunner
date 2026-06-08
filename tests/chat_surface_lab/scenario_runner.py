@@ -1034,13 +1034,18 @@ class ChatSurfaceScenarioRunner:
         if action.kind == "emit_automation_transition":
             store = PmaAutomationStore(context.harness.root)
             payload = dict(action.payload)
-            original_event_type = self._normalize_optional_text(payload.get("event_type"))
+            original_event_type = self._normalize_optional_text(
+                payload.get("event_type")
+            )
             normalized_event_type = _normalize_lab_lifecycle_event_type(
                 original_event_type
             )
             if normalized_event_type is not None:
                 payload["event_type"] = normalized_event_type
-            if original_event_type is not None and original_event_type != normalized_event_type:
+            if (
+                original_event_type is not None
+                and original_event_type != normalized_event_type
+            ):
                 payload["original_event_type"] = original_event_type
             if self._normalize_optional_text(
                 payload.get("thread_id")
