@@ -215,14 +215,13 @@ def test_worktree_detail_snapshot_is_scoped_and_does_not_include_global_tickets(
         worktree_of=hub_env.repo_id,
     )
     other_root = _add_workspace(hub_env.hub_root, repo_id="other")
-    _write_tickets(worktree_root, 30)
+    _write_tickets(worktree_root, 501)
     _write_tickets(other_root, 30)
 
     client = TestClient(create_hub_app(hub_env.hub_root))
     response = client.get(
         "/hub/read-models/worktrees/repo--feature/detail",
         params={
-            "ticket_limit": 5,
             "run_limit": 3,
             "chat_limit": 3,
             "artifact_limit": 3,
@@ -235,12 +234,13 @@ def test_worktree_detail_snapshot_is_scoped_and_does_not_include_global_tickets(
     assert payload["kind"] == "repo_worktree.detail.snapshot"
     assert payload["ownerKind"] == "worktree"
     assert payload["parentLinks"]["repo_id"] == hub_env.repo_id
-    assert len(payload["ticketQueue"]) == 5
+    assert len(payload["ticketQueue"]) == 501
     assert {ticket["workspace_id"] for ticket in payload["ticketQueue"]} == {
         "repo--feature"
     }
     assert payload["scopedTickets"] == payload["ticketQueue"]
-    assert payload["ticketWindow"]["limit"] == 5
+    assert payload["ticketWindow"]["limit"] == 501
+    assert payload["ticketWindow"]["totalEstimate"] == 501
 
 
 def test_ticket_detail_snapshot_uses_owner_scoped_ticket_queue(hub_env) -> None:
