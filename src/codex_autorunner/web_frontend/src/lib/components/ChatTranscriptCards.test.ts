@@ -545,10 +545,10 @@ describe('ChatTranscriptCards', () => {
     expect(summary).not.toContain('`origin/main`');
   });
 
-  it('renders assistant shared delivery files as downloadable pills', () => {
+  it('renders assistant shared delivery files inside an assistant message', () => {
     const { body } = render(ChatTranscriptCards, {
       props: {
-        cards: [],
+        cards: [assistantMessageCard('assistant-1', 'Done.')],
         assistantLabel: 'Codex',
         sharedFiles: [
           {
@@ -574,10 +574,12 @@ describe('ChatTranscriptCards', () => {
       }
     });
 
-    expect(body).toContain('class="message assistant shared-files-message"');
+    expect(body).toContain('class="message assistant"');
+    expect(body).not.toContain('shared-files-message');
     expect(body).toContain('Codex');
     expect(body).toContain('spec.md');
     expect(body).toContain('delivery-sent');
     expect(body).toContain('/hub/filebox/repo/artifacts/deliveries/delivery%3Aabc/download');
+    expect(body.indexOf('Done.')).toBeLessThan(body.indexOf('spec.md'));
   });
 });

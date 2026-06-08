@@ -721,7 +721,7 @@
       queuedTurns,
       displayedProgress,
       activeChat,
-      assistantSharedFileCount: assistantSharedFiles.length,
+      assistantSharedFiles,
       streamState,
       loadingActive: refreshingActive,
       activeError,
@@ -794,6 +794,7 @@
   const streamingMessageId = $derived(chatDetailDisplay.streamingMessageId);
   const runActive = $derived(chatDetailDisplay.runActive);
   const transcriptListItems = $derived<ChatTranscriptListItem[]>(chatDetailDisplay.transcriptListItems);
+  const transcriptHasRenderableItems = $derived(transcriptListItems.some((item) => item.kind !== 'tail-spacer'));
   const srStatusAnnouncement = $derived(chatDetailDisplay.statusAnnouncement);
   const srAlertAnnouncement = $derived(chatDetailDisplay.alertAnnouncement);
   // Keep the detail header aligned with sidebar row badges. PMA is a manager-agent
@@ -3178,9 +3179,9 @@
             onScopeChange={handleScopePickerChange}
           />
         </div>
-      {:else if activeCards.length === 0 && liveActivity}
+      {:else if !transcriptHasRenderableItems && liveActivity}
         {@render typingDots(liveActivity.title)}
-      {:else if activeCards.length === 0}
+      {:else if !transcriptHasRenderableItems}
         <div class="state-panel empty-state">
           <strong>No transcript available</strong>
           <p>This chat has no visible timeline yet.</p>
@@ -3212,7 +3213,7 @@
               <ChatTranscriptCards
                 cards={[]}
                 assistantLabel={chatAgentDisplayLabel}
-                sharedFiles={assistantSharedFiles}
+                sharedFiles={item.files}
               />
             {:else if item.kind === 'tail-spacer'}
               <div class="chat-transcript-tail-spacer" aria-hidden="true"></div>

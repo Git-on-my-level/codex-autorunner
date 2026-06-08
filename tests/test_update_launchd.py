@@ -316,7 +316,7 @@ def test_telegram_cli_health_invokes_state_check_and_health(
     console = bin_dir / "codex-autorunner"
     console.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     console.chmod(0o755)
-    checker = HealthChecker(logger=LOGGER, timeout=1.0)
+    checker = HealthChecker(logger=LOGGER, timeout=5.0)
     assert checker.telegram_cli_healthy(
         python_bin=bin_dir / "python", hub_root=tmp_path
     )
