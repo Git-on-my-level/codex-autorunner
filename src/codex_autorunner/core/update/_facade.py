@@ -801,25 +801,12 @@ def _system_update_check(
 
 def _capture_update_identity_hint() -> dict[str, Any]:
     from .detect import detect_supervisor_identity
+    from .engine import _resolve_car_wrapper_path, resolve_pipx_layout
 
-    pipx_root = Path(
-        os.environ.get("PIPX_ROOT", str(Path("~/.local/pipx").expanduser()))
-    ).expanduser()
-    current_link = Path(
-        os.environ.get(
-            "CURRENT_VENV_LINK",
-            str(pipx_root / "venvs" / "codex-autorunner.current"),
-        )
-    ).expanduser()
-    local_bin = Path(
-        os.environ.get("LOCAL_BIN", str(Path("~/.local/bin").expanduser()))
-    ).expanduser()
-    car_wrapper = Path(
-        os.environ.get("CAR_WRAPPER_PATH", str(local_bin / "car"))
-    ).expanduser()
+    layout = resolve_pipx_layout()
     identity = detect_supervisor_identity(
-        current_venv_link=current_link,
-        car_wrapper_path=car_wrapper,
+        current_venv_link=layout.current_link,
+        car_wrapper_path=_resolve_car_wrapper_path(),
         hub_pid=os.getpid(),
     )
     hint: dict[str, Any] = {
