@@ -32,6 +32,23 @@
 
   const userToggled = $state<Record<string, boolean>>({});
 
+  let copiedMessageId = $state<string | null>(null);
+  let copyResetTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function handleCopyMessage(cardId: string, text: string): Promise<void> {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      copiedMessageId = cardId;
+      clearTimeout(copyResetTimer);
+      copyResetTimer = setTimeout(() => {
+        copiedMessageId = null;
+      }, 1600);
+    } catch {
+      /* clipboard unavailable — no-op */
+    }
+  }
+
   function attachmentKindLabel(kind: SurfaceArtifact['kind']): string {
     if (kind === 'image' || kind === 'screenshot') return 'image';
     if (kind === 'link' || kind === 'preview_url') return 'link';
@@ -407,13 +424,40 @@
         </span>
       {:else if card.message.role === 'user' || card.message.role === 'assistant'}
         {@const sentLabel = formatCompactMessageDateTime(card.message.createdAt)}
-        {#if sentLabel}
-          <time class="message-timestamp" datetime={card.message.createdAt ?? undefined} title={card.message.createdAt ?? undefined}>
-            {#if card.message.role === 'user'}
-              <span class="message-delivery-tick" aria-label="Sent" title="Sent">✓</span>
+        {@const isAssistant = card.message.role === 'assistant'}
+        {#if sentLabel || isAssistant}
+          <footer class={`message-footer ${isAssistant ? 'assistant' : 'user'}`}>
+            {#if sentLabel}
+              <time class="message-timestamp" datetime={card.message.createdAt ?? undefined} title={card.message.createdAt ?? undefined}>
+                {#if card.message.role === 'user'}
+                  <span class="message-delivery-tick" aria-label="Sent" title="Sent">✓</span>
+                {/if}
+                {sentLabel}
+              </time>
             {/if}
-            {sentLabel}
-          </time>
+            {#if isAssistant}
+              {@const copied = copiedMessageId === card.id}
+              <button
+                type="button"
+                class="message-copy"
+                class:is-copied={copied}
+                onclick={() => handleCopyMessage(card.id, visibleText)}
+                title={copied ? 'Copied' : 'Copy message'}
+                aria-label={copied ? 'Copied message' : 'Copy message'}
+              >
+                {#if copied}
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M20 6 9 17l-5-5" />
+                  </svg>
+                {:else}
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="9" y="9" width="11" height="11" rx="2" />
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                  </svg>
+                {/if}
+              </button>
+            {/if}
+          </footer>
         {/if}
       {/if}
     </article>

@@ -2484,9 +2484,26 @@ textarea:hover {
   font-size: var(--font-size-1);
 }
 
-.message-timestamp {
-  display: block;
+.message-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin-top: var(--space-2);
+}
+
+.message-footer.assistant {
+  justify-content: flex-start;
+}
+
+.message-footer.user {
+  justify-content: flex-end;
+  margin-top: var(--space-3);
+  margin-bottom: 2px;
+}
+
+.message-timestamp {
+  display: inline-flex;
+  align-items: center;
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 0.02em;
@@ -2496,10 +2513,46 @@ textarea:hover {
   font-variant-numeric: tabular-nums;
 }
 
-.message.user .message-timestamp {
-  margin-top: var(--space-3);
-  margin-bottom: 2px;
-  text-align: right;
+/* Elegant copy affordance on agent messages: a quiet icon button that sits
+   beside the timestamp, brightens on hover, and confirms with a check. */
+.message-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-1);
+  background: transparent;
+  color: var(--color-ink-faint);
+  cursor: pointer;
+  opacity: 0.55;
+  transition:
+    opacity var(--transition-base) var(--ease-out),
+    color var(--transition-base) var(--ease-out),
+    background var(--transition-base) var(--ease-out);
+}
+
+.message.assistant:hover .message-copy {
+  opacity: 0.8;
+}
+
+.message-copy:hover {
+  opacity: 1;
+  color: var(--color-ink);
+  background: var(--color-surface-muted);
+}
+
+.message-copy:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.message-copy.is-copied {
+  opacity: 1;
+  color: var(--color-success);
 }
 
 /* Delivery affordance on user messages: a static ✓ next to the timestamp on
