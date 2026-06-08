@@ -667,7 +667,7 @@ class RepoWorktreeReadModelService:
         )
         return dump_read_model_contract(snapshot)
 
-    def _scoped_tickets(self, snapshot: Any, *, limit: int) -> list[dict[str, Any]]:
+    def _scoped_tickets(self, snapshot: Any) -> list[dict[str, Any]]:
         from ....core.flows.store import FlowStore
         from ....core.pma_context import get_latest_ticket_flow_run_state_with_record
 
@@ -718,7 +718,7 @@ class RepoWorktreeReadModelService:
                     )
             mark_duplicate_ticket_numbers(payloads)
             payloads.sort(key=lambda item: _int_value(item.get("ticket_number")))
-            return payloads[:limit]
+            return payloads
         finally:
             if store is not None:
                 store.close()
@@ -936,7 +936,6 @@ class RepoWorktreeReadModelService:
         *,
         owner_kind: Literal["repo", "worktree"],
         owner_id: str,
-        ticket_limit: int,
         run_limit: int,
         chat_limit: int,
         artifact_limit: int,
@@ -949,13 +948,10 @@ class RepoWorktreeReadModelService:
                 status_code=404, detail=f"Worktree not found: {owner_id}"
             )
         enriched = await asyncio.to_thread(self._enricher.enrich_repo, snapshot_obj)
-        ticket_limit = _bounded_limit(ticket_limit, maximum=100)
         run_limit = _bounded_limit(run_limit, maximum=100)
         chat_limit = _bounded_limit(chat_limit, maximum=100)
         artifact_limit = _bounded_limit(artifact_limit, maximum=100)
-        tickets_task = asyncio.to_thread(
-            self._scoped_tickets, snapshot_obj, limit=ticket_limit
-        )
+        tickets_task = asyncio.to_thread(self._scoped_tickets, snapshot_obj)
         runs_task = asyncio.to_thread(
             self._scoped_runs, snapshot_obj.path, limit=run_limit
         )
@@ -995,7 +991,9 @@ class RepoWorktreeReadModelService:
             chat_queue=chats,
             contextspace_summary=contextspace,
             current_artifacts=artifacts,
-            ticket_window=_window(offset=0, limit=ticket_limit, total=len(tickets)),
+            ticket_window=_window(
+                offset=0, limit=max(1, len(tickets)), total=len(tickets)
+            ),
             run_window=_window(offset=0, limit=run_limit, total=len(runs)),
             chat_window=_window(offset=0, limit=chat_limit, total=len(chats)),
             artifact_window=_window(
@@ -1023,7 +1021,7 @@ class RepoWorktreeReadModelService:
         ticket_id: str,
     ) -> dict[str, Any]:
         snapshot_obj = self._snapshot_by_id(owner_id)
-        tickets = self._scoped_tickets(snapshot_obj, limit=500)
+        tickets = self._scoped_tickets(snapshot_obj)
         selected = next(
             (
                 ticket

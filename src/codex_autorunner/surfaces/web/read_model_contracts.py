@@ -111,7 +111,7 @@ class CursorGapRepair(RepairPolicy):
 
 
 class PageWindow(ReadModelContract):
-    limit: int = Field(ge=1, le=500)
+    limit: int = Field(ge=1)
     next_cursor: Optional[str] = None
     previous_cursor: Optional[str] = None
     total_estimate: Optional[int] = Field(default=None, ge=0)
