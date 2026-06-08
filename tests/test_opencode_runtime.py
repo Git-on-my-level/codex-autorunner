@@ -1438,6 +1438,50 @@ async def test_stream_lifecycle_preserves_idle_before_post_stall_deadline(
 
 
 @pytest.mark.anyio
+async def test_role_missing_terminal_completion_uses_grace_not_stall(
+    monkeypatch,
+) -> None:
+    async def _status_fetcher():
+        return {"status": {"type": "busy"}}
+
+    async def _event_stream():
+        yield SSEEvent(
+            event="message.completed",
+            data=json.dumps(
+                {
+                    "sessionID": "s1",
+                    "info": {"id": "m1"},
+                    "finish": "stop",
+                    "parts": [{"type": "text", "text": "final answer"}],
+                }
+            ),
+        )
+        while True:
+            await asyncio.sleep(3600)
+            yield SSEEvent(event="keepalive", data="{}")
+
+    monkeypatch.setattr(
+        opencode_stream_lifecycle,
+        "_OPENCODE_POST_COMPLETION_GRACE_SECONDS",
+        0.001,
+    )
+
+    output = await collect_opencode_output_from_events(
+        None,
+        session_id="s1",
+        event_stream_factory=lambda: _event_stream(),
+        session_fetcher=_status_fetcher,
+        stall_timeout_seconds=1.0,
+        first_event_timeout_seconds=None,
+    )
+
+    assert output.text == "final answer"
+    assert output.error is None
+    assert output.output_source == "event_stream"
+    assert output.terminal_signal == "message.completed"
+
+
+@pytest.mark.anyio
 async def test_collect_output_reconnects_when_stream_ends_while_session_busy(
     monkeypatch,
 ) -> None:
