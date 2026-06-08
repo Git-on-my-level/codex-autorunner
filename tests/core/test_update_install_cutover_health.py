@@ -19,6 +19,14 @@ from codex_autorunner.core.update.install import (
 )
 
 
+def _make_venv(path: Path) -> None:
+    bin_dir = path / "bin"
+    bin_dir.mkdir(parents=True)
+    python = bin_dir / "python"
+    python.write_text("#!/bin/sh\n", encoding="utf-8")
+    python.chmod(0o755)
+
+
 def test_select_pip_extras_defaults_to_browser() -> None:
     assert select_pip_extras() == "[browser]"
 
@@ -62,8 +70,8 @@ def test_cutover_manager_flip_and_rollback(tmp_path: Path) -> None:
     prev = venvs / "codex-autorunner.prev"
     old = venvs / "codex-autorunner.old"
     candidate = venvs / "codex-autorunner.next-20260101-120000"
-    old.mkdir(parents=True)
-    candidate.mkdir(parents=True)
+    _make_venv(old)
+    _make_venv(candidate)
 
     manager = CutoverManager(
         current_venv_link=current,
@@ -96,11 +104,11 @@ def test_cutover_manager_prune_keeps_recent_and_active(tmp_path: Path) -> None:
     newer = venvs / "codex-autorunner.next-newer"
     older = venvs / "codex-autorunner.next-older"
     oldest = venvs / "codex-autorunner.next-oldest"
-    live.mkdir(parents=True)
+    _make_venv(live)
     os.symlink(live, current)
     os.symlink(live, prev)
     for index, path in enumerate((oldest, older, newer, newest)):
-        path.mkdir(parents=True)
+        _make_venv(path)
         os.utime(path, (index + 1, index + 1))
 
     manager = CutoverManager(
@@ -123,7 +131,7 @@ def test_cutover_sync_car_wrapper_writes_dispatch_path(tmp_path: Path) -> None:
     current = venvs / "codex-autorunner.current"
     prev = venvs / "codex-autorunner.prev"
     target = venvs / "codex-autorunner.live"
-    target.mkdir(parents=True)
+    _make_venv(target)
     os.symlink(target, current)
 
     local_bin = tmp_path / "bin"

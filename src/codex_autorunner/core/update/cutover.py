@@ -31,15 +31,39 @@ class CutoverManager:
         self.keep_old_venvs = max(0, int(keep_old_venvs))
         self.logger = logger or logging.getLogger(__name__)
 
-    def initialize_current_link(self, default_target: Path) -> Path:
+    def initialize_current_link(
+        self,
+        default_target: Path,
+        *,
+        detected_candidates: tuple[Path, ...] = (),
+    ) -> Path:
         """Ensure ``current_venv_link`` exists and return its resolved target."""
         default_target = default_target.expanduser().resolve()
-        if not self.current_venv_link.is_symlink():
+        if self.current_venv_link.is_symlink():
+            current_target = self.resolve_link(self.current_venv_link)
+            if current_target is None:
+                raise CutoverError(
+                    f"Unable to resolve current venv from {self.current_venv_link}."
+                )
+            return current_target
+
+        if not self._is_usable_venv(default_target):
+            candidate_text = (
+                ", ".join(str(path) for path in detected_candidates)
+                if detected_candidates
+                else "none"
+            )
+            raise CutoverError(
+                "Unable to initialize current venv link because the default target "
+                f"is not a usable venv: {default_target}. Detected candidate venvs: "
+                f"{candidate_text}."
+            )
+        else:
             self.logger.info(
                 "Initializing %s -> %s", self.current_venv_link, default_target
             )
             self._symlink(default_target, self.current_venv_link)
-        current_target = self.resolve_link(self.current_venv_link)
+            current_target = self.resolve_link(self.current_venv_link)
         if current_target is None:
             raise CutoverError(
                 f"Unable to resolve current venv from {self.current_venv_link}."
@@ -129,6 +153,11 @@ class CutoverManager:
         except OSError:
             return None
         return resolved if resolved.exists() else None
+
+    @staticmethod
+    def _is_usable_venv(path: Path) -> bool:
+        python_bin = path / "bin" / "python"
+        return path.is_dir() and python_bin.exists() and os.access(python_bin, os.X_OK)
 
     def _symlink(self, target: Path, link: Path) -> None:
         link.parent.mkdir(parents=True, exist_ok=True)

@@ -56,12 +56,26 @@ from .supervisors import (
 )
 
 _CMD_TIMEOUT_SECONDS = 300
-_DEFAULT_PIPX_ROOT = Path("~/.local/pipx").expanduser()
+_DEFAULT_PIPX_ROOT = Path("~/.local/pipx")
 _DEFAULT_CURRENT_VENV_LINK = _DEFAULT_PIPX_ROOT / "venvs" / "codex-autorunner.current"
 _DEFAULT_PREV_VENV_LINK = _DEFAULT_PIPX_ROOT / "venvs" / "codex-autorunner.prev"
-_DEFAULT_LOCAL_BIN = Path("~/.local/bin").expanduser()
+_DEFAULT_LOCAL_BIN = Path("~/.local/bin")
 _DEFAULT_SNAPSHOT_MAX_COUNT = 1
 _DEFAULT_KEEP_OLD_VENVS = 3
+
+
+@dataclass(frozen=True)
+class PipxLayout:
+    pipx_root: Path
+    current_link: Path
+    prev_link: Path
+    active_venv: Path
+    candidates: tuple[Path, ...] = ()
+
+    def __iter__(self):
+        yield self.pipx_root
+        yield self.current_link
+        yield self.prev_link
 
 
 @dataclass
@@ -120,8 +134,87 @@ def _resolve_linux_service_names(
     return merged
 
 
-def _resolve_venv_paths() -> tuple[Path, Path, Path]:
-    pipx_root = Path(os.environ.get("PIPX_ROOT", str(_DEFAULT_PIPX_ROOT))).expanduser()
+def _env_path(name: str) -> Path | None:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return None
+    return Path(raw).expanduser()
+
+
+def _venv_from_bin_path(path: Path) -> Path | None:
+    """Return the enclosing pipx codex-autorunner venv for a bin path."""
+    try:
+        resolved = path.expanduser().resolve(strict=False)
+    except OSError:
+        resolved = path.expanduser()
+    if resolved.parent.name != "bin":
+        return None
+    venv = resolved.parent.parent
+    if venv.name != "codex-autorunner":
+        return None
+    if venv.parent.name != "venvs":
+        return None
+    return venv
+
+
+def _looks_like_codex_venv(path: Path) -> bool:
+    python_bin = path / "bin" / "python"
+    return path.is_dir() and python_bin.exists() and os.access(python_bin, os.X_OK)
+
+
+def _detect_active_codex_venv(
+    car_wrapper_path: Path,
+) -> tuple[Path | None, tuple[Path, ...]]:
+    candidates: list[Path] = []
+
+    executable = Path(sys.executable).expanduser() if sys.executable else None
+    if executable is not None:
+        executable_venv = _venv_from_bin_path(executable)
+        if executable_venv is not None:
+            candidates.append(executable_venv)
+
+    wrapper_venv = _venv_from_bin_path(car_wrapper_path)
+    if wrapper_venv is not None:
+        candidates.append(wrapper_venv)
+
+    default_roots = (
+        Path("~/.local/share/pipx").expanduser(),
+        _DEFAULT_PIPX_ROOT.expanduser(),
+    )
+    for root in default_roots:
+        candidates.append(root / "venvs" / "codex-autorunner")
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(candidate)
+
+    for candidate in deduped:
+        if _looks_like_codex_venv(candidate):
+            return candidate, tuple(deduped)
+    return None, tuple(deduped)
+
+
+def resolve_pipx_layout() -> PipxLayout:
+    car_wrapper_path = _resolve_car_wrapper_path()
+    explicit_pipx_venv = _env_path("PIPX_VENV")
+    detected_venv, candidates = _detect_active_codex_venv(car_wrapper_path)
+    active_venv = explicit_pipx_venv or detected_venv
+
+    explicit_pipx_root = _env_path("PIPX_ROOT")
+    if explicit_pipx_root is not None:
+        pipx_root = explicit_pipx_root
+        if explicit_pipx_venv is None:
+            active_venv = pipx_root / "venvs" / "codex-autorunner"
+    elif active_venv is not None and active_venv.parent.name == "venvs":
+        pipx_root = active_venv.parent.parent
+    else:
+        pipx_root = _DEFAULT_PIPX_ROOT.expanduser()
+
     current = Path(
         os.environ.get(
             "CURRENT_VENV_LINK", str(pipx_root / "venvs" / "codex-autorunner.current")
@@ -132,7 +225,19 @@ def _resolve_venv_paths() -> tuple[Path, Path, Path]:
             "PREV_VENV_LINK", str(pipx_root / "venvs" / "codex-autorunner.prev")
         )
     ).expanduser()
-    return pipx_root, current, prev
+    active_venv = active_venv or pipx_root / "venvs" / "codex-autorunner"
+    return PipxLayout(
+        pipx_root=pipx_root,
+        current_link=current,
+        prev_link=prev,
+        active_venv=active_venv,
+        candidates=candidates,
+    )
+
+
+def _resolve_venv_paths() -> tuple[Path, Path, Path]:
+    layout = resolve_pipx_layout()
+    return layout.pipx_root, layout.current_link, layout.prev_link
 
 
 def _resolve_car_wrapper_path() -> Path:
@@ -252,7 +357,10 @@ class UpdateEngine:
             self.reporter.write("error", msg)
             return
 
-        pipx_root, current_link, prev_link = _resolve_venv_paths()
+        pipx_layout = resolve_pipx_layout()
+        pipx_root = pipx_layout.pipx_root
+        current_link = pipx_layout.current_link
+        prev_link = pipx_layout.prev_link
         identity = detect_supervisor_identity(
             hint=self.config.identity_hint,
             current_venv_link=current_link,
@@ -330,6 +438,8 @@ class UpdateEngine:
                 pipx_root=pipx_root,
                 current_link=current_link,
                 prev_link=prev_link,
+                active_venv=pipx_layout.active_venv,
+                detected_venv_candidates=pipx_layout.candidates,
             )
         else:
             self._run_in_place_update(
@@ -387,6 +497,8 @@ class UpdateEngine:
         pipx_root: Path,
         current_link: Path,
         prev_link: Path,
+        active_venv: Path,
+        detected_venv_candidates: tuple[Path, ...],
     ) -> None:
         package_src = self.config.update_dir
         python_bin = Path(
@@ -413,12 +525,11 @@ class UpdateEngine:
             logger=self.logger,
         )
 
-        pipx_venv = Path(
-            os.environ.get("PIPX_VENV", str(pipx_root / "venvs" / "codex-autorunner"))
-        ).expanduser()
-        self._current_target = cutover.initialize_current_link(pipx_venv)
-
         try:
+            self._current_target = cutover.initialize_current_link(
+                active_venv,
+                detected_candidates=detected_venv_candidates,
+            )
             with self.reporter.timed_phase("venv_create"):
                 self._candidate_venv = installer.create_staged_venv()
             wheel_dir = Path(f"{self._candidate_venv}.wheelhouse")
@@ -482,6 +593,7 @@ class UpdateEngine:
                     cutover.sync_car_wrapper(
                         package_src=package_src,
                         local_bin=local_bin,
+                        car_wrapper_path=_resolve_car_wrapper_path(),
                     )
             except Exception as exc:
                 warning = (
