@@ -440,6 +440,51 @@ def _parse_update_skip_checks(update_cfg: Dict[str, Any]) -> bool:
     )
 
 
+def _parse_update_restart_command(
+    update_cfg: Dict[str, Any],
+) -> list[str] | str | None:
+    raw = update_cfg.get("restart_command")
+    if raw is None:
+        return None
+    parsed = parse_schema_field(
+        raw,
+        UPDATE_FIELD_SCHEMAS["restart_command"],
+        default_value=None,
+    )
+    if parsed is None:
+        return None
+    if isinstance(parsed, str):
+        return parsed
+    if isinstance(parsed, list):
+        return [str(part) for part in parsed]
+    return None
+
+
+def _parse_update_systemctl_sudo(update_cfg: Dict[str, Any]) -> str:
+    return cast(
+        str,
+        parse_schema_field(
+            update_cfg.get("systemctl_sudo"),
+            UPDATE_FIELD_SCHEMAS["systemctl_sudo"],
+            default_value=default_from_mapping(
+                None, "systemctl_sudo", UPDATE_FIELD_SCHEMAS["systemctl_sudo"]
+            ),
+        ),
+    )
+
+
+def _parse_update_allow_in_place(update_cfg: Dict[str, Any]) -> bool:
+    return bool(
+        parse_schema_field(
+            update_cfg.get("allow_in_place"),
+            UPDATE_FIELD_SCHEMAS["allow_in_place"],
+            default_value=default_from_mapping(
+                None, "allow_in_place", UPDATE_FIELD_SCHEMAS["allow_in_place"]
+            ),
+        )
+    )
+
+
 def _parse_update_linux_service_names(update_cfg: Dict[str, Any]) -> Dict[str, str]:
     merged = dict(_default_update_linux_service_names())
     raw = update_cfg.get("linux_service_names")

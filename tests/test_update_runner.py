@@ -12,7 +12,8 @@ def test_update_runner_skips_checks_by_default(monkeypatch, tmp_path: Path) -> N
         captured.update(kwargs)
 
     monkeypatch.setattr(
-        update_runner, "_system_update_worker", fake_system_update_worker
+        "codex_autorunner.core.update.runner._system_update_worker",
+        fake_system_update_worker,
     )
 
     result = update_runner.main(
@@ -37,7 +38,8 @@ def test_update_runner_allows_checks_explicitly(monkeypatch, tmp_path: Path) -> 
         captured.update(kwargs)
 
     monkeypatch.setattr(
-        update_runner, "_system_update_worker", fake_system_update_worker
+        "codex_autorunner.core.update.runner._system_update_worker",
+        fake_system_update_worker,
     )
 
     result = update_runner.main(

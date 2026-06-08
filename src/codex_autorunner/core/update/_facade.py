@@ -12,15 +12,16 @@ from pathlib import Path
 from typing import Any, Optional, Union
 from urllib.parse import unquote, urlparse
 
-from .git_utils import GitError, run_git
-from .locks import process_matches_identity
-from .update_paths import resolve_update_paths
-from .update_targets import (
+from ..git_utils import GitError, run_git
+from ..locks import process_matches_identity
+from ..update_paths import resolve_update_paths
+from ..update_targets import (
     UpdateTargetDefinition,
     available_update_target_definitions,
     get_update_target_definition,
     normalize_update_target,
 )
+from ..utils import resolve_executable
 
 
 class UpdateInProgressError(RuntimeError):
@@ -28,7 +29,10 @@ class UpdateInProgressError(RuntimeError):
 
 
 _UPDATE_LOCK_STARTUP_GRACE_SECONDS = 10.0
-_UPDATE_LOCK_CMD_HINTS = ("codex_autorunner.core.update_runner",)
+_UPDATE_LOCK_CMD_HINTS = (
+    "codex_autorunner.core.update_runner",
+    "codex_autorunner.core.update.runner",
+)
 _UPDATE_BUILD_ARTIFACT_DIRS = ("build", "dist", ".eggs")
 _UPDATE_BUILD_ARTIFACT_GLOBS = ("*.egg-info", "src/*.egg-info")
 _UPDATE_CACHE_RECOVERY_HINTS = (
@@ -181,9 +185,12 @@ def _normalize_update_backend(raw: Optional[str]) -> str:
     if raw is None:
         return "auto"
     value = str(raw).strip().lower()
-    if value in ("", "auto", "launchd", "systemd-user"):
+    if value in ("", "auto", "launchd", "systemd-user", "systemd-system"):
         return value or "auto"
-    raise ValueError("Unsupported update backend (use auto, launchd, or systemd-user).")
+    raise ValueError(
+        "Unsupported update backend "
+        "(use auto, launchd, systemd-user, or systemd-system)."
+    )
 
 
 def _resolve_update_backend(raw: Optional[str]) -> str:
@@ -194,26 +201,39 @@ def _resolve_update_backend(raw: Optional[str]) -> str:
         return "launchd"
     if sys.platform.startswith("linux"):
         return "systemd-user"
-    if shutil.which("systemctl") is not None:
+    if resolve_executable("systemctl") is not None:
         return "systemd-user"
     return "launchd"
+
+
+def _is_systemd_backend(backend: str) -> bool:
+    return backend in ("systemd-user", "systemd-system")
+
+
+def _systemd_scope_for_backend(backend: str) -> str:
+    """Map a systemd backend to its systemctl scope ('user' or 'system')."""
+    return "user" if backend == "systemd-user" else "system"
 
 
 def _required_update_commands(backend: str) -> tuple[str, ...]:
     base = ("git", "bash", "curl")
     if backend == "launchd":
         return (*base, "launchctl")
-    if backend == "systemd-user":
+    if _is_systemd_backend(backend):
         return (*base, "systemctl")
     raise ValueError(f"Unsupported update backend: {backend}")
 
 
-def _is_systemd_user_service_active(service_name: str) -> bool:
-    if not service_name or shutil.which("systemctl") is None:
+def _is_systemd_service_active(service_name: str, *, scope: str = "user") -> bool:
+    if not service_name or resolve_executable("systemctl") is None:
         return False
+    cmd = ["systemctl"]
+    if scope == "user":
+        cmd.append("--user")
+    cmd += ["is-active", "--quiet", service_name]
     try:
         result = subprocess.run(
-            ["systemctl", "--user", "is-active", "--quiet", service_name],
+            cmd,
             check=False,
             capture_output=True,
             text=True,
@@ -224,13 +244,17 @@ def _is_systemd_user_service_active(service_name: str) -> bool:
     return result.returncode == 0
 
 
+def _is_systemd_user_service_active(service_name: str) -> bool:
+    return _is_systemd_service_active(service_name, scope="user")
+
+
 def _launchd_domain() -> str:
     uid = os.getuid() if hasattr(os, "getuid") else 0
     return f"gui/{uid}"
 
 
 def _is_launchd_label_active(label: str) -> bool:
-    if not label or shutil.which("launchctl") is None:
+    if not label or resolve_executable("launchctl") is None:
         return False
     domain = _launchd_domain()
     try:
@@ -298,7 +322,7 @@ def _chat_target_active(
         backend = _resolve_update_backend(update_backend)
     except ValueError:
         backend = "launchd" if platform.system().lower() == "darwin" else "systemd-user"
-    if backend == "systemd-user":
+    if _is_systemd_backend(backend):
         services = {
             "telegram": "car-telegram",
             "discord": "car-discord",
@@ -309,7 +333,9 @@ def _chat_target_active(
                 if isinstance(value, str) and value.strip():
                     services[key] = value.strip()
         service_name = services.get(target, "")
-        return _is_systemd_user_service_active(service_name)
+        return _is_systemd_service_active(
+            service_name, scope=_systemd_scope_for_backend(backend)
+        )
     base_label = str(os.environ.get("LABEL", "com.codex.autorunner")).strip()
     telegram_label = str(
         os.environ.get("TELEGRAM_LABEL", f"{base_label}.telegram")
@@ -400,7 +426,7 @@ def _default_update_target(
 def _refresh_script(backend: str, update_dir: Path) -> Optional[Path]:
     if backend == "launchd":
         return update_dir / "scripts" / "safe-refresh-local-mac-hub.sh"
-    if backend == "systemd-user":
+    if _is_systemd_backend(backend):
         return update_dir / "scripts" / "safe-refresh-local-linux-hub.sh"
     return None
 
@@ -408,6 +434,8 @@ def _refresh_script(backend: str, update_dir: Path) -> Optional[Path]:
 def _backend_refresh_label(backend: str) -> str:
     if backend == "systemd-user":
         return "systemd user service"
+    if backend == "systemd-system":
+        return "systemd system service"
     return "launchd service"
 
 
@@ -486,6 +514,26 @@ def _write_update_status(status: str, message: str, **extra) -> None:
 
 def _refresh_script_committed_ok_status(status: object) -> bool:
     return isinstance(status, dict) and status.get("status") == "ok"
+
+
+_REFRESH_OUTPUT_SUMMARY_MAX_CHARS = 300
+
+
+def _summarize_refresh_output(output_lines: list[str]) -> str:
+    """Return the last meaningful refresh-script line for surfacing in status.
+
+    The refresh script can die under ``set -euo pipefail`` without writing its
+    own status (e.g. a failing command substitution), leaving only a generic
+    worker message. Surfacing the last output line makes such failures
+    observable instead of opaque "check hub logs" errors.
+    """
+    for line in reversed(output_lines or []):
+        text = str(line).strip()
+        if text:
+            if len(text) > _REFRESH_OUTPUT_SUMMARY_MAX_CHARS:
+                text = text[: _REFRESH_OUTPUT_SUMMARY_MAX_CHARS - 1].rstrip() + "…"
+            return text
+    return ""
 
 
 def _is_valid_git_repo(path: Path) -> bool:
@@ -778,6 +826,42 @@ def _system_update_check(
     }
 
 
+def _capture_update_identity_hint() -> dict[str, Any]:
+    from .detect import detect_supervisor_identity
+
+    pipx_root = Path(
+        os.environ.get("PIPX_ROOT", str(Path("~/.local/pipx").expanduser()))
+    ).expanduser()
+    current_link = Path(
+        os.environ.get(
+            "CURRENT_VENV_LINK",
+            str(pipx_root / "venvs" / "codex-autorunner.current"),
+        )
+    ).expanduser()
+    local_bin = Path(
+        os.environ.get("LOCAL_BIN", str(Path("~/.local/bin").expanduser()))
+    ).expanduser()
+    car_wrapper = Path(
+        os.environ.get("CAR_WRAPPER_PATH", str(local_bin / "car"))
+    ).expanduser()
+    identity = detect_supervisor_identity(
+        current_venv_link=current_link,
+        car_wrapper_path=car_wrapper,
+        hub_pid=os.getpid(),
+    )
+    hint: dict[str, Any] = {
+        "backend": identity.backend,
+        "scope": identity.scope,
+        "unit_name": identity.unit_name,
+        "label": identity.label,
+        "hub_pid": identity.hub_pid,
+        "exec_start_or_program": identity.exec_start_or_program,
+    }
+    if identity.hub_root is not None:
+        hint["hub_root"] = str(identity.hub_root)
+    return hint
+
+
 def _system_update_worker(
     *,
     repo_url: str,
@@ -790,206 +874,42 @@ def _system_update_worker(
     linux_hub_service_name: Optional[str] = None,
     linux_telegram_service_name: Optional[str] = None,
     linux_discord_service_name: Optional[str] = None,
+    restart_command: Optional[Union[str, list[str]]] = None,
+    systemctl_sudo: str = "auto",
+    allow_in_place: bool = False,
+    identity_hint: Optional[dict[str, Any]] = None,
+    server_host: str = "127.0.0.1",
+    server_port: int = 4173,
+    server_base_path: str = "",
 ) -> None:
-    status_path = _update_status_path()
-    lock_acquired = False
-    try:
-        try:
-            update_target = _normalize_update_target(update_target)
-        except ValueError as exc:
-            msg = str(exc)
-            logger.error(msg)
-            _write_update_status("error", msg)
-            return
-        repo_ref = _normalize_update_ref(repo_ref)
-        try:
-            lock_acquired = _acquire_update_lock(
-                repo_url=repo_url,
-                repo_ref=repo_ref,
-                update_target=update_target,
-                logger=logger,
-            )
-        except UpdateInProgressError:
-            return
+    from .engine import UpdateEngine, UpdateEngineConfig
 
-        try:
-            resolved_backend = _resolve_update_backend(update_backend)
-        except ValueError as exc:
-            msg = str(exc)
-            logger.error(msg)
-            _write_update_status("error", msg)
-            return
-        _write_update_status(
-            "running",
-            "Update started.",
-            phase="worker_start",
-            repo_url=repo_url,
-            update_dir=str(update_dir),
-            repo_ref=repo_ref,
-            update_target=update_target,
-            update_backend=resolved_backend,
-            linux_hub_service_name=linux_hub_service_name,
-            linux_telegram_service_name=linux_telegram_service_name,
-            linux_discord_service_name=linux_discord_service_name,
-        )
+    linux_names: dict[str, str] = {}
+    if linux_hub_service_name:
+        linux_names["hub"] = linux_hub_service_name
+    if linux_telegram_service_name:
+        linux_names["telegram"] = linux_telegram_service_name
+    if linux_discord_service_name:
+        linux_names["discord"] = linux_discord_service_name
 
-        missing = []
-        for cmd in _required_update_commands(resolved_backend):
-            if shutil.which(cmd) is None:
-                missing.append(cmd)
-        if missing:
-            msg = f"Missing required commands: {', '.join(missing)}"
-            logger.error(msg)
-            _write_update_status("error", msg)
-            return
-
-        update_dir.parent.mkdir(parents=True, exist_ok=True)
-
-        updated = False
-        if update_dir.exists() and (update_dir / ".git").exists():
-            if not _is_valid_git_repo(update_dir):
-                logger.warning(
-                    "Update cache exists but is not a valid git repo; removing %s",
-                    update_dir,
-                )
-                shutil.rmtree(update_dir)
-            else:
-                logger.info(
-                    "Updating source in %s from %s (%s)",
-                    update_dir,
-                    repo_url,
-                    repo_ref,
-                )
-                try:
-                    try:
-                        _run_cmd(
-                            ["git", "remote", "set-url", "origin", repo_url],
-                            cwd=update_dir,
-                        )
-                    except (RuntimeError, OSError):
-                        _run_cmd(
-                            ["git", "remote", "add", "origin", repo_url],
-                            cwd=update_dir,
-                        )
-                    _run_cmd(["git", "fetch", "origin", repo_ref], cwd=update_dir)
-                    _run_cmd(["git", "reset", "--hard", "FETCH_HEAD"], cwd=update_dir)
-                    updated = True
-                except (RuntimeError, OSError) as exc:
-                    if not _update_cache_refresh_failure_is_retryable(exc):
-                        raise
-                    logger.warning(
-                        "Update cache refresh failed with recoverable git corruption; removing %s and recloning. %s",
-                        update_dir,
-                        exc,
-                    )
-                    shutil.rmtree(update_dir)
-        if not updated:
-            if update_dir.exists():
-                shutil.rmtree(update_dir)
-            logger.info("Cloning %s into %s", repo_url, update_dir)
-            _run_cmd(["git", "clone", repo_url, str(update_dir)], cwd=update_dir.parent)
-            _run_cmd(["git", "fetch", "origin", repo_ref], cwd=update_dir)
-            _run_cmd(["git", "reset", "--hard", "FETCH_HEAD"], cwd=update_dir)
-
-        _cleanup_update_build_artifacts(update_dir, logger)
-
-        if skip_checks:
-            logger.info("Skipping update checks (update.skip_checks=true).")
-        else:
-            logger.info("Running checks...")
-            try:
-                _run_cmd(["./scripts/check.sh"], cwd=update_dir)
-            except (RuntimeError, OSError) as exc:
-                logger.warning("Checks failed; continuing with refresh. %s", exc)
-
-        logger.info("Refreshing %s...", _backend_refresh_label(resolved_backend))
-        refresh_script = _refresh_script(resolved_backend, update_dir=update_dir)
-        if refresh_script is None:
-            msg = f"Unsupported update backend: {update_backend}"
-            logger.error(msg)
-            _write_update_status("error", msg)
-            return
-        if not refresh_script.exists():
-            msg = f"Missing safe refresh script at {refresh_script}."
-            logger.error(msg)
-            _write_update_status("error", msg)
-            return
-
-        env = os.environ.copy()
-        env["PACKAGE_SRC"] = str(update_dir)
-        env["UPDATE_STATUS_PATH"] = str(status_path)
-        env["UPDATE_TARGET"] = update_target
-        env["UPDATE_BACKEND"] = resolved_backend
-        # Keep install/status writes bound to the running service interpreter.
-        if sys.executable:
-            env["HELPER_PYTHON"] = sys.executable
-        if resolved_backend == "systemd-user":
-            if linux_hub_service_name:
-                env["UPDATE_HUB_SERVICE_NAME"] = linux_hub_service_name
-            if linux_telegram_service_name:
-                env["UPDATE_TELEGRAM_SERVICE_NAME"] = linux_telegram_service_name
-            if linux_discord_service_name:
-                env["UPDATE_DISCORD_SERVICE_NAME"] = linux_discord_service_name
-
-        returncode, output_tail = _run_refresh_script(
-            refresh_script=refresh_script,
-            update_dir=update_dir,
-            env=env,
-            logger=logger,
-        )
-        existing = _read_update_status()
-        if returncode != 0 and _refresh_script_committed_ok_status(existing):
-            logger.info(
-                "Refresh script exited non-zero after committing ok status; preserving committed update result."
-            )
-            return
-        if (
-            returncode != 0
-            and _refresh_failure_is_retryable(output_tail)
-            and _reset_update_cache_for_retry(update_dir, logger=logger)
-        ):
-            returncode, output_tail = _run_refresh_script(
-                refresh_script=refresh_script,
-                update_dir=update_dir,
-                env=env,
-                logger=logger,
-            )
-            existing = _read_update_status()
-            if returncode != 0 and _refresh_script_committed_ok_status(existing):
-                logger.info(
-                    "Refresh script exited non-zero after retry but had already committed ok status; preserving committed update result."
-                )
-                return
-        if returncode != 0:
-            if not existing or existing.get("status") not in ("rollback", "error"):
-                _write_update_status(
-                    "error",
-                    "Update failed; check hub logs for details.",
-                    phase="refresh_script_failed",
-                    error_type="refresh_script_failed",
-                    exit_code=returncode,
-                )
-            return
-
-        existing = _read_update_status()
-        if not existing or existing.get("status") not in ("rollback", "error"):
-            _write_update_status(
-                "ok",
-                "Update completed successfully.",
-                phase="completed",
-                update_target=update_target,
-            )
-    except Exception:  # intentional: top-level error handler
-        logger.exception("System update failed")
-        _write_update_status(
-            "error",
-            "Update crashed; see hub logs for details.",
-            phase="worker_crashed",
-            error_type="worker_crashed",
-        )
-    finally:
-        if lock_acquired:
-            _release_update_lock()
+    config = UpdateEngineConfig(
+        repo_url=repo_url,
+        repo_ref=repo_ref,
+        update_dir=update_dir,
+        update_target=update_target,
+        update_backend=update_backend,
+        skip_checks=skip_checks,
+        linux_service_names=linux_names,
+        restart_command=restart_command,
+        systemctl_sudo=systemctl_sudo,
+        allow_in_place=allow_in_place,
+        identity_hint=identity_hint,
+        helper_python=sys.executable or None,
+        server_host=server_host,
+        server_port=server_port,
+        server_base_path=server_base_path,
+    )
+    UpdateEngine(config, logger=logger).run()
 
 
 def _spawn_update_process(
@@ -1009,6 +929,12 @@ def _spawn_update_process(
     linux_hub_service_name: Optional[str] = None,
     linux_telegram_service_name: Optional[str] = None,
     linux_discord_service_name: Optional[str] = None,
+    restart_command: Optional[Union[str, list[str]]] = None,
+    systemctl_sudo: str = "auto",
+    allow_in_place: bool = False,
+    server_host: str = "127.0.0.1",
+    server_port: int = 4173,
+    server_base_path: str = "",
 ) -> None:
     active = _update_lock_active()
     if active:
@@ -1037,10 +963,11 @@ def _spawn_update_process(
         notify_context=notify_context if isinstance(notify_context, dict) else None,
         notify_sent_at=None,
     )
+    identity_hint = _capture_update_identity_hint()
     cmd = [
         sys.executable,
         "-m",
-        "codex_autorunner.core.update_runner",
+        "codex_autorunner.core.update.runner",
         "--repo-url",
         repo_url,
         "--repo-ref",
@@ -1051,8 +978,24 @@ def _spawn_update_process(
         update_target,
         "--log-path",
         str(log_path),
+        "--identity-hint",
+        json.dumps(identity_hint),
+        "--server-host",
+        server_host,
+        "--server-port",
+        str(server_port),
+        "--server-base-path",
+        server_base_path,
     ]
     cmd.extend(["--backend", update_backend])
+    cmd.extend(["--systemctl-sudo", systemctl_sudo])
+    if allow_in_place:
+        cmd.append("--allow-in-place")
+    if restart_command is not None:
+        if isinstance(restart_command, list):
+            cmd.extend(["--restart-command", json.dumps(restart_command)])
+        else:
+            cmd.extend(["--restart-command", restart_command])
     if linux_hub_service_name:
         cmd.extend(["--hub-service-name", linux_hub_service_name])
     if linux_telegram_service_name:

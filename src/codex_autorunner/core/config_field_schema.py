@@ -19,6 +19,7 @@ from .config_contract import (
     APP_SERVER_OUTPUT_POLICIES,
     OPENCODE_SERVER_SCOPE_VALUES,
     UPDATE_BACKEND_VALUES,
+    UPDATE_SYSTEMCTL_SUDO_VALUES,
     USAGE_CACHE_SCOPE_VALUES,
     ConfigError,
 )
@@ -714,7 +715,10 @@ UPDATE_FIELD_SCHEMAS: dict[str, FieldSchema] = {
         allowed_values=tuple(UPDATE_BACKEND_VALUES),
         parse_policy="fallback_default",
         type_message="update.backend must be a string",
-        value_message="update.backend must be one of: auto, launchd, systemd-user",
+        value_message=(
+            "update.backend must be one of: auto, launchd, systemd-user, "
+            "systemd-system"
+        ),
     ),
     "skip_checks": FieldSchema(
         path="update.skip_checks",
@@ -722,6 +726,30 @@ UPDATE_FIELD_SCHEMAS: dict[str, FieldSchema] = {
         default=True,
         allow_none=True,
         type_message="update.skip_checks must be boolean or null",
+    ),
+    "restart_command": FieldSchema(
+        path="update.restart_command",
+        kind="command",
+        default=None,
+        allow_none=True,
+        type_message="update.restart_command must be a list or string if provided",
+    ),
+    "systemctl_sudo": FieldSchema(
+        path="update.systemctl_sudo",
+        kind="choice",
+        default="auto",
+        allow_none=True,
+        allowed_values=tuple(UPDATE_SYSTEMCTL_SUDO_VALUES),
+        parse_policy="fallback_default",
+        type_message="update.systemctl_sudo must be a string",
+        value_message=("update.systemctl_sudo must be one of: auto, true, false"),
+    ),
+    "allow_in_place": FieldSchema(
+        path="update.allow_in_place",
+        kind="bool",
+        default=False,
+        allow_none=True,
+        type_message="update.allow_in_place must be boolean or null",
     ),
 }
 

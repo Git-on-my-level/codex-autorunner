@@ -31,9 +31,12 @@ from .config_parsers import (
     _parse_static_assets_config,
     _parse_templates_config,
     _parse_ticket_flow_config,
+    _parse_update_allow_in_place,
     _parse_update_backend,
     _parse_update_linux_service_names,
+    _parse_update_restart_command,
     _parse_update_skip_checks,
+    _parse_update_systemctl_sudo,
     _parse_usage_config,
     _parse_voice_config_section,
     normalize_base_path,
@@ -268,6 +271,9 @@ def build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
     update_skip_checks = _parse_update_skip_checks(update_cfg)
     update_backend = _parse_update_backend(update_cfg)
     update_linux_service_names = _parse_update_linux_service_names(update_cfg)
+    update_restart_command = _parse_update_restart_command(update_cfg)
+    update_systemctl_sudo = _parse_update_systemctl_sudo(update_cfg)
+    update_allow_in_place = _parse_update_allow_in_place(update_cfg)
     autorunner_cfg = cfg.get("autorunner")
     autorunner_cfg = cast(
         Dict[str, Any], autorunner_cfg if isinstance(autorunner_cfg, dict) else {}
@@ -305,6 +311,9 @@ def build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         update_skip_checks=update_skip_checks,
         update_backend=update_backend,
         update_linux_service_names=update_linux_service_names,
+        update_restart_command=update_restart_command,
+        update_systemctl_sudo=update_systemctl_sudo,
+        update_allow_in_place=update_allow_in_place,
         ticket_flow=_parse_ticket_flow_config(
             cfg.get("ticket_flow"),
             cast(Dict[str, Any], DEFAULT_REPO_CONFIG.get("ticket_flow")),
@@ -406,6 +415,9 @@ def build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
     update_skip_checks = _parse_update_skip_checks(update_cfg)
     update_backend = _parse_update_backend(update_cfg)
     update_linux_service_names = _parse_update_linux_service_names(update_cfg)
+    update_restart_command = _parse_update_restart_command(update_cfg)
+    update_systemctl_sudo = _parse_update_systemctl_sudo(update_cfg)
+    update_allow_in_place = _parse_update_allow_in_place(update_cfg)
     storage_cfg = cfg.get("storage")
     storage_cfg = cast(
         Dict[str, Any], storage_cfg if isinstance(storage_cfg, dict) else {}
@@ -435,6 +447,9 @@ def build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         update_skip_checks=update_skip_checks,
         update_backend=update_backend,
         update_linux_service_names=update_linux_service_names,
+        update_restart_command=update_restart_command,
+        update_systemctl_sudo=update_systemctl_sudo,
+        update_allow_in_place=update_allow_in_place,
         durable_writes=durable_writes,
         app_server=_parse_app_server_config(
             cfg.get("app_server"),

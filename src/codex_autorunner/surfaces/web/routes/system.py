@@ -207,6 +207,12 @@ def build_system_routes() -> APIRouter:
         linux_hub_service_name = None
         linux_telegram_service_name = None
         linux_discord_service_name = None
+        restart_command = None
+        systemctl_sudo = "auto"
+        allow_in_place = False
+        server_host = "127.0.0.1"
+        server_port = 4173
+        server_base_path = ""
         if config and isinstance(config, HubConfig):
             configured_url = getattr(config, "update_repo_url", None)
             if configured_url:
@@ -221,6 +227,16 @@ def build_system_routes() -> APIRouter:
                 linux_hub_service_name = update_services.get("hub")
                 linux_telegram_service_name = update_services.get("telegram")
                 linux_discord_service_name = update_services.get("discord")
+            restart_command = getattr(config, "update_restart_command", None)
+            systemctl_sudo = str(
+                getattr(config, "update_systemctl_sudo", systemctl_sudo)
+            )
+            allow_in_place = bool(getattr(config, "update_allow_in_place", False))
+            server_host = str(getattr(config, "server_host", server_host))
+            server_port = int(getattr(config, "server_port", server_port))
+            server_base_path = str(
+                getattr(config, "server_base_path", server_base_path)
+            )
         elif config is not None:
             skip_checks = bool(getattr(config, "update_skip_checks", True))
             update_backend = getattr(config, "update_backend", update_backend)
@@ -293,6 +309,12 @@ def build_system_routes() -> APIRouter:
                     if isinstance(linux_discord_service_name, str)
                     else None
                 ),
+                restart_command=restart_command,
+                systemctl_sudo=systemctl_sudo,
+                allow_in_place=allow_in_place,
+                server_host=server_host,
+                server_port=server_port,
+                server_base_path=server_base_path,
             )
             target_info = _get_update_target_definition(update_target)
             return {

@@ -104,13 +104,17 @@ CAR does not install third-party runtimes as part of the state-root contract.
 - `workspaces/` - App-server workspaces (default for non-docker destinations)
 
 **Update snapshot retention**:
-- macOS safe refresh stores update rollback snapshots under
+- Update orchestration (staged install, cutover, restart, health, rollback)
+  lives in the Python `UpdateEngine`
+  (`codex_autorunner.core.update.engine`). Both `scripts/safe-refresh-local-mac-hub.sh`
+  and `scripts/safe-refresh-local-linux-hub.sh` are thin wrappers that delegate
+  to `python -m codex_autorunner.core.update.runner`.
+- The engine stores update rollback snapshots under
   `~/.codex-autorunner/update_snapshots/` when `UPDATE_STATUS_PATH` uses the
   global state root.
 - Snapshot pruning runs after every `snapshot-db` update phase. The default
   keeps only the newest snapshot directory needed for rollback.
-- Override with `UPDATE_SNAPSHOT_MAX_COUNT` when running
-  `scripts/safe-refresh-local-mac-hub.sh`. Set it to `0` to disable pruning.
+- Override with `UPDATE_SNAPSHOT_MAX_COUNT`. Set it to `0` to disable pruning.
 - Manual inspection and pruning:
 
 ```bash

@@ -59,6 +59,13 @@ update:
     telegram: car-telegram
 ```
 
+`update.backend` accepts `auto`, `launchd`, `systemd-user`, or `systemd-system`.
+Use `systemd-system` when the hub runs as a `/etc/systemd/system` unit (see
+"System service" below). On Linux `auto` resolves to `systemd-user`; the refresh
+auto-detects the scope only when the user D-Bus session is unreachable, so set
+`systemd-system` explicitly for system units. If you pick the wrong scope the
+refresh now fails with a clear message instead of silently aborting.
+
 ## User service (recommended)
 
 1) Copy `docs/ops/systemd-hub.service` to `~/.config/systemd/user/car-hub.service`.
@@ -91,6 +98,58 @@ If you need a system service:
 - `sudo systemctl enable --now car-hub`
 
 The same pattern applies to `car-telegram.service`.
+
+### Self-update for a system service
+
+To let `/system/update` (and Telegram/Discord `/update`) manage a system unit,
+set the backend to `systemd-system`:
+
+```yaml
+update:
+  backend: systemd-system
+  linux_service_names:
+    hub: car-hub
+    telegram: car-telegram
+    discord: car-discord
+```
+
+The refresh runs as the hub's service user, so privileged `systemctl`
+(`daemon-reload`, `restart`) calls are wrapped with `sudo -n`. Grant that user
+passwordless sudo for systemctl, e.g. in `/etc/sudoers.d/car-hub`:
+
+```
+car ALL=(root) NOPASSWD: /bin/systemctl daemon-reload, /bin/systemctl restart car-hub, /bin/systemctl restart car-telegram, /bin/systemctl restart car-discord
+```
+
+Override the sudo behavior with `update.systemctl_sudo` (`auto`|`true`|`false`)
+in hub config, or the legacy `UPDATE_SYSTEMCTL_SUDO` env var in the unit.
+Set `SYSTEMD_SCOPE` (`user`|`system`) in the unit environment when auto-detection
+is insufficient; set `update.systemctl_sudo: false` when the hub runs as root.
+
+### Staged updates and routing
+
+Linux self-update now runs through the Python `UpdateEngine`: staged venv build,
+DB snapshot, atomic `CURRENT_VENV_LINK` cutover, layered restart, and rollback.
+Staged cutover requires the unit `ExecStart` to route through the `car` wrapper
+or the current venv symlink. If not, the update fails with remediation unless
+you explicitly opt into emergency in-place install:
+
+```yaml
+update:
+  allow_in_place: true  # loud emergency-only fallback; not recommended
+```
+
+Optional escape hatches:
+
+```yaml
+update:
+  restart_command: ["sudo", "-n", "systemctl", "restart", "car-hub"]
+  systemctl_sudo: auto
+```
+
+Orchestration no longer lives in `scripts/safe-refresh-local-linux-hub.sh`; that
+script is a thin compatibility wrapper. The hub spawns
+`python -m codex_autorunner.core.update.runner`.
 
 ## Logging and health checks
 

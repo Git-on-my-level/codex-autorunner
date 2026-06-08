@@ -368,6 +368,9 @@ class RepoConfig(AgentConfigMixin):
     update_skip_checks: bool
     update_backend: str
     update_linux_service_names: Dict[str, str]
+    update_restart_command: Optional[Union[str, List[str]]]
+    update_systemctl_sudo: str
+    update_allow_in_place: bool
     app_server: AppServerConfig
     opencode: OpenCodeConfig
     pma: PmaConfig
@@ -420,6 +423,9 @@ class HubConfig(AgentConfigMixin):
     update_skip_checks: bool
     update_backend: str
     update_linux_service_names: Dict[str, str]
+    update_restart_command: Optional[Union[str, List[str]]]
+    update_systemctl_sudo: str
+    update_allow_in_place: bool
     app_server: AppServerConfig
     opencode: OpenCodeConfig
     pma: PmaConfig

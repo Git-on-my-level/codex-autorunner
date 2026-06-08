@@ -473,13 +473,15 @@
       "editor": "vi"
     },
     "update": {
+      "allow_in_place": false,
       "backend": "auto",
       "linux_service_names": {
         "discord": "car-discord",
         "hub": "car-hub",
         "telegram": "car-telegram"
       },
-      "skip_checks": true
+      "skip_checks": true,
+      "systemctl_sudo": "auto"
     },
     "usage": {
       "cache_scope": "global",
@@ -654,13 +656,15 @@
     "idle_timeout_seconds": 43200
   },
   "update": {
+    "allow_in_place": false,
     "backend": "auto",
     "linux_service_names": {
       "discord": "car-discord",
       "hub": "car-hub",
       "telegram": "car-telegram"
     },
-    "skip_checks": true
+    "skip_checks": true,
+    "systemctl_sudo": "auto"
   },
   "usage": {
     "cache_scope": "global",

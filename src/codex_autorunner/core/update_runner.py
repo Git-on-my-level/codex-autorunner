@@ -1,55 +1,18 @@
+"""Compatibility wrapper for the update worker CLI."""
+
 from __future__ import annotations
 
-import argparse
-import logging
-from pathlib import Path
+from typing import Any
 
-from .update import _system_update_worker
+from .update.runner import _build_logger, main
 
-
-def _build_logger(log_path: Path) -> logging.Logger:
-    logger = logging.getLogger("codex_autorunner.system_update")
-    logger.setLevel(logging.INFO)
-    handler = logging.FileHandler(log_path, encoding="utf-8")
-    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-    logger.addHandler(handler)
-    return logger
+__all__ = ("_build_logger", "_system_update_worker", "main")
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run codex-autorunner update worker.")
-    parser.add_argument("--repo-url", required=True)
-    parser.add_argument("--repo-ref", default="main")
-    parser.add_argument("--update-dir", required=True)
-    parser.add_argument("--log-path", required=True)
-    parser.add_argument("--target", default="all")
-    parser.add_argument("--backend", default="auto")
-    parser.add_argument("--hub-service-name")
-    parser.add_argument("--telegram-service-name")
-    parser.add_argument("--discord-service-name")
-    parser.add_argument(
-        "--skip-checks", action=argparse.BooleanOptionalAction, default=True
-    )
-    args = parser.parse_args(argv)
+def _system_update_worker(**kwargs: Any) -> Any:
+    from .update._facade import _system_update_worker as facade_worker
 
-    update_dir = Path(args.update_dir).expanduser()
-    log_path = Path(args.log_path).expanduser()
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    logger = _build_logger(log_path)
-
-    _system_update_worker(
-        repo_url=args.repo_url,
-        repo_ref=args.repo_ref,
-        update_dir=update_dir,
-        logger=logger,
-        update_target=args.target,
-        update_backend=args.backend,
-        skip_checks=bool(args.skip_checks),
-        linux_hub_service_name=args.hub_service_name,
-        linux_telegram_service_name=args.telegram_service_name,
-        linux_discord_service_name=args.discord_service_name,
-    )
-    return 0
+    return facade_worker(**kwargs)
 
 
 if __name__ == "__main__":

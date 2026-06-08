@@ -9,7 +9,8 @@ class ConfigError(Exception):
 
 APP_SERVER_OUTPUT_POLICIES = ("all_agent_messages", "final_only")
 OPENCODE_SERVER_SCOPE_VALUES = ("global", "workspace")
-UPDATE_BACKEND_VALUES = ("auto", "launchd", "systemd-user")
+UPDATE_BACKEND_VALUES = ("auto", "launchd", "systemd-user", "systemd-system")
+UPDATE_SYSTEMCTL_SUDO_VALUES = ("auto", "true", "false")
 USAGE_CACHE_SCOPE_VALUES = ("global", "repo")
 
 TICKET_FLOW_APPROVAL_MODE_YOLO = "yolo"

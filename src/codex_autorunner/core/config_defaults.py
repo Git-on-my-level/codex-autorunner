@@ -315,6 +315,8 @@ def _default_update_section() -> Dict[str, Any]:
         "skip_checks": True,
         "backend": "auto",
         "linux_service_names": _default_update_linux_service_names(),
+        "systemctl_sudo": "auto",
+        "allow_in_place": False,
     }
 
 

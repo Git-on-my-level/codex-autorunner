@@ -1,256 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Safe refresh for a systemd-user managed Linux hub.
+# Thin compatibility wrapper: update orchestration lives in UpdateEngine.
 #
-# The update worker prepares source in PACKAGE_SRC, then this script:
-# 1) installs the staged package into the current python environment
-# 2) restarts selected systemd user services
-# 3) verifies basic health checks
+# The hub worker clones source and runs:
+#   python -m codex_autorunner.core.update.runner
 #
-# Overrides:
-#   PACKAGE_SRC                  Path to this repo (default: scripts/..)
-#   UPDATE_STATUS_PATH           JSON status path maintained by update worker
-#   UPDATE_TARGET                all|web|chat|telegram|discord (default: all)
-#   UPDATE_HUB_SERVICE_NAME      systemd user service for hub (default: car-hub)
-#   UPDATE_TELEGRAM_SERVICE_NAME systemd user service for telegram (default: car-telegram)
-#   UPDATE_DISCORD_SERVICE_NAME  systemd user service for discord (default: car-discord)
-#   HEALTH_URL                   web health URL (default: http://127.0.0.1:4173/health)
-#   HEALTH_TIMEOUT_SECONDS       web health timeout (default: 30)
-#   HEALTH_INTERVAL_SECONDS      web health poll interval (default: 0.5)
-#   HELPER_PYTHON                python binary used for install/status writes
-#   LOCAL_BIN                    User-local bin path to ensure in login shells and zsh -c commands (default: ~/.local/bin)
+# This script remains for manual/emergency use and preserves the env contract
+# expected by older tooling. It delegates to the Python engine when invoked
+# directly with PACKAGE_SRC and UPDATE_STATUS_PATH set.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_SRC="${PACKAGE_SRC:-$SCRIPT_DIR/..}"
 UPDATE_STATUS_PATH="${UPDATE_STATUS_PATH:-}"
 UPDATE_TARGET="${UPDATE_TARGET:-all}"
-UPDATE_HUB_SERVICE_NAME="${UPDATE_HUB_SERVICE_NAME:-car-hub}"
-UPDATE_TELEGRAM_SERVICE_NAME="${UPDATE_TELEGRAM_SERVICE_NAME:-car-telegram}"
-UPDATE_DISCORD_SERVICE_NAME="${UPDATE_DISCORD_SERVICE_NAME:-car-discord}"
-HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:4173/health}"
-HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-30}"
-HEALTH_INTERVAL_SECONDS="${HEALTH_INTERVAL_SECONDS:-0.5}"
+UPDATE_BACKEND="${UPDATE_BACKEND:-auto}"
 HELPER_PYTHON="${HELPER_PYTHON:-}"
-LOCAL_BIN="${LOCAL_BIN:-$HOME/.local/bin}"
-HUB_ROOT="${HUB_ROOT:-}"
-
-write_status() {
-  local status message
-  status="$1"
-  message="$2"
-  if [[ -z "${UPDATE_STATUS_PATH}" || -z "${HELPER_PYTHON}" || ! -x "${HELPER_PYTHON}" ]]; then
-    return 0
-  fi
-  "${HELPER_PYTHON}" - <<PY
-import json
-import pathlib
-import time
-
-path = pathlib.Path("${UPDATE_STATUS_PATH}")
-path.parent.mkdir(parents=True, exist_ok=True)
-payload = {"status": "${status}", "message": "${message}", "at": time.time()}
-try:
-    existing = json.loads(path.read_text(encoding="utf-8"))
-except Exception:
-    existing = None
-if isinstance(existing, dict):
-    for key in (
-        "notify_platform",
-        "notify_context",
-        "notify_chat_id",
-        "notify_thread_id",
-        "notify_reply_to",
-        "notify_sent_at",
-        "phase_timings",
-        "last_phase_timing",
-    ):
-        if key not in payload and key in existing:
-            payload[key] = existing[key]
-path.write_text(json.dumps(payload), encoding="utf-8")
-PY
-}
-
-now_ms() {
-  "${HELPER_PYTHON}" - <<'PY'
-import time
-
-print(int(time.time() * 1000))
-PY
-}
-
-log_phase_timing() {
-  local phase status start_ms end_ms duration_ms
-  phase="$1"
-  status="$2"
-  start_ms="$3"
-  end_ms="$(now_ms)"
-  if [[ -n "${start_ms}" && "${start_ms}" =~ ^[0-9]+$ ]]; then
-    duration_ms=$(( end_ms - start_ms ))
-  else
-    duration_ms=0
-  fi
-  if [[ -n "${UPDATE_STATUS_PATH}" && -x "${HELPER_PYTHON}" ]]; then
-    UPDATE_STATUS_PATH_VALUE="${UPDATE_STATUS_PATH}" \
-    UPDATE_TIMING_PHASE="${phase}" \
-    UPDATE_TIMING_STATUS="${status}" \
-    UPDATE_TIMING_DURATION_MS="${duration_ms}" \
-    "${HELPER_PYTHON}" - <<'PY'
-import json
-import os
-import pathlib
-import time
-
-path = pathlib.Path(os.environ["UPDATE_STATUS_PATH_VALUE"])
-try:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-except Exception:
-    payload = {"status": "running", "message": "Update running.", "at": time.time()}
-if not isinstance(payload, dict):
-    payload = {"status": "running", "message": "Update running.", "at": time.time()}
-timing = {
-    "phase": os.environ["UPDATE_TIMING_PHASE"],
-    "status": os.environ["UPDATE_TIMING_STATUS"],
-    "duration_ms": int(os.environ["UPDATE_TIMING_DURATION_MS"]),
-    "at": time.time(),
-}
-timings = payload.get("phase_timings")
-if not isinstance(timings, list):
-    timings = []
-timings.append(timing)
-payload["phase_timings"] = timings[-24:]
-payload["last_phase_timing"] = timing
-path.parent.mkdir(parents=True, exist_ok=True)
-path.write_text(json.dumps(payload), encoding="utf-8")
-PY
-  fi
-  UPDATE_TIMING_PHASE="${phase}" \
-  UPDATE_TIMING_STATUS="${status}" \
-  UPDATE_TIMING_DURATION_MS="${duration_ms}" \
-  "${HELPER_PYTHON}" - <<'PY'
-import json
-import os
-
-print(json.dumps({
-    "event": "update.phase_timing",
-    "phase": os.environ["UPDATE_TIMING_PHASE"],
-    "status": os.environ["UPDATE_TIMING_STATUS"],
-    "duration_ms": int(os.environ["UPDATE_TIMING_DURATION_MS"]),
-}, separators=(",", ":")))
-PY
-}
-
-run_timed_phase() {
-  local phase start_ms exit_code
-  phase="$1"
-  shift
-  start_ms="$(now_ms)"
-  if "$@"; then
-    log_phase_timing "${phase}" "ok" "${start_ms}"
-    return 0
-  fi
-  exit_code=$?
-  log_phase_timing "${phase}" "failed" "${start_ms}"
-  return "${exit_code}"
-}
-
-fail() {
-  local message="$1"
-  echo "${message}" >&2
-  write_status "error" "${message}"
-  exit 1
-}
-
-ensure_login_shell_path() {
-  local path_entry marker_start marker_end
-  path_entry="$1"
-  marker_start="# >>> codex-autorunner local-bin >>>"
-  marker_end="# <<< codex-autorunner local-bin <<<"
-  if [[ -z "${HOME:-}" || ! -d "${HOME}" ]]; then
-    echo "Skipping shell PATH bootstrap; HOME is unavailable." >&2
-    return 0
-  fi
-  for profile in "${HOME}/.zshenv" "${HOME}/.zprofile" "${HOME}/.bash_profile" "${HOME}/.profile"; do
-    if ! mkdir -p "$(dirname "${profile}")"; then
-      echo "Warning: could not create directory for ${profile}; skipping." >&2
-      continue
-    fi
-    if [[ ! -e "${profile}" ]] && ! touch "${profile}"; then
-      echo "Warning: could not create ${profile}; skipping." >&2
-      continue
-    fi
-    if [[ ! -w "${profile}" ]]; then
-      echo "Warning: ${profile} is not writable; skipping." >&2
-      continue
-    fi
-    if grep -Fq "${marker_start}" "${profile}" 2>/dev/null; then
-      continue
-    fi
-    if ! {
-      echo ""
-      echo "${marker_start}"
-      echo "# Ensure user-local CAR binaries are available in login shells and zsh -c commands."
-      printf 'export PATH="%s:$PATH"\n' "${path_entry}"
-      echo "${marker_end}"
-    } >> "${profile}"; then
-      echo "Warning: failed to update ${profile}; skipping." >&2
-      continue
-    fi
-    echo "Updated ${profile} to include ${path_entry} in PATH."
-  done
-}
-
-normalize_update_target() {
-  local raw
-  raw="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
-  case "${raw}" in
-    ""|all)
-      echo "all"
-      ;;
-    web|hub|server|ui)
-      echo "web"
-      ;;
-    chat|chat-apps|apps)
-      echo "chat"
-      ;;
-    telegram|tg|bot)
-      echo "telegram"
-      ;;
-    discord|dc)
-      echo "discord"
-      ;;
-    *)
-      fail "Unsupported UPDATE_TARGET '${raw}'. Use all, web, chat, telegram, or discord."
-      ;;
-  esac
-}
-
-_systemd_arg_value() {
-  local service_name key
-  service_name="$1"
-  key="$2"
-  if [[ -z "${service_name}" || -z "${key}" ]]; then
-    return 0
-  fi
-  systemctl --user cat "${service_name}" 2>/dev/null | "${HELPER_PYTHON}" -c "$(
-    cat <<'PY'
-import re
-import sys
-
-key = sys.argv[1]
-text = sys.stdin.read()
-pattern = re.compile(
-    r"(?:--%s(?:=|\s+))(\"[^\"]+\"|'[^']+'|[^\s;]+)" % re.escape(key)
-)
-match = pattern.search(text)
-if not match:
-    raise SystemExit(0)
-value = match.group(1).strip().strip("\"'")
-if value:
-    sys.stdout.write(value)
-PY
-  )" "${key}"
-}
 
 if [[ -z "${HELPER_PYTHON}" || ! -x "${HELPER_PYTHON}" ]]; then
   if command -v python3 >/dev/null 2>&1; then
@@ -261,171 +26,38 @@ if [[ -z "${HELPER_PYTHON}" || ! -x "${HELPER_PYTHON}" ]]; then
 fi
 
 if [[ -z "${HELPER_PYTHON}" || ! -x "${HELPER_PYTHON}" ]]; then
-  fail "Python not found (set HELPER_PYTHON)."
+  echo "Python not found (set HELPER_PYTHON)." >&2
+  exit 1
 fi
 
-for cmd in git systemctl curl; do
-  if ! command -v "${cmd}" >/dev/null 2>&1; then
-    fail "Missing required command: ${cmd}."
-  fi
-done
-
-if [[ ! -d "${PACKAGE_SRC}" ]]; then
-  fail "PACKAGE_SRC does not exist: ${PACKAGE_SRC}"
+if [[ -z "${UPDATE_STATUS_PATH}" ]]; then
+  echo "UPDATE_STATUS_PATH is required for the Linux refresh wrapper." >&2
+  exit 1
 fi
 
-if [[ ! -f "${PACKAGE_SRC}/pyproject.toml" ]]; then
-  fail "PACKAGE_SRC is missing pyproject.toml: ${PACKAGE_SRC}"
-fi
+LOG_PATH="$(dirname "${UPDATE_STATUS_PATH}")/update-standalone.log"
+REPO_URL="${REPO_URL:-https://github.com/cursor/codex-autorunner.git}"
+REPO_REF="${REPO_REF:-main}"
 
-target="$(normalize_update_target "${UPDATE_TARGET}")"
-if [[ -z "${HUB_ROOT}" ]]; then
-  HUB_ROOT="$(_systemd_arg_value "${UPDATE_HUB_SERVICE_NAME}" path)"
-fi
+export HELPER_PYTHON
+export PACKAGE_SRC
+export UPDATE_STATUS_PATH
+export UPDATE_TARGET
+export UPDATE_BACKEND
+export SYSTEMD_SCOPE="${SYSTEMD_SCOPE:-}"
+export UPDATE_SYSTEMCTL_SUDO="${UPDATE_SYSTEMCTL_SUDO:-auto}"
+export UPDATE_HUB_SERVICE_NAME="${UPDATE_HUB_SERVICE_NAME:-car-hub}"
+export UPDATE_TELEGRAM_SERVICE_NAME="${UPDATE_TELEGRAM_SERVICE_NAME:-car-telegram}"
+export UPDATE_DISCORD_SERVICE_NAME="${UPDATE_DISCORD_SERVICE_NAME:-car-discord}"
 
-service_load_state() {
-  local service_name="$1"
-  systemctl --user show "${service_name}" --property LoadState --value 2>/dev/null || true
-}
-
-service_exists() {
-  local service_name="$1"
-  local state
-  state="$(service_load_state "${service_name}")"
-  [[ -n "${state}" && "${state}" != "not-found" ]]
-}
-
-wait_for_http_health() {
-  local deadline now
-  deadline="$("${HELPER_PYTHON}" - <<PY
-import time
-print(time.time() + float("${HEALTH_TIMEOUT_SECONDS}"))
-PY
-)"
-  while true; do
-    if curl -fsS "${HEALTH_URL}" >/dev/null 2>&1; then
-      return 0
-    fi
-    now="$("${HELPER_PYTHON}" - <<PY
-import time
-print(time.time())
-PY
-)"
-    if ! "${HELPER_PYTHON}" - <<PY
-now = float("${now}")
-deadline = float("${deadline}")
-raise SystemExit(0 if now <= deadline else 1)
-PY
-    then
-      return 1
-    fi
-    sleep "${HEALTH_INTERVAL_SECONDS}"
-  done
-}
-
-ensure_playwright_chromium() {
-  local python_bin="$1"
-  if [[ -z "${python_bin}" || ! -x "${python_bin}" ]]; then
-    return 0
-  fi
-  "${python_bin}" - <<'PY'
-from pathlib import Path
-import subprocess
-import sys
-
-try:
-    from playwright.sync_api import sync_playwright
-except Exception:
-    raise SystemExit(0)
-
-try:
-    playwright = sync_playwright().start()
-    chromium_path = playwright.chromium.executable_path
-    playwright.stop()
-    if chromium_path and Path(chromium_path).exists():
-        print(f"Playwright Chromium available at {chromium_path}")
-        raise SystemExit(0)
-except Exception:
-    pass
-
-print("Installing Playwright Chromium browser...")
-subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-PY
-}
-
-echo "Installing codex-autorunner from ${PACKAGE_SRC}..."
-run_timed_phase "pip_upgrade" "${HELPER_PYTHON}" -m pip -q install --upgrade pip
-run_timed_phase "pip_install" "${HELPER_PYTHON}" -m pip -q install --upgrade "${PACKAGE_SRC}[browser]"
-run_timed_phase "playwright_chromium" ensure_playwright_chromium "${HELPER_PYTHON}"
-ensure_login_shell_path "${LOCAL_BIN}"
-
-if [[ -z "${HUB_ROOT}" ]]; then
-  fail "Unable to determine HUB_ROOT from ${UPDATE_HUB_SERVICE_NAME}; set HUB_ROOT explicitly."
-fi
-
-echo "Refreshing hub-managed repo artifacts under ${HUB_ROOT}..."
-run_timed_phase "managed_repo_refresh" env HUB_ROOT="${HUB_ROOT}" HELPER_PYTHON="${HELPER_PYTHON}" \
-  bash "${PACKAGE_SRC}/scripts/update-hub-managed-repos.sh"
-
-echo "Reloading systemd user manager..."
-run_timed_phase "systemd_daemon_reload" systemctl --user daemon-reload
-
-restart_web=false
-restart_telegram=false
-restart_discord=false
-
-if [[ "${target}" == "all" || "${target}" == "web" ]]; then
-  if ! service_exists "${UPDATE_HUB_SERVICE_NAME}"; then
-    fail "Hub service not found: ${UPDATE_HUB_SERVICE_NAME}"
-  fi
-  echo "Restarting hub service ${UPDATE_HUB_SERVICE_NAME}..."
-  run_timed_phase "hub_restart" systemctl --user restart "${UPDATE_HUB_SERVICE_NAME}"
-  restart_web=true
-fi
-
-if [[ "${target}" == "all" || "${target}" == "chat" || "${target}" == "telegram" ]]; then
-  if service_exists "${UPDATE_TELEGRAM_SERVICE_NAME}"; then
-    echo "Restarting telegram service ${UPDATE_TELEGRAM_SERVICE_NAME}..."
-    run_timed_phase "telegram_restart" systemctl --user restart "${UPDATE_TELEGRAM_SERVICE_NAME}"
-    restart_telegram=true
-  elif [[ "${target}" == "telegram" ]]; then
-    fail "Telegram service not found: ${UPDATE_TELEGRAM_SERVICE_NAME}"
-  else
-    echo "Telegram service ${UPDATE_TELEGRAM_SERVICE_NAME} not found; skipping."
-  fi
-fi
-
-if [[ "${target}" == "all" || "${target}" == "chat" || "${target}" == "discord" ]]; then
-  if service_exists "${UPDATE_DISCORD_SERVICE_NAME}"; then
-    echo "Restarting discord service ${UPDATE_DISCORD_SERVICE_NAME}..."
-    run_timed_phase "discord_restart" systemctl --user restart "${UPDATE_DISCORD_SERVICE_NAME}"
-    restart_discord=true
-  elif [[ "${target}" == "discord" ]]; then
-    fail "Discord service not found: ${UPDATE_DISCORD_SERVICE_NAME}"
-  else
-    echo "Discord service ${UPDATE_DISCORD_SERVICE_NAME} not found; skipping."
-  fi
-fi
-
-if [[ "${restart_web}" == "true" ]]; then
-  echo "Checking web health at ${HEALTH_URL}..."
-  if ! run_timed_phase "hub_health_check" wait_for_http_health; then
-    fail "Web health check failed at ${HEALTH_URL}."
-  fi
-fi
-
-if [[ "${restart_telegram}" == "true" ]]; then
-  if ! systemctl --user is-active --quiet "${UPDATE_TELEGRAM_SERVICE_NAME}"; then
-    fail "Telegram service is not active: ${UPDATE_TELEGRAM_SERVICE_NAME}"
-  fi
-fi
-
-if [[ "${restart_discord}" == "true" ]]; then
-  if ! systemctl --user is-active --quiet "${UPDATE_DISCORD_SERVICE_NAME}"; then
-    fail "Discord service is not active: ${UPDATE_DISCORD_SERVICE_NAME}"
-  fi
-fi
-
-message="Update completed successfully."
-echo "${message}"
-write_status "ok" "${message}"
+exec "${HELPER_PYTHON}" -m codex_autorunner.core.update.runner \
+  --repo-url "${REPO_URL}" \
+  --repo-ref "${REPO_REF}" \
+  --update-dir "${PACKAGE_SRC}" \
+  --log-path "${LOG_PATH}" \
+  --target "${UPDATE_TARGET}" \
+  --backend "${UPDATE_BACKEND}" \
+  --hub-service-name "${UPDATE_HUB_SERVICE_NAME}" \
+  --telegram-service-name "${UPDATE_TELEGRAM_SERVICE_NAME}" \
+  --discord-service-name "${UPDATE_DISCORD_SERVICE_NAME}" \
+  --skip-checks
