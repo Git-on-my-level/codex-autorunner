@@ -1,5 +1,5 @@
 import type { ChatQueuedTurn } from '$lib/api/client';
-import type { ChatSummary, ChatRunProgress } from '$lib/viewModels/domain';
+import type { ArtifactDelivery, ChatSummary, ChatRunProgress } from '$lib/viewModels/domain';
 import {
   buildChatActivityCards,
   buildChatStatusBar,
@@ -12,7 +12,7 @@ import type { ChatDetailStreamState } from './chatDetailLiveProjection';
 export type ChatTranscriptListItem =
   | { kind: 'card'; id: string; card: ChatTranscriptCard }
   | { kind: 'typing'; id: string; title: string }
-  | { kind: 'shared-files'; id: string }
+  | { kind: 'shared-files'; id: string; files: ArtifactDelivery[] }
   | { kind: 'tail-spacer'; id: string };
 
 export type ChatDetailDisplayReadModelInput = {
@@ -20,7 +20,7 @@ export type ChatDetailDisplayReadModelInput = {
   queuedTurns: ChatQueuedTurn[];
   displayedProgress: ChatRunProgress | null;
   activeChat: ChatSummary | null;
-  assistantSharedFileCount: number;
+  assistantSharedFiles: ArtifactDelivery[];
   streamState: ChatDetailStreamState;
   loadingActive: boolean;
   activeError: unknown;
@@ -77,7 +77,8 @@ export function buildChatDetailDisplayReadModel(
   const streamingMessageId = activeStreamingMessageId(input.displayedProgress, lastAssistantMessageCard);
   const showTypingIndicator = shouldShowTypingIndicator(input.displayedProgress, activeCards);
   const showStatusBar = shouldShowChatDetailStatusBar(statusBar, input.displayedProgress, activeCards);
-  const chatHasActivity = activeCards.length > 0 || showStatusBar;
+  const sharedFileItems = buildSharedFileListItems(displayTranscriptCards, input.assistantSharedFiles);
+  const chatHasActivity = activeCards.length > 0 || sharedFileItems.length > 0 || showStatusBar;
   const hasRunnableDraft = Boolean(input.activeChat && (input.draft.trim() || input.pendingAttachmentCount > 0));
   const composerWillQueue = shouldQueueComposerDraft(
     input.activeChat,
@@ -92,9 +93,8 @@ export function buildChatDetailDisplayReadModel(
     streamingMessageId,
     showTypingIndicator,
     transcriptListItems: [
-      ...displayTranscriptCards.map((card) => ({ kind: 'card' as const, id: card.id, card })),
+      ...mergeTranscriptCardsWithSharedFiles(displayTranscriptCards, sharedFileItems),
       ...(showTypingIndicator ? [{ kind: 'typing' as const, id: 'typing-indicator', title: 'Assistant is typing' }] : []),
-      ...(input.assistantSharedFileCount > 0 ? [{ kind: 'shared-files' as const, id: 'assistant-shared-files' }] : []),
       ...(showStatusBar ? [{ kind: 'tail-spacer' as const, id: 'status-bar-tail-spacer' }] : [])
     ],
     statusAnnouncement: screenReaderStatusAnnouncement(input, statusBar, lastAssistantMessageCard),
@@ -114,6 +114,75 @@ export function buildChatDetailDisplayReadModel(
     queueDepthForCommands: input.queuedTurns.length || input.displayedProgress?.queueDepth || 0,
     runActive: isRunActiveForToolDisplay(input.displayedProgress, input.activeChat, activeCards)
   };
+}
+
+function mergeTranscriptCardsWithSharedFiles(
+  cards: ChatTranscriptCard[],
+  sharedFileItems: Array<{ afterIndex: number; item: Extract<ChatTranscriptListItem, { kind: 'shared-files' }> }>
+): ChatTranscriptListItem[] {
+  const items: ChatTranscriptListItem[] = [];
+  for (const pending of sharedFileItems.filter((entry) => entry.afterIndex < 0)) {
+    items.push(pending.item);
+  }
+  cards.forEach((card, index) => {
+    items.push({ kind: 'card', id: card.id, card });
+    for (const pending of sharedFileItems.filter((entry) => entry.afterIndex === index)) {
+      items.push(pending.item);
+    }
+  });
+  return items;
+}
+
+function buildSharedFileListItems(
+  cards: ChatTranscriptCard[],
+  files: ArtifactDelivery[]
+): Array<{ afterIndex: number; item: Extract<ChatTranscriptListItem, { kind: 'shared-files' }> }> {
+  if (files.length === 0) return [];
+  const grouped = new Map<number, ArtifactDelivery[]>();
+  for (const file of files) {
+    const afterIndex = transcriptInsertionIndex(cards, deliveryTimestamp(file));
+    grouped.set(afterIndex, [...(grouped.get(afterIndex) ?? []), file]);
+  }
+  return [...grouped.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([afterIndex, groupedFiles]) => ({
+      afterIndex,
+      item: {
+        kind: 'shared-files' as const,
+        id: `assistant-shared-files:${afterIndex}:${groupedFiles.map((file) => file.deliveryId).join(':')}`,
+        files: groupedFiles
+      }
+    }));
+}
+
+function transcriptInsertionIndex(cards: ChatTranscriptCard[], timestamp: number): number {
+  if (cards.length === 0) return -1;
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return cards.length - 1;
+  let index = -1;
+  for (let i = 0; i < cards.length; i += 1) {
+    const cardTime = cardTimestamp(cards[i]);
+    if (Number.isFinite(cardTime) && cardTime > 0 && cardTime <= timestamp) index = i;
+  }
+  return index >= 0 ? index : -1;
+}
+
+function deliveryTimestamp(file: ArtifactDelivery): number {
+  return firstValidTimestamp(file.sentAt, file.updatedAt, file.createdAt, file.failedAt);
+}
+
+function cardTimestamp(card: ChatTranscriptCard): number {
+  if (card.kind === 'message') return firstValidTimestamp(card.message.createdAt, card.timestamp);
+  if ('timestamp' in card) return firstValidTimestamp(card.timestamp);
+  return 0;
+}
+
+function firstValidTimestamp(...values: Array<string | null | undefined>): number {
+  for (const value of values) {
+    if (!value) continue;
+    const timestamp = Date.parse(value);
+    if (Number.isFinite(timestamp)) return timestamp;
+  }
+  return 0;
 }
 
 function isRunActiveForToolDisplay(

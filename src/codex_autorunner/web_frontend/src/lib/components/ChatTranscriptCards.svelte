@@ -356,6 +356,76 @@
   const displayCards = $derived(displayCardsFor(cards));
 </script>
 
+{#snippet sharedFilesGrid(files: ArtifactDelivery[])}
+  <ul class="shared-files-grid" aria-label="Files shared by assistant">
+    {#each files as file (file.deliveryId)}
+      {@const stateLabel = deliveryStateLabel(file.state)}
+      {@const previewKind = deliveryPreviewKind(file)}
+      {@const sizeLabel = formatDeliverySize(file.size)}
+      {@const downloadHref = file.downloadUrl ? href(file.downloadUrl) : null}
+      {@const previewHref = file.downloadUrl ? inlineDeliveryUrl(file.downloadUrl) : null}
+      {@const canPreview =
+        stateLabel === 'sent' &&
+        previewHref !== null &&
+        (previewKind === 'image' || previewKind === 'video' || previewKind === 'audio')}
+      {@const hasMedia = canPreview && (previewKind === 'image' || previewKind === 'video')}
+      <li class={`shared-file-card kind-${previewKind} delivery-${stateLabel}`} class:has-media={hasMedia}>
+        {#if hasMedia && previewHref}
+          <div class="shared-file-media-wrap">
+            {#if previewKind === 'image'}
+              <button type="button" class="shared-file-media" onclick={() => openLightbox(file)} title={`Open ${file.filename}`}>
+                <img src={previewHref} alt={file.filename} loading="lazy" />
+              </button>
+            {:else}
+              <!-- svelte-ignore a11y_media_has_caption -->
+              <video class="shared-file-media" controls preload="metadata" src={previewHref}></video>
+            {/if}
+            <button type="button" class="shared-file-expand" onclick={() => openLightbox(file)} title="Expand preview" aria-label="Expand preview">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M15 3h6v6" />
+                <path d="M9 21H3v-6" />
+                <path d="M21 3l-7 7" />
+                <path d="M3 21l7-7" />
+              </svg>
+            </button>
+          </div>
+        {/if}
+        {#if canPreview && previewHref && previewKind === 'audio'}
+          <audio class="shared-file-audio" controls preload="metadata" src={previewHref}></audio>
+        {/if}
+        <div class="shared-file-foot">
+          <span class="shared-file-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
+              <path d="M13 2v7h7" />
+            </svg>
+          </span>
+          <span class="shared-file-info">
+            {#if downloadHref}
+              <a class="shared-file-name" href={canPreview ? previewHref : downloadHref} target="_blank" rel="noopener" title={file.filename}>{file.filename}</a>
+            {:else}
+              <span class="shared-file-name" title={file.filename}>{file.filename}</span>
+            {/if}
+            <span class="shared-file-meta">
+              {#if sizeLabel}<span>{sizeLabel}</span>{/if}
+              {#if stateLabel !== 'sent'}<em class={`shared-file-state state-${stateLabel}`}>{stateLabel}</em>{/if}
+            </span>
+          </span>
+          {#if downloadHref}
+            <a class="shared-file-download" href={downloadHref} download title={`Download ${file.filename}`} aria-label={`Download ${file.filename}`}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 3v12" />
+                <path d="m7 10 5 5 5-5" />
+                <path d="M5 21h14" />
+              </svg>
+            </a>
+          {/if}
+        </div>
+      </li>
+    {/each}
+  </ul>
+{/snippet}
+
 {#snippet toolGroupCard(card: Extract<ChatTranscriptCard, { kind: 'tool_group' }>, nested: boolean)}
   {@const groupState = toolGroupState(card)}
   <details
@@ -436,6 +506,9 @@
         <div class="message-markdown markdown-body">
           {@html renderMarkdownToHtml(visibleText, { openLinksInNewTab: true })}
         </div>
+      {/if}
+      {#if card.message.role === 'assistant' && sharedFiles.length > 0}
+        {@render sharedFilesGrid(sharedFiles)}
       {/if}
       {#if card.message.role === 'user' && card.message.artifacts.length > 0}
         <ul class="message-attachments" aria-label="Attachments">
@@ -671,76 +744,10 @@
   {/if}
 {/each}
 
-{#if sharedFiles.length > 0}
+{#if sharedFiles.length > 0 && displayCards.length === 0}
   <article class="message assistant shared-files-message">
     <span>{assistantLabel}</span>
-    <ul class="shared-files-grid" aria-label="Files shared by assistant">
-      {#each sharedFiles as file (file.deliveryId)}
-        {@const stateLabel = deliveryStateLabel(file.state)}
-        {@const previewKind = deliveryPreviewKind(file)}
-        {@const sizeLabel = formatDeliverySize(file.size)}
-        {@const downloadHref = file.downloadUrl ? href(file.downloadUrl) : null}
-        {@const previewHref = file.downloadUrl ? inlineDeliveryUrl(file.downloadUrl) : null}
-        {@const canPreview =
-          stateLabel === 'sent' &&
-          previewHref !== null &&
-          (previewKind === 'image' || previewKind === 'video' || previewKind === 'audio')}
-        {@const hasMedia = canPreview && (previewKind === 'image' || previewKind === 'video')}
-        <li class={`shared-file-card kind-${previewKind} delivery-${stateLabel}`} class:has-media={hasMedia}>
-          {#if hasMedia && previewHref}
-            <div class="shared-file-media-wrap">
-              {#if previewKind === 'image'}
-                <button type="button" class="shared-file-media" onclick={() => openLightbox(file)} title={`Open ${file.filename}`}>
-                  <img src={previewHref} alt={file.filename} loading="lazy" />
-                </button>
-              {:else}
-                <!-- svelte-ignore a11y_media_has_caption -->
-                <video class="shared-file-media" controls preload="metadata" src={previewHref}></video>
-              {/if}
-              <button type="button" class="shared-file-expand" onclick={() => openLightbox(file)} title="Expand preview" aria-label="Expand preview">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M15 3h6v6" />
-                  <path d="M9 21H3v-6" />
-                  <path d="M21 3l-7 7" />
-                  <path d="M3 21l7-7" />
-                </svg>
-              </button>
-            </div>
-          {/if}
-          {#if canPreview && previewHref && previewKind === 'audio'}
-            <audio class="shared-file-audio" controls preload="metadata" src={previewHref}></audio>
-          {/if}
-          <div class="shared-file-foot">
-            <span class="shared-file-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
-                <path d="M13 2v7h7" />
-              </svg>
-            </span>
-            <span class="shared-file-info">
-              {#if downloadHref}
-                <a class="shared-file-name" href={canPreview ? previewHref : downloadHref} target="_blank" rel="noopener" title={file.filename}>{file.filename}</a>
-              {:else}
-                <span class="shared-file-name" title={file.filename}>{file.filename}</span>
-              {/if}
-              <span class="shared-file-meta">
-                {#if sizeLabel}<span>{sizeLabel}</span>{/if}
-                {#if stateLabel !== 'sent'}<em class={`shared-file-state state-${stateLabel}`}>{stateLabel}</em>{/if}
-              </span>
-            </span>
-            {#if downloadHref}
-              <a class="shared-file-download" href={downloadHref} download title={`Download ${file.filename}`} aria-label={`Download ${file.filename}`}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M12 3v12" />
-                  <path d="m7 10 5 5 5-5" />
-                  <path d="M5 21h14" />
-                </svg>
-              </a>
-            {/if}
-          </div>
-        </li>
-      {/each}
-    </ul>
+    {@render sharedFilesGrid(sharedFiles)}
   </article>
 {/if}
 

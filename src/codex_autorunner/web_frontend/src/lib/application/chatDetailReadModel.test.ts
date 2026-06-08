@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatQueuedTurn } from '$lib/api/client';
-import type { ChatSummary, ChatRunProgress, SurfaceArtifact } from '$lib/viewModels/domain';
+import type { ArtifactDelivery, ChatSummary, ChatRunProgress, SurfaceArtifact } from '$lib/viewModels/domain';
 import type { ChatTranscriptCard } from '$lib/viewModels/chat';
 import {
   buildChatDetailDisplayReadModel,
@@ -33,7 +33,7 @@ describe('chat detail state composition', () => {
       queuedTurns: [queuedTurn('queued-turn')],
       displayedProgress: { ...progress('run-1', 12, []), queueDepth: 1 },
       activeChat: chatSummary('chat-1'),
-      assistantSharedFileCount: 1,
+      assistantSharedFiles: [delivery('delivery-1', 'spec.md', '2026-05-16T12:00:03.000Z')],
       streamState: 'connecting',
       loadingActive: false,
       activeError: null,
@@ -66,7 +66,7 @@ describe('chat detail state composition', () => {
       queuedTurns: [],
       displayedProgress: progress('run-1', 5, []),
       activeChat: chatSummary('chat-1'),
-      assistantSharedFileCount: 0,
+      assistantSharedFiles: [],
       streamState: 'connected',
       loadingActive: false,
       activeError: null,
@@ -93,7 +93,7 @@ describe('chat detail state composition', () => {
         })
       ]),
       activeChat: chatSummary('chat-1'),
-      assistantSharedFileCount: 0,
+      assistantSharedFiles: [],
       streamState: 'connected',
       loadingActive: false,
       activeError: null,
@@ -134,7 +134,7 @@ describe('chat detail state composition', () => {
       queuedTurns: [],
       displayedProgress: terminalProgress,
       activeChat: chatSummary('chat-1'),
-      assistantSharedFileCount: 0,
+      assistantSharedFiles: [],
       streamState: 'connected',
       loadingActive: false,
       activeError: null,
@@ -148,6 +148,43 @@ describe('chat detail state composition', () => {
       'message:turn:run-1:assistant'
     ]);
     expect(model.transcriptListItems.map((item) => item.kind)).toEqual(['card', 'card', 'card', 'tail-spacer']);
+  });
+
+  it('keeps shared files anchored by delivery time when newer assistant replies arrive', () => {
+    const firstAssistant = assistantCardAt(
+      'turn:run-1:assistant',
+      'first reply',
+      '2026-05-16T12:00:10.000Z'
+    );
+    const laterAssistant = assistantCardAt(
+      'turn:run-2:assistant',
+      'later reply',
+      '2026-05-16T12:05:00.000Z'
+    );
+    const model = buildChatDetailDisplayReadModel({
+      transcriptCards: [
+        firstAssistant,
+        laterAssistant
+      ],
+      queuedTurns: [],
+      displayedProgress: null,
+      activeChat: chatSummary('chat-1'),
+      assistantSharedFiles: [
+        delivery('delivery-old', 'old-result.txt', '2026-05-16T12:00:30.000Z')
+      ],
+      streamState: 'connected',
+      loadingActive: false,
+      activeError: null,
+      draft: '',
+      pendingAttachmentCount: 0
+    });
+
+    expect(model.transcriptListItems.map((item) => `${item.kind}:${item.id}`)).toEqual([
+      'card:turn:run-1:assistant',
+      'shared-files:assistant-shared-files:0:delivery-old',
+      'card:turn:run-2:assistant',
+      'tail-spacer:status-bar-tail-spacer'
+    ]);
   });
 
   it('does not duplicate live progress already projected by the backend transcript', () => {
@@ -177,7 +214,7 @@ describe('chat detail state composition', () => {
         })
       ]),
       activeChat: chatSummary('chat-1'),
-      assistantSharedFileCount: 0,
+      assistantSharedFiles: [],
       streamState: 'connected',
       loadingActive: false,
       activeError: null,
@@ -195,7 +232,7 @@ describe('chat detail state composition', () => {
       queuedTurns: [],
       displayedProgress: progress('new-turn', 3, []),
       activeChat: chatSummary('chat-1'),
-      assistantSharedFileCount: 0,
+      assistantSharedFiles: [],
       streamState: 'connected',
       loadingActive: false,
       activeError: null,
@@ -214,7 +251,7 @@ describe('chat detail state composition', () => {
       queuedTurns: [],
       displayedProgress: null,
       activeChat: chatSummary('chat-1'),
-      assistantSharedFileCount: 0,
+      assistantSharedFiles: [],
       streamState: 'connected',
       loadingActive: false,
       activeError: new Error('backend unavailable'),
@@ -226,7 +263,7 @@ describe('chat detail state composition', () => {
       queuedTurns: [],
       displayedProgress: null,
       activeChat: chatSummary('chat-1'),
-      assistantSharedFileCount: 0,
+      assistantSharedFiles: [],
       streamState: 'interrupted',
       loadingActive: false,
       activeError: null,
@@ -239,7 +276,7 @@ describe('chat detail state composition', () => {
       queuedTurns: [],
       displayedProgress: failedProgress,
       activeChat: chatSummary('chat-1'),
-      assistantSharedFileCount: 0,
+      assistantSharedFiles: [],
       streamState: 'connected',
       loadingActive: false,
       activeError: null,
@@ -258,7 +295,7 @@ describe('chat detail state composition', () => {
       queuedTurns: [],
       displayedProgress: null,
       activeChat: { ...chatSummary('chat-1'), status: 'idle' },
-      assistantSharedFileCount: 0,
+      assistantSharedFiles: [],
       streamState: 'idle',
       loadingActive: false,
       activeError: null,
@@ -279,7 +316,7 @@ describe('chat detail state composition', () => {
       queuedTurns: [],
       displayedProgress: null,
       activeChat: { ...chatSummary('chat-1'), status: 'idle' },
-      assistantSharedFileCount: 0,
+      assistantSharedFiles: [],
       streamState: 'idle',
       loadingActive: false,
       activeError: null,
@@ -300,7 +337,7 @@ describe('chat detail state composition', () => {
       queuedTurns: [],
       displayedProgress: null,
       activeChat: { ...chatSummary('chat-1'), status: 'done' },
-      assistantSharedFileCount: 0,
+      assistantSharedFiles: [],
       streamState: 'idle',
       loadingActive: false,
       activeError: null,
@@ -342,6 +379,40 @@ function assistantCard(id: string, text: string): MessageTranscriptCard {
       ...base.message,
       role: 'assistant'
     }
+  };
+}
+
+function assistantCardAt(id: string, text: string, createdAt: string): MessageTranscriptCard {
+  const card = assistantCard(id, text);
+  return {
+    ...card,
+    timestamp: createdAt,
+    message: {
+      ...card.message,
+      createdAt
+    }
+  };
+}
+
+function delivery(id: string, filename: string, sentAt: string): ArtifactDelivery {
+  return {
+    deliveryId: id,
+    artifactId: `artifact:${id}`,
+    filename,
+    state: 'sent',
+    targetSurface: 'discord',
+    targetConversation: 'channel:1',
+    workspaceScope: null,
+    attempts: 1,
+    size: 1024,
+    mimeType: 'text/plain',
+    downloadUrl: `/download/${id}`,
+    createdAt: sentAt,
+    updatedAt: sentAt,
+    sentAt,
+    failedAt: null,
+    lastError: null,
+    raw: {}
   };
 }
 
