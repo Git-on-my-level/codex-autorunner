@@ -13,7 +13,7 @@ from typing import Any, Optional, Union
 from urllib.parse import unquote, urlparse
 
 from ..git_utils import GitError, run_git
-from ..locks import process_matches_identity
+from ..locks import process_alive, process_matches_identity
 from ..update_paths import resolve_update_paths
 from ..update_targets import (
     UpdateTargetDefinition,
@@ -584,10 +584,6 @@ def _update_lock_path() -> Path:
     return resolve_update_paths().lock_path
 
 
-def _update_cache_lock_path() -> Path:
-    return _update_lock_path().with_suffix(".cache.lock")
-
-
 def _read_update_lock() -> Optional[dict[str, object]]:
     path = _update_lock_path()
     if not path.exists():
@@ -611,12 +607,16 @@ def _update_lock_active() -> Optional[dict]:
         return None
     pid = lock.get("pid")
     if isinstance(pid, int):
-        pid_matches = process_matches_identity(
-            pid,
-            expected_cmd_substrings=_UPDATE_LOCK_CMD_HINTS,
-        )
-        if pid_matches:
-            return lock
+        if lock.get("bootstrap"):
+            if process_alive(pid):
+                return lock
+        else:
+            pid_matches = process_matches_identity(
+                pid,
+                expected_cmd_substrings=_UPDATE_LOCK_CMD_HINTS,
+            )
+            if pid_matches:
+                return lock
     try:
         _update_lock_path().unlink()
     except OSError:
@@ -624,51 +624,13 @@ def _update_lock_active() -> Optional[dict]:
     return None
 
 
-def _read_update_cache_lock() -> Optional[dict[str, object]]:
-    path = _update_cache_lock_path()
-    if not path.exists():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if isinstance(payload, dict):
-        return payload
-    return None
-
-
-def _pid_is_running(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def _update_cache_lock_active() -> Optional[dict[str, object]]:
-    lock = _read_update_cache_lock()
-    if not lock:
-        try:
-            _update_cache_lock_path().unlink()
-        except OSError:
-            pass
-        return None
-    pid = lock.get("pid")
-    if isinstance(pid, int) and _pid_is_running(pid):
-        return lock
-    try:
-        _update_cache_lock_path().unlink()
-    except OSError:
-        pass
-    return None
-
-
 def _acquire_update_lock(
-    *, repo_url: str, repo_ref: str, update_target: str, logger: logging.Logger
+    *,
+    repo_url: str,
+    repo_ref: str,
+    update_target: str,
+    logger: logging.Logger,
+    bootstrap: bool = False,
 ) -> bool:
     lock_path = _update_lock_path()
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -679,6 +641,8 @@ def _acquire_update_lock(
         "repo_ref": repo_ref,
         "update_target": update_target,
     }
+    if bootstrap:
+        payload["bootstrap"] = True
     try:
         fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError as exc:
@@ -698,53 +662,12 @@ def _acquire_update_lock(
     return True
 
 
-def _acquire_update_cache_lock(
-    *, repo_url: str, repo_ref: str, update_target: str, logger: logging.Logger
-) -> bool:
-    lock_path = _update_cache_lock_path()
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "pid": os.getpid(),
-        "started_at": time.time(),
-        "repo_url": repo_url,
-        "repo_ref": repo_ref,
-        "update_target": update_target,
-    }
-    try:
-        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError as exc:
-        existing = _update_cache_lock_active()
-        if existing:
-            msg = f"Update source preparation already running (pid {existing.get('pid')})."
-            logger.info(msg)
-            raise UpdateInProgressError(msg) from exc
-        try:
-            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError as exc:
-            msg = "Update source preparation already running."
-            logger.info(msg)
-            raise UpdateInProgressError(msg) from exc
-    with os.fdopen(fd, "w") as handle:
-        handle.write(json.dumps(payload))
-    return True
-
-
 def _release_update_lock() -> None:
     lock = _read_update_lock()
     if not lock or lock.get("pid") != os.getpid():
         return
     try:
         _update_lock_path().unlink()
-    except OSError:
-        pass
-
-
-def _release_update_cache_lock() -> None:
-    lock = _read_update_cache_lock()
-    if not lock or lock.get("pid") != os.getpid():
-        return
-    try:
-        _update_cache_lock_path().unlink()
     except OSError:
         pass
 
@@ -996,22 +919,22 @@ def _spawn_update_process(
     server_port: int = 4173,
     server_base_path: str = "",
 ) -> None:
-    active = _update_lock_active()
-    if active:
-        raise UpdateInProgressError(
-            f"Update already running (pid {active.get('pid')})."
+    try:
+        _acquire_update_lock(
+            repo_url=repo_url,
+            repo_ref=repo_ref,
+            update_target=update_target,
+            logger=logger,
+            bootstrap=True,
         )
-    active_cache = _update_cache_lock_active()
-    if active_cache:
-        raise UpdateInProgressError(
-            f"Update source preparation already running (pid {active_cache.get('pid')})."
-        )
+    except UpdateInProgressError:
+        raise
     status_path = _update_status_path()
     log_path = status_path.parent / "update-standalone.log"
     _write_update_status(
-        "preparing",
-        "Preparing update source.",
-        phase="source_prep",
+        "running",
+        "Update spawned.",
+        phase="spawned",
         repo_url=repo_url,
         update_dir=str(update_dir),
         repo_ref=repo_ref,
@@ -1071,15 +994,9 @@ def _spawn_update_process(
         cmd.append("--skip-checks")
     else:
         cmd.append("--no-skip-checks")
-    cache_lock_acquired = False
     try:
-        cache_lock_acquired = _acquire_update_cache_lock(
-            repo_url=repo_url,
-            repo_ref=repo_ref,
-            update_target=update_target,
-            logger=logger,
-        )
         prepare_update_source(update_dir, repo_url, repo_ref, logger)
+        _release_update_lock()
         env = _env_with_source_pythonpath(update_dir)
         with log_path.open("a", encoding="utf-8") as log_file:
             subprocess.Popen(
@@ -1090,32 +1007,10 @@ def _spawn_update_process(
                 stdout=log_file,
                 stderr=log_file,
             )
-        _write_update_status(
-            "running",
-            "Update spawned.",
-            phase="spawned",
-            repo_url=repo_url,
-            update_dir=str(update_dir),
-            repo_ref=repo_ref,
-            update_target=update_target,
-            update_backend=update_backend,
-            linux_hub_service_name=linux_hub_service_name,
-            linux_telegram_service_name=linux_telegram_service_name,
-            linux_discord_service_name=linux_discord_service_name,
-            log_path=str(log_path),
-            notify_chat_id=notify_chat_id,
-            notify_thread_id=notify_thread_id,
-            notify_reply_to=notify_reply_to,
-            notify_platform=notify_platform,
-            notify_context=notify_context if isinstance(notify_context, dict) else None,
-            notify_sent_at=None,
-        )
     except Exception:  # intentional: top-level error handler
         logger.exception("Failed to spawn update worker")
+        _release_update_lock()
         _write_update_status(
             "error",
             "Failed to spawn update worker; see hub logs for details.",
         )
-    finally:
-        if cache_lock_acquired:
-            _release_update_cache_lock()
