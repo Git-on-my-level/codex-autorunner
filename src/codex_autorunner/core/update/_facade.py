@@ -22,6 +22,7 @@ from ..update_targets import (
     normalize_update_target,
 )
 from ..utils import resolve_executable
+from .source import prepare_update_source
 
 
 class UpdateInProgressError(RuntimeError):
@@ -144,6 +145,17 @@ def _run_refresh_script(
             output_tail.append(rendered)
     proc.wait()
     return proc.returncode, list(output_tail)
+
+
+def _env_with_source_pythonpath(update_dir: Path) -> dict[str, str]:
+    env = dict(os.environ)
+    source_path = str(update_dir / "src")
+    existing_pythonpath = env.get("PYTHONPATH")
+    if existing_pythonpath:
+        env["PYTHONPATH"] = f"{source_path}{os.pathsep}{existing_pythonpath}"
+    else:
+        env["PYTHONPATH"] = source_path
+    return env
 
 
 def _normalize_update_target(raw: Optional[str]) -> str:
@@ -967,10 +979,13 @@ def _spawn_update_process(
     else:
         cmd.append("--no-skip-checks")
     try:
+        prepare_update_source(update_dir, repo_url, repo_ref, logger)
+        env = _env_with_source_pythonpath(update_dir)
         with log_path.open("a", encoding="utf-8") as log_file:
             subprocess.Popen(
                 cmd,
                 cwd=str(update_dir.parent),
+                env=env,
                 start_new_session=True,
                 stdout=log_file,
                 stderr=log_file,

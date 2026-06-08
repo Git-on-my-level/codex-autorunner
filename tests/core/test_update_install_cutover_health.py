@@ -63,6 +63,25 @@ def test_validate_wheel_contents_requires_packages(tmp_path: Path) -> None:
         _validate_wheel_contents(wheel_path)
 
 
+def test_validate_wheel_contents_requires_update_runner(tmp_path: Path) -> None:
+    wheel_path = tmp_path / "missing-runner.whl"
+    import zipfile
+
+    with zipfile.ZipFile(wheel_path, "w") as zf:
+        for name in (
+            "codex_autorunner/workspace/__init__.py",
+            "codex_autorunner/tickets/__init__.py",
+            "codex_autorunner/adapters/docker/__init__.py",
+            "codex_autorunner/web_static/index.html",
+            "codex_autorunner/core/update/__init__.py",
+            "codex_autorunner/core/update_runner.py",
+        ):
+            zf.writestr(name, "")
+
+    with pytest.raises(StagedInstallError, match="core/update/runner.py"):
+        _validate_wheel_contents(wheel_path)
+
+
 def test_cutover_manager_flip_and_rollback(tmp_path: Path) -> None:
     pipx_root = tmp_path / "pipx"
     venvs = pipx_root / "venvs"

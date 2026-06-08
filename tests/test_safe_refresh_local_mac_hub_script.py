@@ -33,8 +33,12 @@ def test_mac_wrapper_execs_runner_with_launchd_backend(tmp_path: Path) -> None:
     # a real update.
     fake_python = tmp_path / "fake-python"
     argv_log = tmp_path / "argv.txt"
+    env_log = tmp_path / "env.txt"
     fake_python.write_text(
-        '#!/bin/sh\nprintf "%s\\n" "$@" > "$ARGV_LOG"\nexit 0\n',
+        (
+            '#!/bin/sh\nprintf "%s\\n" "$@" > "$ARGV_LOG"\n'
+            'printf "%s\\n" "$PYTHONPATH" > "$ENV_LOG"\nexit 0\n'
+        ),
         encoding="utf-8",
     )
     fake_python.chmod(0o755)
@@ -46,6 +50,7 @@ def test_mac_wrapper_execs_runner_with_launchd_backend(tmp_path: Path) -> None:
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "HELPER_PYTHON": str(fake_python),
             "ARGV_LOG": str(argv_log),
+            "ENV_LOG": str(env_log),
             "UPDATE_STATUS_PATH": str(tmp_path / "update_status.json"),
         },
         capture_output=True,
@@ -57,6 +62,8 @@ def test_mac_wrapper_execs_runner_with_launchd_backend(tmp_path: Path) -> None:
     assert "codex_autorunner.core.update.runner" in argv
     assert "--backend" in argv
     assert "launchd" in argv
+    pythonpath = env_log.read_text(encoding="utf-8")
+    assert str(SCRIPT.resolve().parent.parent / "src") in pythonpath
 
 
 def test_mac_wrapper_passes_syntax_check() -> None:
