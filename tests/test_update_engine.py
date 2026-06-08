@@ -232,6 +232,57 @@ def test_engine_refuses_cutover_without_routing_or_allow_in_place(
     assert payload.get("error_type") == "cutover_routing_refused"
 
 
+def test_engine_reports_unusable_active_venv_as_staged_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _clear_pipx_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    status_path = tmp_path / ".codex-autorunner" / "update_status.json"
+    lock_path = tmp_path / ".codex-autorunner" / "update.lock"
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.update.engine.prepare_update_source",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.update.engine.resolve_executable",
+        lambda _cmd: "/usr/bin/tool",
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.update.engine.detect_supervisor_identity",
+        lambda **_kwargs: _linux_identity(hub_root=hub_root),
+    )
+
+    pipx_root = tmp_path / ".local" / "share" / "pipx"
+    unusable = pipx_root / "venvs" / "codex-autorunner"
+    unusable.mkdir(parents=True)
+    monkeypatch.setenv("PIPX_VENV", str(unusable))
+
+    config = UpdateEngineConfig(
+        repo_url="https://example.com/repo.git",
+        repo_ref="main",
+        update_dir=tmp_path / "cache",
+        update_target="web",
+        update_backend="systemd-user",
+        identity_hint={"hub_root": str(hub_root)},
+    )
+    UpdateEngine(
+        config,
+        logger=logging.getLogger("test"),
+        status_path=status_path,
+        lock_path=lock_path,
+    ).run()
+
+    payload = json.loads(status_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "error"
+    assert payload["phase"] == "staged_install_failed"
+    assert payload["error_type"] == "staged_install_failed"
+    assert "not a usable venv" in payload["message"]
+    assert str(unusable) in payload["message"]
+
+
 def test_engine_rollback_writes_status_on_health_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

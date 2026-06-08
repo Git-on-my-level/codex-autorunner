@@ -525,12 +525,11 @@ class UpdateEngine:
             logger=self.logger,
         )
 
-        self._current_target = cutover.initialize_current_link(
-            active_venv,
-            detected_candidates=detected_venv_candidates,
-        )
-
         try:
+            self._current_target = cutover.initialize_current_link(
+                active_venv,
+                detected_candidates=detected_venv_candidates,
+            )
             with self.reporter.timed_phase("venv_create"):
                 self._candidate_venv = installer.create_staged_venv()
             wheel_dir = Path(f"{self._candidate_venv}.wheelhouse")
