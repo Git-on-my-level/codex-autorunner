@@ -18,12 +18,21 @@ _WHEEL_REQUIRED_PREFIXES = (
     "codex_autorunner/workspace/",
     "codex_autorunner/tickets/",
     "codex_autorunner/adapters/docker/",
+    "codex_autorunner/core/update/",
 )
-_WHEEL_REQUIRED_FILES = ("codex_autorunner/web_static/index.html",)
+_WHEEL_REQUIRED_FILES = (
+    "codex_autorunner/web_static/index.html",
+    "codex_autorunner/core/update/__init__.py",
+    "codex_autorunner/core/update/runner.py",
+    "codex_autorunner/core/update_runner.py",
+)
 _REQUIRED_IMPORT_MODULES = (
     "codex_autorunner.workspace",
     "codex_autorunner.tickets",
     "codex_autorunner.adapters.docker",
+    "codex_autorunner.core.update",
+    "codex_autorunner.core.update.runner",
+    "codex_autorunner.core.update_runner",
 )
 _INSTALL_CMD_TIMEOUT_SECONDS = 600
 _PIP_CMD_TIMEOUT_SECONDS = 300

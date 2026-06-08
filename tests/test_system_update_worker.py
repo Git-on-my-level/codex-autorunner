@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -288,6 +289,32 @@ def test_read_update_status_marks_stale_running_without_lock(
     assert payload["previous_status"] == "running"
 
 
+def test_read_update_status_preserves_preparing_without_lock(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    status_path = system._update_status_path()
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    status_path.write_text(
+        json.dumps(
+            {
+                "status": "preparing",
+                "message": "Preparing update source.",
+                "phase": "source_prep",
+                "at": 1.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(system.update_core, "_update_lock_active", lambda: None)
+
+    payload = system._read_update_status()
+
+    assert payload is not None
+    assert payload["status"] == "preparing"
+    assert payload["phase"] == "source_prep"
+
+
 def test_cleanup_update_build_artifacts_removes_packaging_outputs(
     tmp_path: Path,
 ) -> None:
@@ -352,11 +379,29 @@ def test_spawn_update_process_writes_status(tmp_path: Path, monkeypatch) -> None
     def fake_popen(*args, **kwargs):  # type: ignore[no-untyped-def]
         calls["cmd"] = args[0] if args else kwargs.get("cmd")
         calls["cwd"] = kwargs.get("cwd") or (args[1] if len(args) > 1 else None)
+        calls["env"] = kwargs.get("env")
         return _FakeProc()
+
+    def fake_prepare_update_source(
+        update_dir: Path,
+        repo_url: str,
+        repo_ref: str,
+        logger: logging.Logger,
+    ) -> None:
+        calls["prepared"] = {
+            "update_dir": update_dir,
+            "repo_url": repo_url,
+            "repo_ref": repo_ref,
+        }
+        (update_dir / "src").mkdir(parents=True)
 
     monkeypatch.setattr(
         "codex_autorunner.core.update._facade.subprocess.Popen",
         fake_popen,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.update._facade.prepare_update_source",
+        fake_prepare_update_source,
     )
     monkeypatch.setattr(
         "codex_autorunner.core.update._facade._capture_update_identity_hint",
@@ -386,6 +431,11 @@ def test_spawn_update_process_writes_status(tmp_path: Path, monkeypatch) -> None
     assert payload["notify_platform"] == "discord"
     assert payload["notify_context"] == {"chat_id": "channel-1"}
     assert "log_path" in payload
+    assert calls["prepared"] == {
+        "update_dir": update_dir,
+        "repo_url": "https://example.com/repo.git",
+        "repo_ref": "main",
+    }
     cmd = calls["cmd"]
     assert "--repo-url" in cmd
     assert str(update_dir) in cmd
@@ -397,6 +447,30 @@ def test_spawn_update_process_writes_status(tmp_path: Path, monkeypatch) -> None
     assert "car-discord" in cmd
     assert "codex_autorunner.core.update.runner" in cmd
     assert "--identity-hint" in cmd
+    env = calls["env"]
+    assert isinstance(env, dict)
+    assert str(update_dir / "src") in str(env.get("PYTHONPATH", ""))
+
+
+def test_spawn_update_process_rejects_active_cache_prep(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    logger = logging.getLogger("test")
+    lock_path = system._update_lock_path().with_suffix(".cache.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text(
+        json.dumps({"pid": os.getpid(), "started_at": 1.0}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(system.UpdateInProgressError, match="source preparation"):
+        system._spawn_update_process(
+            repo_url="https://example.com/repo.git",
+            repo_ref="main",
+            update_dir=tmp_path / "update",
+            logger=logger,
+        )
 
 
 def test_system_update_worker_rejects_invalid_target(
