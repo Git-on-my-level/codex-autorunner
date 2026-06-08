@@ -114,33 +114,6 @@ def _refresh_failure_is_retryable(output_lines: list[str]) -> bool:
     )
 
 
-def _reset_update_cache_for_retry(
-    update_dir: Path,
-    *,
-    logger: logging.Logger,
-) -> bool:
-    if not update_dir.exists() or not _is_valid_git_repo(update_dir):
-        logger.warning(
-            "Skipping update refresh retry; cache at %s is not a valid git repo.",
-            update_dir,
-        )
-        return False
-    try:
-        logger.warning(
-            "Refresh failed with a retryable stale-build-artifact error; resetting tracked files and cleaning build artifacts in %s before retrying once.",
-            update_dir,
-        )
-        _run_cmd(["git", "reset", "--hard", "FETCH_HEAD"], cwd=update_dir)
-        _cleanup_update_build_artifacts(update_dir, logger)
-    except (RuntimeError, OSError) as exc:
-        logger.warning(
-            "Aggressive update cache cleanup failed; refresh retry skipped. %s",
-            exc,
-        )
-        return False
-    return True
-
-
 def _update_cache_refresh_failure_is_retryable(
     error: Union[BaseException, str],
 ) -> bool:

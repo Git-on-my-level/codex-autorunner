@@ -300,14 +300,12 @@ class HealthChecker:
             time.sleep(self.interval)
 
     def _default_health_path(self) -> str:
-        if self.base_path:
-            return f"{self.base_path}/health"
-        return "/health"
+        health_path, _ = health_paths_for_base_path(self.base_path)
+        return health_path
 
     def _default_static_path(self) -> str:
-        if self.base_path:
-            return f"{self.base_path}/_app/version.json"
-        return "/_app/version.json"
+        _, static_path = health_paths_for_base_path(self.base_path)
+        return static_path
 
     def _http_ok(self, url: str) -> bool:
         request = urllib.request.Request(url, method="GET")
