@@ -35,6 +35,7 @@ from codex_autorunner.core.managed_thread_identity import (
     AppServerThreadRegistry,
 )
 from codex_autorunner.core.pma_context import default_pma_prompt_state_path
+from codex_autorunner.core.pma_prompt_state import list_pma_prompt_state_session_keys
 from tests.telegram_managed_thread_support import (
     _InProcessHubControlPlaneClient,
     _PMAClientStub,
@@ -402,6 +403,17 @@ async def test_sync_telegram_thread_binding_archives_after_lost_backend_recovery
                 workspace_root=str(workspace_root),
             )
 
+        def resume_thread_target(self, thread_target_id: str, **kwargs: Any) -> Any:
+            calls.append(("resume", thread_target_id))
+            return SimpleNamespace(
+                thread_target_id=thread_target_id,
+                agent_id="codex",
+                workspace_root=str(workspace),
+                backend_thread_id=kwargs.get("backend_thread_id"),
+                backend_runtime_instance_id=kwargs.get("backend_runtime_instance_id"),
+                lifecycle_status="active",
+            )
+
         def upsert_binding(self, **kwargs: Any) -> None:
             calls.append(("bind", str(kwargs["thread_target_id"])))
 
@@ -442,10 +454,11 @@ async def test_sync_telegram_thread_binding_archives_after_lost_backend_recovery
 
     assert thread.thread_target_id == "thread-2"
     assert calls == [
+        ("resolve", "codex"),
         ("stop", "thread-1"),
         ("archive", "thread-1"),
-        ("resolve", "codex"),
         ("create", "codex"),
+        ("resume", "thread-2"),
         ("bind", "thread-2"),
     ]
 
@@ -1576,7 +1589,7 @@ async def test_repo_managed_thread_turn_matches_pending_compact_seed_by_managed_
 
 
 @pytest.mark.anyio
-async def test_sync_telegram_thread_binding_keeps_requested_backend_thread_id_for_replacement(
+async def test_sync_telegram_thread_binding_preserves_existing_backend_when_replacement_runtime_unavailable(
     tmp_path: Path,
 ) -> None:
     workspace = (tmp_path / "workspace").resolve()
@@ -1606,6 +1619,17 @@ async def test_sync_telegram_thread_binding_keeps_requested_backend_thread_id_fo
                 agent_id=agent,
                 workspace_root=str(workspace_root),
                 backend_thread_id=kwargs.get("backend_thread_id"),
+            )
+
+        def resume_thread_target(self, thread_target_id: str, **kwargs: Any) -> Any:
+            calls.append(("resume", thread_target_id, kwargs.get("backend_thread_id")))
+            return SimpleNamespace(
+                thread_target_id=thread_target_id,
+                agent_id="codex",
+                workspace_root=str(workspace),
+                backend_thread_id=kwargs.get("backend_thread_id"),
+                backend_runtime_instance_id=kwargs.get("backend_runtime_instance_id"),
+                lifecycle_status="active",
             )
 
         def upsert_binding(self, **kwargs: Any) -> None:
@@ -1648,12 +1672,12 @@ async def test_sync_telegram_thread_binding_keeps_requested_backend_thread_id_fo
         monkeypatch.undo()
 
     assert current_thread.thread_target_id == "thread-2"
-    assert current_thread.backend_thread_id == "backend-new"
+    assert current_thread.backend_thread_id == "backend-old"
     assert calls == [
+        ("resolve", "codex", str(workspace)),
         ("stop", "thread-1", None),
         ("archive", "thread-1", None),
-        ("resolve", "codex", str(workspace)),
-        ("create", "codex", "backend-new"),
+        ("create", "codex", "backend-old"),
         ("bind", "thread-2", "repo"),
     ]
 
@@ -1680,8 +1704,8 @@ async def test_pma_new_resets_session(tmp_path: Path) -> None:
     )
     await handler._handle_new(message)
     assert registry.get_thread_id(PMA_OPENCODE_KEY) is None
-    sessions = json.loads(state_path.read_text(encoding="utf-8")).get("sessions", {})
-    assert PMA_OPENCODE_KEY not in sessions
+    assert not state_path.exists()
+    assert PMA_OPENCODE_KEY not in list_pma_prompt_state_session_keys(tmp_path)
     expected = "Started a fresh PMA session for `opencode` (new thread ready)."
     assert handler._sent[-1] == expected
 
@@ -1767,8 +1791,8 @@ async def test_pma_new_resets_scoped_key_when_require_topics_enabled(
     await handler._handle_new(message)
 
     assert registry.get_thread_id(scoped_key) is None
-    sessions = json.loads(state_path.read_text(encoding="utf-8")).get("sessions", {})
-    assert scoped_key not in sessions
+    assert not state_path.exists()
+    assert scoped_key not in list_pma_prompt_state_session_keys(tmp_path)
     assert (
         handler._sent
         and handler._sent[-1]
@@ -1811,8 +1835,8 @@ async def test_pma_reset_resets_scoped_key_when_require_topics_enabled(
     await handler._handle_reset(message)
 
     assert registry.get_thread_id(scoped_key) is None
-    sessions = json.loads(state_path.read_text(encoding="utf-8")).get("sessions", {})
-    assert scoped_key not in sessions
+    assert not state_path.exists()
+    assert scoped_key not in list_pma_prompt_state_session_keys(tmp_path)
     assert (
         handler._sent
         and handler._sent[-1] == "Reset PMA thread state (fresh state) for `codex`."

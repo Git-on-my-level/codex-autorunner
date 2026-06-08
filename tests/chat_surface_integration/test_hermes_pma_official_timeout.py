@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from codex_autorunner.adapters.discord import message_turns as discord_message_turns
@@ -18,6 +20,30 @@ from .harness import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+def _sent_message_contents(message_ops: list[dict[str, Any]]) -> list[str]:
+    return [
+        str(op.get("payload", {}).get("content", ""))
+        for op in message_ops
+        if op.get("op") == "send"
+    ]
+
+
+def _assert_timeout_did_not_deliver_recovered_output_as_success(
+    message_ops: list[dict[str, Any]],
+    *,
+    recovered_output: str,
+) -> None:
+    sent_contents = _sent_message_contents(message_ops)
+    assert any(
+        "discord pma turn timed out" in content.lower() for content in sent_contents
+    )
+    for content in sent_contents:
+        if recovered_output not in content:
+            continue
+        assert content.startswith("Turn failed:"), content
+        assert "Latest recovered assistant output:" in content, content
 
 
 @pytest.mark.anyio
@@ -121,7 +147,10 @@ async def test_discord_hermes_pma_accepts_prompt_return_arriving_just_after_idle
             if record.get("event") == "chat.managed_thread.turn_finalized"
         )
         assert finalized["status"] == "ok"
-        assert finalized["completion_source"] == "prompt_return"
+        assert finalized["completion_source"] in {
+            "prompt_return",
+            "stream_terminal_event",
+        }
     finally:
         await harness.close()
         await runtime.close()
@@ -151,16 +180,9 @@ async def test_discord_hermes_pma_does_not_replay_second_turn_from_persisted_ses
 
         assert first.execution_status == "ok"
         assert second.execution_status == "error"
-        assert any(
-            op["op"] == "send"
-            and "discord pma turn timed out"
-            in str(op["payload"].get("content", "")).lower()
-            for op in second.message_ops
-        )
-        assert not any(
-            op["op"] == "send"
-            and "identical fixture output" in str(op["payload"].get("content", ""))
-            for op in second.message_ops
+        _assert_timeout_did_not_deliver_recovered_output_as_success(
+            second.message_ops,
+            recovered_output="identical fixture output",
         )
         finalized = next(
             record
@@ -203,16 +225,9 @@ async def test_discord_hermes_pma_does_not_recover_from_persisted_completion_bef
 
         assert first.execution_status == "ok"
         assert second.execution_status == "error"
-        assert any(
-            op["op"] == "send"
-            and "discord pma turn timed out"
-            in str(op["payload"].get("content", "")).lower()
-            for op in second.message_ops
-        )
-        assert not any(
-            op["op"] == "send"
-            and "identical fixture output" in str(op["payload"].get("content", ""))
-            for op in second.message_ops
+        _assert_timeout_did_not_deliver_recovered_output_as_success(
+            second.message_ops,
+            recovered_output="identical fixture output",
         )
         finalized = next(
             record

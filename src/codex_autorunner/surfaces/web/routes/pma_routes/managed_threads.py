@@ -219,7 +219,7 @@ def build_automation_routes(
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
         unified = unified_pma_automation_read_model(
             request,
-            purpose="managed_thread_lifecycle_subscription",
+            purpose="pma_lifecycle_subscription",
             limit=limit,
         )
         return {
@@ -279,7 +279,7 @@ def build_automation_routes(
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
         unified = unified_pma_automation_read_model(
             request,
-            purpose="managed_thread_timer",
+            purpose="pma_timer",
             limit=limit,
         )
         return {

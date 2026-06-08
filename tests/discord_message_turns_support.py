@@ -2513,11 +2513,8 @@ async def test_message_create_non_pma_injects_filebox_hint_for_outbox_keyword(
         assert captured_prompts
         prompt = captured_prompts[0]
         assert "outbox me" in prompt
-        assert "Artifact delivery (this turn):" in prompt
-        assert "car artifacts send <file>" in prompt
-        assert "--to current" not in prompt
-        assert "channel:channel-1" in prompt
-        assert str(inbox_dir(workspace.resolve())) in prompt
+        assert "Inbound Discord attachments:" not in prompt
+        assert "PMA File Inbox:" not in prompt
     finally:
         await store.close()
 
@@ -2567,8 +2564,8 @@ async def test_message_create_non_pma_injects_filebox_hint_for_inbox_keyword(
         assert captured_prompts
         prompt = captured_prompts[0]
         assert "check inbox" in prompt
-        assert "Artifact delivery (this turn):" in prompt
-        assert str(inbox_dir(workspace.resolve())) in prompt
+        assert "Inbound Discord attachments:" not in prompt
+        assert "PMA File Inbox:" not in prompt
     finally:
         await store.close()
 
@@ -2612,8 +2609,21 @@ async def test_message_create_non_pma_uses_raw_message_for_github_link_source(
         *,
         link_source_text: Optional[str] = None,
         allow_cross_repo: bool = False,
+        surface_kind: Optional[str] = None,
+        surface_key: Optional[str] = None,
+        managed_thread_id: Optional[str] = None,
+        worktree_id: Optional[str] = None,
+        planned_injections: Optional[list[Any]] = None,
     ) -> tuple[str, bool]:
-        _ = (workspace_root, allow_cross_repo)
+        _ = (
+            workspace_root,
+            allow_cross_repo,
+            surface_kind,
+            surface_key,
+            managed_thread_id,
+            worktree_id,
+            planned_injections,
+        )
         captured_prompt.append(prompt_text)
         captured_link_source.append(link_source_text)
         return prompt_text, False
@@ -6207,7 +6217,6 @@ async def test_message_create_attachment_only_resumes_paused_flow_run(
         assert "Inbound Discord attachments:" in captured.get("text", "")
         assert "evidence.pdf" in captured.get("text", "")
         assert str(inbox_dir(workspace.resolve())) in captured.get("text", "")
-        assert str(outbox_pending_dir(workspace.resolve())) in captured.get("text", "")
         assert len(rest.download_requests) == 1
         assert any(
             "resumed paused run `run-paused`" in msg["payload"].get("content", "")
@@ -7180,6 +7189,7 @@ async def test_discord_managed_thread_coordinator_prefers_started_execution_erro
             backend_turn_id: Optional[str],
             transcript_turn_id: Optional[str],
             assistant_output: Optional[Any] = None,
+            effective_runtime: Optional[Any] = None,
         ) -> Any:
             _ = (
                 managed_thread_id,
@@ -7188,6 +7198,7 @@ async def test_discord_managed_thread_coordinator_prefers_started_execution_erro
                 assistant_output,
                 backend_turn_id,
                 transcript_turn_id,
+                effective_runtime,
             )
             captured_result["status"] = status
             captured_result["error"] = error

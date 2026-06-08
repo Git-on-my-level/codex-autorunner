@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.contextspace.paths import CONTEXTSPACE_DOC_KINDS
 from codex_autorunner.server import create_hub_app
-from codex_autorunner.surfaces.web.routes import file_chat as file_chat_routes
+from codex_autorunner.surfaces.web.routes.file_chat_routes.targets import parse_target
 
 pytestmark = pytest.mark.slow
 
@@ -72,6 +72,6 @@ def test_file_chat_workspace_targets(repo: Path):
         "contextspace:spec",
         "contextspace:spec.md",
     ]:
-        resolved = file_chat_routes._parse_target(repo, target)
+        resolved = parse_target(repo, target)
         assert resolved.kind == "contextspace"
         assert resolved.path == contextspace_dir / resolved.id

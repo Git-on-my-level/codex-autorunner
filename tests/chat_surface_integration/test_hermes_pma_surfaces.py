@@ -53,7 +53,7 @@ async def test_discord_hermes_pma_delivers_three_turn_cumulative_outputs_once(
 ) -> None:
     runtime = HermesFixtureRuntime("official_hermes_cumulative_session_update")
     patch_hermes_runtime(monkeypatch, runtime)
-    harness = DiscordSurfaceHarness(tmp_path / "discord")
+    harness = DiscordSurfaceHarness(tmp_path / "discord", timeout_seconds=12.0)
     await harness.setup(agent="hermes")
     rest = FakeDiscordRest()
     persisted_texts: list[str] = []

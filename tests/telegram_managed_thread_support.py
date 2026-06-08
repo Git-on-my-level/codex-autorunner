@@ -535,8 +535,10 @@ class _PMAHandler(TelegramCommandHandlers):
         *,
         link_source_text: Optional[str] = None,
         allow_cross_repo: bool = False,
+        topic_key: Optional[str] = None,
+        planned_injections: object | None = None,
     ) -> tuple[str, bool]:
-        _ = link_source_text, allow_cross_repo
+        _ = link_source_text, allow_cross_repo, topic_key, planned_injections
         return prompt_text, False
 
     def _maybe_inject_car_context(self, prompt_text: str) -> tuple[str, bool]:

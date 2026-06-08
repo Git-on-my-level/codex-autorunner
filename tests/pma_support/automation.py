@@ -1,9 +1,10 @@
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.core.automation import (
+    EXECUTOR_PMA_OPERATOR_TURN,
     PMA_SUBSCRIPTION_RULE_PREFIX,
     PMA_TIMER_RULE_PREFIX,
     PMA_TIMER_SCHEDULE_PREFIX,
@@ -22,32 +23,12 @@ def test_pma_automation_subscription_endpoints(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
 
-    class FakeAutomationStore:
-        def __init__(self) -> None:
-            self.created_payloads: list[dict[str, Any]] = []
-            self.list_filters: list[dict[str, Any]] = []
-            self.deleted_ids: list[str] = []
-
-        def create_subscription(self, payload: dict[str, Any]) -> dict[str, Any]:
-            self.created_payloads.append(dict(payload))
-            return {"subscription_id": "sub-1", **payload}
-
-        def list_subscriptions(self, **filters: Any) -> list[dict[str, Any]]:
-            self.list_filters.append(dict(filters))
-            return [{"subscription_id": "sub-1", "thread_id": "thread-1"}]
-
-        def cancel_subscription(self, subscription_id: str) -> dict[str, Any]:
-            self.deleted_ids.append(subscription_id)
-            return {"deleted": True}
-
-    fake_store = FakeAutomationStore()
-    app.state.hub_supervisor.get_pma_automation_store = lambda: fake_store
-
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/subscriptions",
             json={
-                "thread_id": "thread-1",
+                "event_types": ["managed_thread_completed"],
+                "lane_id": "pma:lane-next",
                 "from_state": "running",
                 "to_state": "completed",
                 "reason": "manual",
@@ -56,30 +37,28 @@ def test_pma_automation_subscription_endpoints(hub_env) -> None:
         )
         assert create_resp.status_code == 200
         created = create_resp.json()["subscription"]
-        assert created["subscription_id"] == "sub-1"
-        assert created["thread_id"] == "thread-1"
+        subscription_id = created["subscription_id"]
+        assert subscription_id
+        assert created["lane_id"] == "pma:lane-next"
 
         list_resp = client.get(
             "/hub/pma/automation/subscriptions",
-            params={"thread_id": "thread-1", "limit": 5},
+            params={"lane_id": "pma:lane-next", "limit": 5},
         )
         assert list_resp.status_code == 200
         listed = list_resp.json()["subscriptions"]
-        assert listed and listed[0]["subscription_id"] == "sub-1"
+        assert any(row["subscription_id"] == subscription_id for row in listed)
 
-        delete_resp = client.delete("/hub/pma/subscriptions/sub-1")
+        delete_resp = client.delete(f"/hub/pma/subscriptions/{subscription_id}")
         assert delete_resp.status_code == 200
         assert delete_resp.json()["status"] == "ok"
-        assert delete_resp.json()["subscription_id"] == "sub-1"
+        assert delete_resp.json()["subscription_id"] == subscription_id
 
-    assert fake_store.created_payloads
-    assert fake_store.created_payloads[0]["from_state"] == "running"
-    assert fake_store.created_payloads[0]["to_state"] == "completed"
-    assert (
-        fake_store.list_filters
-        and fake_store.list_filters[0]["thread_id"] == "thread-1"
+    rule = AutomationStore(hub_env.hub_root).get_rule(
+        f"{PMA_SUBSCRIPTION_RULE_PREFIX}{subscription_id}"
     )
-    assert fake_store.deleted_ids == ["sub-1"]
+    assert rule is not None
+    assert rule.enabled is False
 
 
 @pytest.mark.parametrize(
@@ -88,9 +67,9 @@ def test_pma_automation_subscription_endpoints(hub_env) -> None:
         (
             {
                 "event_type": "managed_thread_completed",
-                "thread_id": "thread-1",
+                "lane_id": "pma:event-alias-1",
             },
-            ["managed_thread_completed"],
+            ["lifecycle.flow_completed"],
         ),
         (
             {
@@ -98,9 +77,9 @@ def test_pma_automation_subscription_endpoints(hub_env) -> None:
                     "managed_thread_completed",
                     "managed_thread_failed",
                 ],
-                "thread_id": "thread-2",
+                "lane_id": "pma:event-alias-2",
             },
-            ["managed_thread_completed", "managed_thread_failed"],
+            ["lifecycle.flow_completed", "lifecycle.flow_failed"],
         ),
     ],
 )
@@ -112,27 +91,13 @@ def test_pma_automation_subscription_create_normalizes_event_type_aliases(
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
 
-    class FakeAutomationStore:
-        def __init__(self) -> None:
-            self.created_payloads: list[dict[str, Any]] = []
-
-        def create_subscription(self, payload: dict[str, Any]) -> dict[str, Any]:
-            self.created_payloads.append(dict(payload))
-            return {"subscription_id": "sub-event-types-1", **payload}
-
-    fake_store = FakeAutomationStore()
-    app.state.hub_supervisor.get_pma_automation_store = lambda: fake_store
-
     with TestClient(app) as client:
         create_resp = client.post("/hub/pma/subscriptions", json=request_body)
 
     assert create_resp.status_code == 200
-    assert fake_store.created_payloads == [
-        {
-            "thread_id": request_body["thread_id"],
-            "event_types": expected_event_types,
-        }
-    ]
+    subscription = create_resp.json()["subscription"]
+    assert subscription["event_types"] == expected_event_types
+    assert subscription["lane_id"] == request_body["lane_id"]
 
 
 def test_pma_automation_subscription_create_accepts_nested_filter_payload(
@@ -141,34 +106,20 @@ def test_pma_automation_subscription_create_accepts_nested_filter_payload(
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
 
-    class FakeAutomationStore:
-        def __init__(self) -> None:
-            self.created_payloads: list[dict[str, Any]] = []
-
-        def create_subscription(self, payload: dict[str, Any]) -> dict[str, Any]:
-            self.created_payloads.append(dict(payload))
-            return {"subscription_id": "sub-filter-1", **payload}
-
-    fake_store = FakeAutomationStore()
-    app.state.hub_supervisor.get_pma_automation_store = lambda: fake_store
-
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/subscriptions",
             json={
                 "event_types": ["managed_thread_completed"],
-                "filter": {"thread_id": "thread-filter-1", "repoId": "repo-filter-1"},
+                "filter": {"laneId": "pma:filter-1", "repoId": "repo-filter-1"},
             },
         )
 
     assert create_resp.status_code == 200
-    assert fake_store.created_payloads == [
-        {
-            "event_types": ["managed_thread_completed"],
-            "thread_id": "thread-filter-1",
-            "repo_id": "repo-filter-1",
-        }
-    ]
+    subscription = create_resp.json()["subscription"]
+    assert subscription["event_types"] == ["managed_thread_completed"]
+    assert subscription["lane_id"] == "pma:filter-1"
+    assert subscription["repo_id"] == "repo-filter-1"
 
 
 def test_pma_automation_subscription_create_rejects_unknown_filter_keys(
@@ -227,38 +178,11 @@ def test_pma_automation_timer_endpoints(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
 
-    class FakeAutomationStore:
-        def __init__(self) -> None:
-            self.created_payloads: list[dict[str, Any]] = []
-            self.list_filters: list[dict[str, Any]] = []
-            self.touched: list[tuple[str, dict[str, Any]]] = []
-            self.cancelled: list[tuple[str, dict[str, Any]]] = []
-
-        def create_timer(self, payload: dict[str, Any]) -> dict[str, Any]:
-            self.created_payloads.append(dict(payload))
-            return {"timer_id": "timer-1", **payload}
-
-        def list_timers(self, **filters: Any) -> list[dict[str, Any]]:
-            self.list_filters.append(dict(filters))
-            return [{"timer_id": "timer-1", "thread_id": "thread-1"}]
-
-        def touch_timer(self, timer_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-            self.touched.append((timer_id, dict(payload)))
-            return {"timer_id": timer_id, "touched": True}
-
-        def cancel_timer(
-            self, timer_id: str, payload: dict[str, Any]
-        ) -> dict[str, Any]:
-            self.cancelled.append((timer_id, dict(payload)))
-            return {"timer_id": timer_id, "cancelled": True}
-
-    fake_store = FakeAutomationStore()
-    app.state.hub_supervisor.get_pma_automation_store = lambda: fake_store
-
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/timers",
             json={
+                "timer_id": "timer-1",
                 "timer_type": "one_shot",
                 "delay_seconds": 1800,
                 "lane_id": "pma:lane-next",
@@ -295,17 +219,11 @@ def test_pma_automation_timer_endpoints(hub_env) -> None:
         assert cancel_resp.status_code == 200
         assert cancel_resp.json()["timer_id"] == "timer-1"
 
-    assert fake_store.created_payloads
-    assert fake_store.created_payloads[0]["timer_type"] == "one_shot"
-    assert fake_store.created_payloads[0]["delay_seconds"] == 1800
-    assert fake_store.created_payloads[0]["lane_id"] == "pma:lane-next"
-    assert fake_store.created_payloads[0]["to_state"] == "failed"
-    assert (
-        fake_store.list_filters
-        and fake_store.list_filters[0]["thread_id"] == "thread-1"
+    schedule = AutomationStore(hub_env.hub_root).get_schedule(
+        f"{PMA_TIMER_SCHEDULE_PREFIX}timer-1"
     )
-    assert fake_store.touched == [("timer-1", {"reason": "heartbeat"})]
-    assert fake_store.cancelled == [("timer-1", {"reason": "done"})]
+    assert schedule is not None
+    assert schedule.state == "cancelled"
 
 
 def test_pma_automation_list_endpoints_include_unified_read_model(hub_env) -> None:
@@ -343,10 +261,13 @@ def test_pma_automation_list_endpoints_include_unified_read_model(hub_env) -> No
     timer_rules = list_timers["unified"]["rules"]
     timer_schedules = list_timers["unified"]["schedules"]
     assert any(
-        rule["metadata"].get("purpose") == "pma_lifecycle_subscription"
+        rule["metadata"].get("purpose") == "managed_thread_lifecycle_subscription"
         for rule in sub_rules
     )
-    assert any(rule["metadata"].get("purpose") == "pma_timer" for rule in timer_rules)
+    assert any(
+        rule["metadata"].get("purpose") == "managed_thread_timer"
+        for rule in timer_rules
+    )
     assert timer_schedules and timer_schedules[0]["schedule_kind"] == "one_shot"
 
 
@@ -382,7 +303,7 @@ def test_pma_automation_created_rules_are_visible_through_control_plane(
     assert any(rule["rule_id"] == rule_id for rule in list_resp.json()["rules"])
     assert detail_resp.status_code == 200
     assert detail_resp.json()["rule"]["metadata"]["purpose"] == (
-        "pma_lifecycle_subscription"
+        "managed_thread_lifecycle_subscription"
     )
 
 
@@ -454,7 +375,7 @@ def test_pma_automation_cancel_subscription_can_disable_unified_only_rule(
         trigger={"event_types": ["lifecycle.flow_completed"]},
         target_policy="hub",
         target={"thread_id": "thread-unified"},
-        executor_kind="managed_thread_turn",
+        executor_kind=EXECUTOR_PMA_OPERATOR_TURN,
         executor={"lane_id": "pma:default"},
         metadata={
             "purpose": "pma_lifecycle_subscription",
@@ -469,8 +390,6 @@ def test_pma_automation_cancel_subscription_can_disable_unified_only_rule(
     assert response.status_code == 200
     payload = response.json()
     assert payload["deleted"] is True
-    assert payload["unified_deleted"] is True
-    assert payload["legacy_deleted"] is False
     assert automation_store.get_rule(rule_id).enabled is False
 
 
@@ -525,7 +444,7 @@ def test_pma_automation_cancel_timer_can_cancel_unified_only_schedule(hub_env) -
         trigger={"event_types": ["schedule.fire"]},
         target_policy="hub",
         target={"thread_id": "thread-unified"},
-        executor_kind="managed_thread_turn",
+        executor_kind=EXECUTOR_PMA_OPERATOR_TURN,
         executor={"lane_id": "pma:default", "wake_up_kind": "pma_timer"},
         metadata={"purpose": "pma_timer", "timer_id": timer_id},
     )
@@ -550,8 +469,6 @@ def test_pma_automation_cancel_timer_can_cancel_unified_only_schedule(hub_env) -
     assert response.status_code == 200
     payload = response.json()
     assert payload["cancelled"] is True
-    assert payload["unified_deleted"] is True
-    assert payload["legacy_deleted"] is False
     assert automation_store.get_rule(rule_id).enabled is False
     schedule = automation_store.get_schedule(schedule_id)
     assert schedule.state == "cancelled"
@@ -598,21 +515,11 @@ def test_pma_automation_timer_create_accepts_nested_filter_payload(hub_env) -> N
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
 
-    class FakeAutomationStore:
-        def __init__(self) -> None:
-            self.created_payloads: list[dict[str, Any]] = []
-
-        def create_timer(self, payload: dict[str, Any]) -> dict[str, Any]:
-            self.created_payloads.append(dict(payload))
-            return {"timer_id": "timer-filter-1", **payload}
-
-    fake_store = FakeAutomationStore()
-    app.state.hub_supervisor.get_pma_automation_store = lambda: fake_store
-
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/timers",
             json={
+                "timer_id": "timer-filter-1",
                 "timer_type": "one_shot",
                 "delay_seconds": 30,
                 "filter": {"threadId": "thread-filter-1", "repo_id": "repo-filter-1"},
@@ -620,14 +527,11 @@ def test_pma_automation_timer_create_accepts_nested_filter_payload(hub_env) -> N
         )
 
     assert create_resp.status_code == 200
-    assert fake_store.created_payloads == [
-        {
-            "timer_type": "one_shot",
-            "delay_seconds": 30,
-            "thread_id": "thread-filter-1",
-            "repo_id": "repo-filter-1",
-        }
-    ]
+    timer = create_resp.json()["timer"]
+    assert timer["timer_id"] == "timer-filter-1"
+    assert timer["timer_type"] == "one_shot"
+    assert timer["thread_id"] == "thread-filter-1"
+    assert timer["repo_id"] == "repo-filter-1"
 
 
 def test_pma_automation_timer_create_rejects_unknown_filter_keys(hub_env) -> None:
@@ -730,49 +634,27 @@ def test_pma_automation_subscription_alias_endpoint_supports_kwargs_only_store(
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
 
-    class FakeAutomationStore:
-        def __init__(self) -> None:
-            self.create_calls: list[dict[str, Any]] = []
-            self.deleted_ids: list[str] = []
-
-        def create_subscription(
-            self, *, thread_id: Optional[str] = None, lane_id: Optional[str] = None
-        ) -> dict[str, Any]:
-            self.create_calls.append({"thread_id": thread_id, "lane_id": lane_id})
-            return {
-                "subscription_id": "sub-alias-1",
-                "thread_id": thread_id,
-                "lane_id": lane_id,
-            }
-
-        def cancel_subscription(self, subscription_id: str) -> bool:
-            self.deleted_ids.append(subscription_id)
-            return True
-
-    fake_store = FakeAutomationStore()
-    app.state.hub_supervisor.get_pma_automation_store = lambda: fake_store
-
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/automation/subscriptions",
-            json={"thread_id": "thread-alias", "lane_id": "pma:lane-alias"},
+            json={
+                "event_types": ["managed_thread_completed"],
+                "lane_id": "pma:lane-alias",
+            },
         )
         assert create_resp.status_code == 200
         subscription = create_resp.json()["subscription"]
-        assert subscription["subscription_id"] == "sub-alias-1"
-        assert subscription["thread_id"] == "thread-alias"
+        subscription_id = subscription["subscription_id"]
+        assert subscription_id
         assert subscription["lane_id"] == "pma:lane-alias"
 
-        delete_resp = client.delete("/hub/pma/automation/subscriptions/sub-alias-1")
+        delete_resp = client.delete(
+            f"/hub/pma/automation/subscriptions/{subscription_id}"
+        )
         assert delete_resp.status_code == 200
         delete_payload = delete_resp.json()
         assert delete_payload["status"] == "ok"
-        assert delete_payload["subscription_id"] == "sub-alias-1"
-
-    assert fake_store.create_calls == [
-        {"thread_id": "thread-alias", "lane_id": "pma:lane-alias"}
-    ]
-    assert fake_store.deleted_ids == ["sub-alias-1"]
+        assert delete_payload["subscription_id"] == subscription_id
 
 
 def test_pma_automation_timer_alias_endpoint_supports_fallback_method_signatures(
@@ -781,37 +663,14 @@ def test_pma_automation_timer_alias_endpoint_supports_fallback_method_signatures
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
 
-    class FakeAutomationStore:
-        def __init__(self) -> None:
-            self.create_calls: list[dict[str, Any]] = []
-            self.cancelled_ids: list[str] = []
-
-        def create_timer(
-            self,
-            *,
-            timer_type: Optional[str] = None,
-            idle_seconds: Optional[int] = None,
-        ) -> dict[str, Any]:
-            self.create_calls.append(
-                {"timer_type": timer_type, "idle_seconds": idle_seconds}
-            )
-            return {
-                "timer_id": "timer-alias-1",
-                "timer_type": timer_type,
-                "idle_seconds": idle_seconds,
-            }
-
-        def cancel_timer(self, timer_id: str) -> bool:
-            self.cancelled_ids.append(timer_id)
-            return True
-
-    fake_store = FakeAutomationStore()
-    app.state.hub_supervisor.get_pma_automation_store = lambda: fake_store
-
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/automation/timers",
-            json={"timer_type": "watchdog", "idle_seconds": 45},
+            json={
+                "timer_id": "timer-alias-1",
+                "timer_type": "watchdog",
+                "idle_seconds": 45,
+            },
         )
         assert create_resp.status_code == 200
         timer = create_resp.json()["timer"]
@@ -825,29 +684,16 @@ def test_pma_automation_timer_alias_endpoint_supports_fallback_method_signatures
         assert cancel_payload["status"] == "ok"
         assert cancel_payload["timer_id"] == "timer-alias-1"
 
-    assert fake_store.create_calls == [{"timer_type": "watchdog", "idle_seconds": 45}]
-    assert fake_store.cancelled_ids == ["timer-alias-1"]
-
 
 def test_pma_automation_watchdog_timer_create(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
 
-    class FakeAutomationStore:
-        def __init__(self) -> None:
-            self.created_payloads: list[dict[str, Any]] = []
-
-        def create_timer(self, payload: dict[str, Any]) -> dict[str, Any]:
-            self.created_payloads.append(dict(payload))
-            return {"timer_id": "watchdog-1", **payload}
-
-    fake_store = FakeAutomationStore()
-    app.state.hub_supervisor.get_pma_automation_store = lambda: fake_store
-
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/timers",
             json={
+                "timer_id": "watchdog-1",
                 "timer_type": "watchdog",
                 "idle_seconds": 300,
                 "thread_id": "thread-1",
@@ -857,10 +703,8 @@ def test_pma_automation_watchdog_timer_create(hub_env) -> None:
         assert create_resp.status_code == 200
         payload = create_resp.json()["timer"]
         assert payload["timer_id"] == "watchdog-1"
-
-    assert fake_store.created_payloads
-    assert fake_store.created_payloads[0]["timer_type"] == "watchdog"
-    assert fake_store.created_payloads[0]["idle_seconds"] == 300
+        assert payload["timer_type"] == "watchdog"
+        assert payload["idle_seconds"] == 300
 
 
 def test_pma_automation_timer_rejects_invalid_due_at(hub_env) -> None:

@@ -45,10 +45,15 @@ class _FakeIngress:
 
 
 class _FakeThreadService:
-    def __init__(self, *, execution_status: str = "running") -> None:
+    def __init__(
+        self, *, execution_status: str = "running", thread_missing: bool = False
+    ) -> None:
         self.execution_status = execution_status
+        self.thread_missing = thread_missing
 
     def get_thread_target(self, thread_target_id: str) -> Any:
+        if self.thread_missing:
+            return None
         return SimpleNamespace(thread_target_id=thread_target_id)
 
     def get_latest_execution(self, thread_target_id: str) -> Any:
@@ -447,7 +452,7 @@ async def test_background_task_done_reconciles_progress_lease(
     monkeypatch.setattr(
         discord_managed_thread_routing_module,
         "build_discord_thread_orchestration_service",
-        lambda _service: _FakeThreadService(execution_status="running"),
+        lambda _service: _FakeThreadService(thread_missing=True),
     )
 
     async def _boom() -> None:
@@ -513,7 +518,7 @@ async def test_background_task_done_ignores_expected_progress_task_cancellation(
     monkeypatch.setattr(
         discord_managed_thread_routing_module,
         "build_discord_thread_orchestration_service",
-        lambda _service: _FakeThreadService(execution_status="running"),
+        lambda _service: _FakeThreadService(thread_missing=True),
     )
 
     blocker = asyncio.Event()
@@ -579,7 +584,7 @@ async def test_background_task_done_reconciles_cancel_sensitive_progress_task(
     monkeypatch.setattr(
         discord_managed_thread_routing_module,
         "build_discord_thread_orchestration_service",
-        lambda _service: _FakeThreadService(execution_status="running"),
+        lambda _service: _FakeThreadService(thread_missing=True),
     )
 
     blocker = asyncio.Event()
@@ -801,7 +806,7 @@ async def test_shutdown_timeout_reconciles_supervised_progress_leases(
     monkeypatch.setattr(
         discord_managed_thread_routing_module,
         "build_discord_thread_orchestration_service",
-        lambda _service: _FakeThreadService(execution_status="running"),
+        lambda _service: _FakeThreadService(thread_missing=True),
     )
     monkeypatch.setattr(
         discord_service_lifecycle_module,
@@ -876,14 +881,14 @@ async def test_startup_reconciles_orphaned_progress_leases(
     monkeypatch.setattr(
         discord_managed_thread_routing_module,
         "build_discord_thread_orchestration_service",
-        lambda _service: _FakeThreadService(execution_status="running"),
+        lambda _service: _FakeThreadService(thread_missing=True),
     )
 
     try:
         await service._reconcile_discord_progress_leases_on_startup()
 
         assert rest.edited_channel_messages
-        assert "lost its discord worker during restart" in (
+        assert "no longer maps to an active managed thread" in (
             rest.edited_channel_messages[-1]["payload"]["content"].lower()
         )
         assert await store.list_turn_progress_leases() == []
@@ -918,14 +923,14 @@ async def test_startup_reconciles_progress_leases_stuck_in_retiring_state(
     monkeypatch.setattr(
         discord_managed_thread_routing_module,
         "build_discord_thread_orchestration_service",
-        lambda _service: _FakeThreadService(execution_status="running"),
+        lambda _service: _FakeThreadService(thread_missing=True),
     )
 
     try:
         await service._reconcile_discord_progress_leases_on_startup()
 
         assert rest.edited_channel_messages
-        assert "lost its discord worker during restart" in (
+        assert "no longer maps to an active managed thread" in (
             rest.edited_channel_messages[-1]["payload"]["content"].lower()
         )
         assert await store.list_turn_progress_leases() == []

@@ -64,7 +64,7 @@ def test_runtime_tail_merges_live_stream_deltas_into_stable_progress_item() -> N
     serialized: list[dict[str, Any]] = []
     event_id_start = 0
 
-    for text in ("Read", "ing", " files"):
+    for text in ("Read", " files", " now"):
         events = asyncio.run(
             _serialize_runtime_raw_tail_events(
                 {"method": "prompt/progress", "params": {"delta": text}},
@@ -81,8 +81,8 @@ def test_runtime_tail_merges_live_stream_deltas_into_stable_progress_item() -> N
 
     assert [event["summary"] for event in serialized] == [
         "Read",
-        "Reading",
-        "Reading files",
+        "Read files",
+        "Read files now",
     ]
     assert {event["progress_item_id"] for event in serialized} == {
         "progress:assistant_update:0001"

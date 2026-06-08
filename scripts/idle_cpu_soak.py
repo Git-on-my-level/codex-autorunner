@@ -533,15 +533,29 @@ def run_soak(
     profile_name: str,
     output: Optional[Path] = None,
     artifact_dir: Optional[Path] = None,
+    warmup_seconds: Optional[float] = None,
+    duration_seconds: Optional[float] = None,
+    sample_interval_seconds: Optional[float] = None,
+    health_timeout_seconds: float = 60.0,
     logger: Optional[logging.Logger] = None,
 ) -> dict[str, Any]:
     if logger is None:
         logger = logging.getLogger("idle_cpu_soak")
 
     profile = _load_profile(profile_name)
-    warmup = profile.get("warmup_seconds", 30)
-    duration = profile.get("duration_seconds", 300)
-    interval = profile.get("sample_interval_seconds", 5)
+    warmup = (
+        warmup_seconds if warmup_seconds is not None else profile.get("warmup_seconds", 30)
+    )
+    duration = (
+        duration_seconds
+        if duration_seconds is not None
+        else profile.get("duration_seconds", 300)
+    )
+    interval = (
+        sample_interval_seconds
+        if sample_interval_seconds is not None
+        else profile.get("sample_interval_seconds", 5)
+    )
     probe_config = profile.get("health_probe", {})
     owned_cats = profile.get("owned_process_categories", ["car_service"])
     cat_enums = _category_names_to_enums(owned_cats)
@@ -594,7 +608,10 @@ def run_soak(
                 )
 
             health_ok = _wait_for_health(
-                base_url, probe_config, timeout=60.0, logger=logger
+                base_url,
+                probe_config,
+                timeout=health_timeout_seconds,
+                logger=logger,
             )
             if not health_ok:
                 cleanup_services()
@@ -731,6 +748,30 @@ def main() -> int:
         help="Override artifact directory (default: .codex-autorunner/diagnostics/idle-cpu/)",
     )
     parser.add_argument(
+        "--warmup-seconds",
+        type=float,
+        default=None,
+        help="Override profile warmup duration; intended for smoke tests.",
+    )
+    parser.add_argument(
+        "--duration-seconds",
+        type=float,
+        default=None,
+        help="Override profile sampling duration; intended for smoke tests.",
+    )
+    parser.add_argument(
+        "--sample-interval-seconds",
+        type=float,
+        default=None,
+        help="Override profile sampling interval; intended for smoke tests.",
+    )
+    parser.add_argument(
+        "--health-timeout-seconds",
+        type=float,
+        default=60.0,
+        help="Maximum time to wait for service health before sampling.",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable debug logging",
@@ -749,6 +790,10 @@ def main() -> int:
             profile_name=args.profile,
             output=args.output,
             artifact_dir=args.artifact_dir,
+            warmup_seconds=args.warmup_seconds,
+            duration_seconds=args.duration_seconds,
+            sample_interval_seconds=args.sample_interval_seconds,
+            health_timeout_seconds=args.health_timeout_seconds,
             logger=logger,
         )
     except Exception as exc:

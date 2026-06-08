@@ -44,6 +44,6 @@ from tests.telegram_pma_workspace_support import (
     test_sync_telegram_thread_binding_allows_missing_runtime_instance,
     test_sync_telegram_thread_binding_archives_after_lost_backend_recovery,
     test_sync_telegram_thread_binding_ignores_backend_id_in_pma_mode,
-    test_sync_telegram_thread_binding_keeps_requested_backend_thread_id_for_replacement,
+    test_sync_telegram_thread_binding_preserves_existing_backend_when_replacement_runtime_unavailable,
     test_sync_telegram_thread_binding_rejects_rebind_when_runtime_missing,
 )

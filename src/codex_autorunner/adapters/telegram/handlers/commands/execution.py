@@ -1583,11 +1583,26 @@ async def _run_telegram_managed_thread_turn(
                             delivered=response_sent,
                         )
             elif send_failure_response and prepared_placeholder_id is not None:
-                await handlers._delete_message(
-                    message.chat_id,
-                    prepared_placeholder_id,
-                    thread_id=message.thread_id,
-                )
+                try:
+                    await handlers._delete_message(
+                        message.chat_id,
+                        prepared_placeholder_id,
+                        thread_id=message.thread_id,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    log_event(
+                        handlers._logger,
+                        logging.WARNING,
+                        "telegram.progress.cleanup_failed",
+                        topic_key=topic_key,
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                        placeholder_id=prepared_placeholder_id,
+                        error=str(exc),
+                        error_type=exc.__class__.__name__,
+                    )
             if chat_ux_snapshot is not None and (
                 response_sent or getattr(_flow, "durable_delivery_performed", False)
             ):

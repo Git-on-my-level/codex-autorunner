@@ -387,7 +387,9 @@ def backfill_pr_binding_thread_target_ids(
         if managed_thread_id is None or repo_id is None:
             continue
         counts["threads_scanned"] += 1
-        head_branch = store.refresh_thread_head_branch(managed_thread_id)
+        head_branch = thread_head_branch_hint(thread)
+        if head_branch is None:
+            head_branch = store.refresh_thread_head_branch(managed_thread_id)
         if head_branch is None:
             head_branch = _normalize_text(
                 _mapping(thread.get("metadata")).get("head_branch")

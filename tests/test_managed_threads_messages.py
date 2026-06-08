@@ -778,6 +778,7 @@ def test_send_message_resolves_alias_backed_hermes_profile_runtime(
                 assistant_text="hermes-output",
                 raw_events=[],
                 errors=[],
+                effective_runtime={},
             )
 
         async def interrupt_turn(
@@ -1243,6 +1244,8 @@ def test_send_message_handles_not_active_race(hub_env, monkeypatch) -> None:
         reasoning: str | None = None,
         client_turn_id: str | None = None,
         queue_payload: dict[str, object] | None = None,
+        metadata: dict[str, object] | None = None,
+        turn_request: object | None = None,
     ):
         _ = (
             self,
@@ -1253,6 +1256,8 @@ def test_send_message_handles_not_active_race(hub_env, monkeypatch) -> None:
             reasoning,
             client_turn_id,
             queue_payload,
+            metadata,
+            turn_request,
         )
         raise ManagedThreadNotActiveError(managed_thread_id, "archived")
 
@@ -1350,9 +1355,11 @@ def test_send_message_does_not_report_ok_when_turn_already_interrupted(
         *,
         status: str,
         assistant_text=None,
+        assistant_output=None,
         error=None,
         backend_turn_id=None,
         transcript_turn_id=None,
+        effective_runtime=None,
     ) -> None:
         if status == "ok":
             self.mark_turn_interrupted(managed_turn_id)
@@ -1361,9 +1368,11 @@ def test_send_message_does_not_report_ok_when_turn_already_interrupted(
             managed_turn_id,
             status=status,
             assistant_text=assistant_text,
+            assistant_output=assistant_output,
             error=error,
             backend_turn_id=backend_turn_id,
             transcript_turn_id=transcript_turn_id,
+            effective_runtime=effective_runtime,
         )
 
     monkeypatch.setattr(
@@ -1389,7 +1398,7 @@ def test_send_message_does_not_report_ok_when_turn_already_interrupted(
     assert message_resp.status_code == 200
     payload = message_resp.json()
     assert payload["status"] == "interrupted"
-    assert payload["error"] == "chat interrupted"
+    assert payload["error"] == "Managed thread interrupted"
 
     store = ManagedThreadStore(hub_env.hub_root)
     turn = store.get_turn(managed_thread_id, payload["managed_turn_id"])
