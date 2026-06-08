@@ -67,6 +67,7 @@ from ...services.pma.managed_thread_send_runtime import (
     restart_pma_managed_thread_queue_workers,
     run_managed_thread_message_send,
 )
+from ...services.web_artifact_delivery import drain_web_artifact_deliveries
 from .managed_thread_orchestration import (
     build_managed_thread_orchestration_service as _shared_managed_thread_orchestration_service,
 )
@@ -692,6 +693,19 @@ async def _deliver_managed_thread_execution_result(
                 )
         if clear_progress_targets is not None:
             clear_progress_targets(managed_turn_id)
+        if workspace_root_text:
+            try:
+                await drain_web_artifact_deliveries(
+                    workspace_root=Path(workspace_root_text),
+                    managed_thread_id=managed_thread_id,
+                    logger=logger,
+                )
+            except Exception:  # best-effort: never break turn finalization
+                logger.exception(
+                    "Failed to drain web artifact deliveries (managed_thread_id=%s, managed_turn_id=%s)",
+                    managed_thread_id,
+                    managed_turn_id,
+                )
         return build_execution_result_payload(
             status="ok",
             managed_thread_id=managed_thread_id,

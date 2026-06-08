@@ -24,6 +24,33 @@ from ..services.workspace_resources import (
 
 logger = logging.getLogger(__name__)
 
+# Content types safe to serve with ``Content-Disposition: inline`` from the hub
+# origin. Deliberately excludes active/markup types (``image/svg+xml``,
+# ``text/html``, ``application/xhtml+xml``, PDF) so an agent-produced file cannot
+# execute script in the user's session via same-origin inline rendering.
+_INLINE_SAFE_CONTENT_TYPES = frozenset(
+    {
+        "image/avif",
+        "image/bmp",
+        "image/gif",
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "image/x-icon",
+        "audio/aac",
+        "audio/mp4",
+        "audio/mpeg",
+        "audio/ogg",
+        "audio/wav",
+        "audio/webm",
+        "audio/x-wav",
+        "video/mp4",
+        "video/ogg",
+        "video/quicktime",
+        "video/webm",
+    }
+)
+
 
 def _raise_http(exc: WorkspaceResourceError) -> NoReturn:
     raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
@@ -53,10 +80,22 @@ def _stream_file(handle: BinaryIO) -> Iterator[bytes]:
         handle.close()
 
 
-def _file_download_response(entry: FileBoxEntry, handle: BinaryIO) -> StreamingResponse:
+def _file_download_response(
+    entry: FileBoxEntry,
+    handle: BinaryIO,
+    *,
+    disposition: str = "attachment",
+) -> StreamingResponse:
     encoded = quote(entry.name, safe="")
     content_type = mimetypes.guess_type(entry.name)[0] or "application/octet-stream"
-    headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{encoded}"}
+    inline_allowed = content_type.lower() in _INLINE_SAFE_CONTENT_TYPES
+    disposition_type = (
+        "inline" if (disposition == "inline" and inline_allowed) else "attachment"
+    )
+    headers = {
+        "Content-Disposition": f"{disposition_type}; filename*=UTF-8''{encoded}",
+        "X-Content-Type-Options": "nosniff",
+    }
     if entry.size is not None:
         headers["Content-Length"] = str(entry.size)
     if entry.modified_at:
@@ -103,6 +142,12 @@ def _filebox_url_scope(request: Request, repo_id: str | None = None) -> FileBoxU
     )
 
 
+def _hub_workspace_url_scope(request: Request) -> FileBoxUrlScope:
+    return FileBoxUrlScope(
+        root_path=request.scope.get("root_path", "") or "", hub_workspace=True
+    )
+
+
 def build_filebox_routes() -> APIRouter:
     router = APIRouter(prefix="/api", tags=["filebox"])
     service = FileBoxResourceService()
@@ -134,13 +179,17 @@ def build_filebox_routes() -> APIRouter:
         )
 
     @router.get("/artifacts/deliveries/{delivery_id}/download")
-    def download_artifact_delivery(delivery_id: str, request: Request):
+    def download_artifact_delivery(
+        delivery_id: str, request: Request, disposition: str = "attachment"
+    ):
         repo_root = _resolve_repo_root(request)
         try:
             resource = service.open_delivery_artifact(repo_root, delivery_id)
         except WorkspaceResourceError as exc:
             _raise_http(exc)
-        return _file_download_response(resource.entry, resource.handle)
+        return _file_download_response(
+            resource.entry, resource.handle, disposition=disposition
+        )
 
     @router.get("/filebox/{box}")
     def list_single_box(box: str, request: Request) -> dict[str, Any]:
@@ -208,6 +257,49 @@ def _resolve_hub_repo_root(request: Request, repo_id: Optional[str]) -> Path:
     return target.path
 
 
+def build_hub_artifact_delivery_routes() -> APIRouter:
+    """Deliveries list/download for repo-less ("Hub workspace") threads.
+
+    These resolve the delivery journal from the hub engine root (the same root the
+    web post-turn drain uses for hub-workspace threads), since the per-repo
+    ``/api/artifacts/...`` routes are not mounted on the hub app.
+    """
+
+    router = APIRouter(prefix="/hub/artifacts", tags=["filebox"])
+    service = FileBoxResourceService()
+
+    @router.get("/deliveries")
+    def list_hub_artifact_deliveries(
+        request: Request,
+        state: Optional[str] = None,
+        surface: Optional[str] = None,
+        conversation: Optional[str] = None,
+    ) -> dict[str, Any]:
+        repo_root = _resolve_repo_root(request)
+        return service.list_artifact_deliveries(
+            repo_root,
+            url_scope=_hub_workspace_url_scope(request),
+            state=state,
+            surface=surface,
+            conversation=conversation,
+        )
+
+    @router.get("/deliveries/{delivery_id}/download")
+    def download_hub_artifact_delivery(
+        delivery_id: str, request: Request, disposition: str = "attachment"
+    ):
+        repo_root = _resolve_repo_root(request)
+        try:
+            resource = service.open_delivery_artifact(repo_root, delivery_id)
+        except WorkspaceResourceError as exc:
+            _raise_http(exc)
+        return _file_download_response(
+            resource.entry, resource.handle, disposition=disposition
+        )
+
+    return router
+
+
 def build_hub_filebox_routes() -> APIRouter:
     router = APIRouter(prefix="/hub/filebox", tags=["filebox"])
     service = FileBoxResourceService()
@@ -242,14 +334,19 @@ def build_hub_filebox_routes() -> APIRouter:
 
     @router.get("/{repo_id}/artifacts/deliveries/{delivery_id}/download")
     def download_repo_artifact_delivery(
-        repo_id: str, delivery_id: str, request: Request
+        repo_id: str,
+        delivery_id: str,
+        request: Request,
+        disposition: str = "attachment",
     ):
         repo_root = _resolve_hub_repo_root(request, repo_id)
         try:
             resource = service.open_delivery_artifact(repo_root, delivery_id)
         except WorkspaceResourceError as exc:
             _raise_http(exc)
-        return _file_download_response(resource.entry, resource.handle)
+        return _file_download_response(
+            resource.entry, resource.handle, disposition=disposition
+        )
 
     @router.post("/{repo_id}/{box}")
     async def hub_upload(repo_id: str, box: str, request: Request) -> dict[str, Any]:
@@ -286,4 +383,8 @@ def build_hub_filebox_routes() -> APIRouter:
     return router
 
 
-__all__ = ["build_filebox_routes", "build_hub_filebox_routes"]
+__all__ = [
+    "build_filebox_routes",
+    "build_hub_artifact_delivery_routes",
+    "build_hub_filebox_routes",
+]

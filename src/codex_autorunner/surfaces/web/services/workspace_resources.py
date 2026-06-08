@@ -70,6 +70,10 @@ class FileBoxDownloadResource:
 class FileBoxUrlScope:
     root_path: str = ""
     repo_id: str | None = None
+    # True for hub-level (repo-less) "Hub workspace" threads, whose delivery
+    # downloads are served from /hub/artifacts/... rather than the per-repo
+    # /api/... routes (which are not mounted on the hub app).
+    hub_workspace: bool = False
 
 
 def _archive_error(exc: Exception) -> WorkspaceResourceError:
@@ -509,6 +513,11 @@ def add_delivery_download_url(
         download = (
             f"{root_path}/hub/filebox/{quote(url_scope.repo_id, safe='')}/"
             f"artifacts/deliveries/{quote(delivery_id, safe='')}/download"
+        )
+    elif url_scope.hub_workspace:
+        download = (
+            f"{root_path}/hub/artifacts/deliveries/"
+            f"{quote(delivery_id, safe='')}/download"
         )
     else:
         download = (

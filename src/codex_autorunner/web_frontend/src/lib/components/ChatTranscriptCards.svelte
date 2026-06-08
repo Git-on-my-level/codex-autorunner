@@ -72,12 +72,52 @@
     return 'pending';
   }
 
-  function deliveryMeta(delivery: ArtifactDelivery): string | null {
-    const parts = [
-      delivery.targetSurface ? `to ${delivery.targetSurface}` : null,
-      delivery.size !== null ? `${Math.round(delivery.size / 1024)} KB` : null
-    ].filter((part): part is string => Boolean(part));
-    return parts.length ? parts.join(' · ') : null;
+  function formatDeliverySize(size: number | null): string | null {
+    if (size === null || size < 0) return null;
+    if (size < 1024) return `${size} B`;
+    if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  type DeliveryPreviewKind = 'image' | 'video' | 'audio' | 'pdf' | 'other';
+
+  function deliveryPreviewKind(delivery: ArtifactDelivery): DeliveryPreviewKind {
+    const mime = (delivery.mimeType ?? '').toLowerCase();
+    if (mime.startsWith('image/')) return 'image';
+    if (mime.startsWith('video/')) return 'video';
+    if (mime.startsWith('audio/')) return 'audio';
+    if (mime === 'application/pdf') return 'pdf';
+    return 'other';
+  }
+
+  function inlineDeliveryUrl(downloadUrl: string): string {
+    const separator = downloadUrl.includes('?') ? '&' : '?';
+    return href(`${downloadUrl}${separator}disposition=inline`);
+  }
+
+  let lightboxFile = $state<ArtifactDelivery | null>(null);
+  let lightboxDialog = $state<HTMLDialogElement | null>(null);
+
+  function openLightbox(file: ArtifactDelivery): void {
+    lightboxFile = file;
+    queueMicrotask(() => {
+      if (lightboxDialog && !lightboxDialog.open) {
+        try {
+          lightboxDialog.showModal();
+        } catch {
+          /* ignore */
+        }
+      }
+    });
+  }
+
+  function closeLightbox(): void {
+    if (lightboxDialog?.open) lightboxDialog.close();
+    lightboxFile = null;
+  }
+
+  function onLightboxBackdropClick(event: MouseEvent): void {
+    if (event.target === lightboxDialog) closeLightbox();
   }
 
   function isThinkingTrace(card: Extract<ChatTranscriptCard, { kind: 'intermediate' }>): boolean {
@@ -634,23 +674,113 @@
 {#if sharedFiles.length > 0}
   <article class="message assistant shared-files-message">
     <span>{assistantLabel}</span>
-    <ul class="message-attachments assistant-attachments" aria-label="Files shared by assistant">
+    <ul class="shared-files-grid" aria-label="Files shared by assistant">
       {#each sharedFiles as file (file.deliveryId)}
         {@const stateLabel = deliveryStateLabel(file.state)}
-        {@const meta = deliveryMeta(file)}
-        <li class={`message-attachment-pill delivery-${stateLabel}`}>
-          <span class="attachment-kind">file</span>
-          {#if file.downloadUrl}
-            <a href={href(file.downloadUrl)} target="_blank" rel="noopener" title={file.filename}><strong>{file.filename}</strong></a>
-          {:else}
-            <strong title={file.filename}>{file.filename}</strong>
+        {@const previewKind = deliveryPreviewKind(file)}
+        {@const sizeLabel = formatDeliverySize(file.size)}
+        {@const downloadHref = file.downloadUrl ? href(file.downloadUrl) : null}
+        {@const previewHref = file.downloadUrl ? inlineDeliveryUrl(file.downloadUrl) : null}
+        {@const canPreview =
+          stateLabel === 'sent' &&
+          previewHref !== null &&
+          (previewKind === 'image' || previewKind === 'video' || previewKind === 'audio')}
+        {@const hasMedia = canPreview && (previewKind === 'image' || previewKind === 'video')}
+        <li class={`shared-file-card kind-${previewKind} delivery-${stateLabel}`} class:has-media={hasMedia}>
+          {#if hasMedia && previewHref}
+            <div class="shared-file-media-wrap">
+              {#if previewKind === 'image'}
+                <button type="button" class="shared-file-media" onclick={() => openLightbox(file)} title={`Open ${file.filename}`}>
+                  <img src={previewHref} alt={file.filename} loading="lazy" />
+                </button>
+              {:else}
+                <!-- svelte-ignore a11y_media_has_caption -->
+                <video class="shared-file-media" controls preload="metadata" src={previewHref}></video>
+              {/if}
+              <button type="button" class="shared-file-expand" onclick={() => openLightbox(file)} title="Expand preview" aria-label="Expand preview">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M15 3h6v6" />
+                  <path d="M9 21H3v-6" />
+                  <path d="M21 3l-7 7" />
+                  <path d="M3 21l7-7" />
+                </svg>
+              </button>
+            </div>
           {/if}
-          <em>{stateLabel}</em>
-          {#if meta}
-            <em>{meta}</em>
+          {#if canPreview && previewHref && previewKind === 'audio'}
+            <audio class="shared-file-audio" controls preload="metadata" src={previewHref}></audio>
           {/if}
+          <div class="shared-file-foot">
+            <span class="shared-file-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
+                <path d="M13 2v7h7" />
+              </svg>
+            </span>
+            <span class="shared-file-info">
+              {#if downloadHref}
+                <a class="shared-file-name" href={canPreview ? previewHref : downloadHref} target="_blank" rel="noopener" title={file.filename}>{file.filename}</a>
+              {:else}
+                <span class="shared-file-name" title={file.filename}>{file.filename}</span>
+              {/if}
+              <span class="shared-file-meta">
+                {#if sizeLabel}<span>{sizeLabel}</span>{/if}
+                {#if stateLabel !== 'sent'}<em class={`shared-file-state state-${stateLabel}`}>{stateLabel}</em>{/if}
+              </span>
+            </span>
+            {#if downloadHref}
+              <a class="shared-file-download" href={downloadHref} download title={`Download ${file.filename}`} aria-label={`Download ${file.filename}`}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 3v12" />
+                  <path d="m7 10 5 5 5-5" />
+                  <path d="M5 21h14" />
+                </svg>
+              </a>
+            {/if}
+          </div>
         </li>
       {/each}
     </ul>
   </article>
 {/if}
+
+<dialog
+  bind:this={lightboxDialog}
+  class="lightbox"
+  onclose={() => (lightboxFile = null)}
+  onclick={onLightboxBackdropClick}
+>
+  {#if lightboxFile}
+    {@const kind = deliveryPreviewKind(lightboxFile)}
+    {@const inlineUrl = lightboxFile.downloadUrl ? inlineDeliveryUrl(lightboxFile.downloadUrl) : null}
+    {@const dlUrl = lightboxFile.downloadUrl ? href(lightboxFile.downloadUrl) : null}
+    <div class="lightbox__bar">
+      <span class="lightbox__name" title={lightboxFile.filename}>{lightboxFile.filename}</span>
+      <div class="lightbox__actions">
+        {#if dlUrl}
+          <a class="lightbox__btn" href={dlUrl} download title={`Download ${lightboxFile.filename}`} aria-label="Download">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3v12" />
+              <path d="m7 10 5 5 5-5" />
+              <path d="M5 21h14" />
+            </svg>
+          </a>
+        {/if}
+        <button type="button" class="lightbox__btn" onclick={closeLightbox} title="Close" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div class="lightbox__stage">
+      {#if inlineUrl && kind === 'image'}
+        <img src={inlineUrl} alt={lightboxFile.filename} />
+      {:else if inlineUrl && kind === 'video'}
+        <!-- svelte-ignore a11y_media_has_caption -->
+        <video src={inlineUrl} controls autoplay></video>
+      {/if}
+    </div>
+  {/if}
+</dialog>

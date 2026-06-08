@@ -55,6 +55,9 @@
   /* Surfaces that are not in the core scale (panels, scrims, mixed glyphs) */
   --color-panel-tint: #fbfcfe;
   --color-scrim: rgb(15 15 20 / 0.32);
+  --color-media-chip-bg: rgb(15 15 20 / 0.55);
+  --color-media-chip-bg-hover: rgb(15 15 20 / 0.75);
+  --color-on-media-chip: #ffffff;
   --color-topbar-fill: color-mix(in srgb, var(--color-bg) 86%, transparent);
   --glyph-mix-base: white;
   --scrollbar-thumb: rgb(15 15 20 / 0.14);
@@ -93,6 +96,9 @@
   --shadow-focus: 0 0 0 3px var(--color-accent-ring);
   --color-panel-tint: #161c24;
   --color-scrim: rgb(0 0 0 / 0.55);
+  --color-media-chip-bg: rgb(0 0 0 / 0.55);
+  --color-media-chip-bg-hover: rgb(0 0 0 / 0.75);
+  --color-on-media-chip: #ffffff;
   --color-topbar-fill: color-mix(in srgb, var(--color-bg) 90%, transparent);
   --glyph-mix-base: #16191f;
   --scrollbar-thumb: rgb(255 255 255 / 0.12);
@@ -2792,6 +2798,279 @@ textarea:hover {
   font-size: 11px;
   color: var(--color-ink-faint);
   font-variant-numeric: tabular-nums;
+}
+
+.shared-files-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-3);
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.shared-file-card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-2);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-1);
+}
+
+.shared-file-card.has-media {
+  width: 248px;
+}
+
+.shared-file-card.delivery-failed {
+  border-color: color-mix(in srgb, var(--color-danger) 52%, var(--color-border));
+}
+
+.shared-file-card.delivery-pending,
+.shared-file-card.delivery-sending {
+  border-color: color-mix(in srgb, var(--color-warning) 48%, var(--color-border));
+}
+
+.shared-file-media-wrap {
+  position: relative;
+  display: block;
+  line-height: 0;
+}
+
+.shared-file-media {
+  display: block;
+  width: 100%;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  line-height: 0;
+  background: var(--color-panel-tint);
+  cursor: zoom-in;
+}
+
+button.shared-file-media {
+  appearance: none;
+}
+
+.shared-file-media img,
+video.shared-file-media {
+  display: block;
+  width: 100%;
+  max-height: 220px;
+  object-fit: contain;
+  background: var(--color-surface);
+}
+
+video.shared-file-media {
+  cursor: default;
+}
+
+.shared-file-expand {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-2);
+  background: var(--color-media-chip-bg);
+  color: var(--color-on-media-chip);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.shared-file-media-wrap:hover .shared-file-expand,
+.shared-file-expand:focus-visible {
+  opacity: 1;
+}
+
+.shared-file-expand svg {
+  width: 15px;
+  height: 15px;
+}
+
+.shared-file-expand:hover {
+  background: var(--color-media-chip-bg-hover);
+}
+
+.shared-file-audio {
+  width: 240px;
+  max-width: 100%;
+  padding: var(--space-2) var(--space-2) 0;
+}
+
+.shared-file-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  min-width: 0;
+}
+
+.shared-file-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--color-ink-faint);
+}
+
+.shared-file-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.shared-file-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.shared-file-name {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--color-ink);
+  text-decoration: none;
+}
+
+.shared-file-name:hover {
+  color: var(--color-accent);
+}
+
+.shared-file-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--color-ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.shared-file-state {
+  font-style: normal;
+  text-transform: lowercase;
+}
+
+.shared-file-state.state-failed {
+  color: var(--color-danger);
+}
+
+.shared-file-state.state-pending,
+.shared-file-state.state-sending {
+  color: var(--color-warning);
+}
+
+.shared-file-download {
+  margin-left: auto;
+  display: inline-flex;
+  flex: none;
+  padding: 4px;
+  border-radius: var(--radius-1, 6px);
+  color: var(--color-ink-faint);
+}
+
+.shared-file-download:hover {
+  color: var(--color-accent);
+  background: var(--color-surface-muted);
+}
+
+.shared-file-download svg {
+  width: 16px;
+  height: 16px;
+}
+
+.lightbox {
+  width: min(94vw, 1100px);
+  max-width: 94vw;
+  max-height: 92vh;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-2);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  box-shadow: var(--shadow-2);
+  overflow: hidden;
+}
+
+.lightbox::backdrop {
+  background: var(--color-scrim);
+  backdrop-filter: blur(3px);
+}
+
+.lightbox__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.lightbox__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+
+.lightbox__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.lightbox__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-2);
+  background: transparent;
+  color: var(--color-ink-faint);
+  cursor: pointer;
+}
+
+.lightbox__btn:hover {
+  color: var(--color-accent);
+  background: var(--color-surface-muted);
+}
+
+.lightbox__btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.lightbox__stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-3);
+  max-height: calc(92vh - 49px);
+  background: var(--color-panel-tint);
+}
+
+.lightbox__stage img,
+.lightbox__stage video {
+  display: block;
+  max-width: 100%;
+  max-height: calc(92vh - 49px - 2 * var(--space-3));
+  object-fit: contain;
+  background: var(--color-surface);
+  border-radius: var(--radius-1, 4px);
 }
 
 .artifact-card,

@@ -1066,6 +1066,15 @@ describe('API client error handling', () => {
     });
   });
 
+  it('lists deliveries from the hub route for repo-less (hub workspace) threads', async () => {
+    const fetcher = vi.fn(async () => Response.json({ deliveries: [] })) as unknown as typeof fetch;
+    const client = new WebApiClient(fetcher);
+
+    await client.pma.listArtifactDeliveries(null);
+
+    expect(fetcher).toHaveBeenCalledWith('/hub/artifacts/deliveries', expect.any(Object));
+  });
+
   it('maps workspace contextspace responses through pinned standard docs', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({

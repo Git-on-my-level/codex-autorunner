@@ -744,7 +744,7 @@ export class WebApiClient {
     listArtifactDeliveries: async (repoId?: string | null): Promise<ApiResult<ArtifactDelivery[]>> => {
       const route = repoId
         ? `/hub/filebox/${encodeURIComponent(repoId)}/artifacts/deliveries`
-        : '/api/artifacts/deliveries';
+        : '/hub/artifacts/deliveries';
       return mapResult(await this.getJson<JsonRecord>(route), (payload) =>
         asArray(payload.deliveries).map(mapArtifactDelivery)
       );

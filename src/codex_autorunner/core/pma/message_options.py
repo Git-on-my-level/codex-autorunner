@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from ..artifact_instructions import (
+    ArtifactDeliveryCommands,
+    ArtifactDeliveryContext,
+    render_agent_artifact_instructions,
+)
 from ..car_context import (
     build_car_context_bundle,
     build_car_context_capsule,
@@ -12,6 +18,7 @@ from ..car_context import (
 )
 from ..context_capsule_planner import plan_context_capsules_for_prompt
 from ..context_capsules import ContextCapsuleRenderPlan
+from ..filebox import inbox_dir
 from ..managed_thread_kinds import infer_managed_thread_chat_kind
 from ..orchestration.context_capsule_ledger import SQLiteContextCapsuleLedger
 from ..orchestration.sqlite import open_orchestration_sqlite
@@ -74,6 +81,53 @@ class ManagedThreadMessageOptions:
     delivery_payload: dict[str, Any]
 
 
+WEB_ARTIFACT_SURFACE = "web"
+
+
+def web_artifact_conversation_key(managed_thread_id: str) -> str:
+    """Conversation key used for web (managed-thread) artifact deliveries."""
+
+    return f"managed_thread:{managed_thread_id}"
+
+
+def _build_web_artifact_instructions(input: ManagedThreadMessageInput) -> str:
+    workspace_root = input.runtime_cwd or _normalize_optional_text(
+        input.thread.get("workspace_root")
+    )
+    workspace_scope = f"repo:{workspace_root}" if workspace_root else None
+    conversation_key = web_artifact_conversation_key(input.managed_thread_id)
+    # Pin --root to the thread's workspace root so the delivery journal the agent
+    # writes to is exactly the one the web post-turn drain reads. Without this the
+    # CLI resolves the journal via find_repo_root(cwd), which can diverge from the
+    # thread workspace_root (e.g. a hub-root thread whose agent runs in a nested
+    # repo), leaving deliveries stuck pending.
+    root_flag = f" --root {shlex.quote(str(workspace_root))}" if workspace_root else ""
+    explicit_send = (
+        f"car artifacts send <file>{root_flag} --to explicit "
+        f"--surface {WEB_ARTIFACT_SURFACE} --conversation {conversation_key}"
+    )
+    list_deliveries = f"car artifacts list{root_flag}"
+    upload_inbox: Path | None = None
+    if workspace_root is not None:
+        upload_inbox = inbox_dir(Path(workspace_root))
+    return render_agent_artifact_instructions(
+        ArtifactDeliveryContext(
+            surface=WEB_ARTIFACT_SURFACE,
+            conversation_key=conversation_key,
+            workspace_scope=workspace_scope,
+            scope_label="this web chat thread",
+            user_upload_inbox=upload_inbox,
+            extra_agent_lines=(
+                "Delivered files appear as downloadable attachments in this web chat.",
+            ),
+        ),
+        commands=ArtifactDeliveryCommands(
+            send_current=explicit_send,
+            list_deliveries=list_deliveries,
+        ),
+    )
+
+
 def resolve_managed_thread_message_options(
     input: ManagedThreadMessageInput,
 ) -> ManagedThreadMessageOptions:
@@ -96,6 +150,12 @@ def resolve_managed_thread_message_options(
             if message.strip()
             else attachment_context.prompt_text
         )
+    artifact_instructions = _build_web_artifact_instructions(input)
+    execution_message = (
+        f"{execution_message}\n\n{artifact_instructions}"
+        if execution_message.strip()
+        else artifact_instructions
+    )
     model = _normalize_optional_text(input.model) or input.defaults.get("model")
     reasoning = _normalize_optional_text(input.reasoning) or input.defaults.get(
         "reasoning"
@@ -178,5 +238,7 @@ def resolve_managed_thread_message_options(
 __all__ = [
     "ManagedThreadMessageInput",
     "ManagedThreadMessageOptions",
+    "WEB_ARTIFACT_SURFACE",
     "resolve_managed_thread_message_options",
+    "web_artifact_conversation_key",
 ]

@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -6,9 +8,13 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.core import filebox
+from codex_autorunner.core.artifact_delivery import ArtifactDeliveryService
 from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.manifest import load_manifest, save_manifest
 from codex_autorunner.server import create_hub_app
+from codex_autorunner.surfaces.web.services.web_artifact_delivery import (
+    drain_web_artifact_deliveries,
+)
 
 pytestmark = pytest.mark.slow
 
@@ -166,3 +172,104 @@ def test_filebox_invalid_box_parity_between_repo_and_hub(_filebox_env) -> None:
     assert hub_resp.status_code == 400
     assert repo_resp.json() == {"detail": "Invalid box"}
     assert hub_resp.json() == {"detail": "Invalid box"}
+
+
+def _enqueue_web_delivery(
+    repo_root: Path, *, filename: str, conversation_key: str
+) -> str:
+    source = repo_root / filename
+    source.write_bytes(b"<svg/>" if filename.endswith(".svg") else b"binarydata")
+    service = ArtifactDeliveryService(repo_root)
+    intent = service.enqueue_file(
+        source,
+        target_surface="web",
+        target_conversation_key=conversation_key,
+        workspace_scope=f"repo:{repo_root}",
+    )
+    return intent.delivery_id
+
+
+def test_artifact_delivery_inline_disposition_allows_safe_image(_filebox_env) -> None:
+    env = _filebox_env
+    delivery_id = _enqueue_web_delivery(
+        env.repo_root, filename="preview.png", conversation_key="managed_thread:disp"
+    )
+
+    resp = env.client.get(
+        f"/hub/filebox/{env.repo_id}/artifacts/deliveries/{delivery_id}/download",
+        params={"disposition": "inline"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.headers["Content-Disposition"].startswith("inline;")
+    assert resp.headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_artifact_delivery_inline_disposition_forces_attachment_for_svg(
+    _filebox_env,
+) -> None:
+    env = _filebox_env
+    delivery_id = _enqueue_web_delivery(
+        env.repo_root, filename="payload.svg", conversation_key="managed_thread:disp"
+    )
+
+    resp = env.client.get(
+        f"/hub/filebox/{env.repo_id}/artifacts/deliveries/{delivery_id}/download",
+        params={"disposition": "inline"},
+    )
+
+    assert resp.status_code == 200
+    # Active markup must never be served inline from the hub origin (XSS guard).
+    assert resp.headers["Content-Disposition"].startswith("attachment;")
+    assert resp.headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_hub_artifact_deliveries_listing_for_repoless_thread(_filebox_env) -> None:
+    env = _filebox_env
+    # Hub-workspace deliveries resolve from the hub engine root, not a worktree.
+    delivery_id = _enqueue_web_delivery(
+        env.hub_root, filename="hublist.png", conversation_key="managed_thread:hub"
+    )
+
+    resp = env.client.get("/hub/artifacts/deliveries", params={"surface": "web"})
+
+    assert resp.status_code == 200
+    deliveries = resp.json()["deliveries"]
+    match = next(d for d in deliveries if d["delivery_id"] == delivery_id)
+    # Download URL must point at the hub route, not the unmounted /api route.
+    assert "/hub/artifacts/deliveries/" in match["download_url"]
+    assert match["download_url"].endswith("/download")
+
+    dl = env.client.get(match["download_url"], params={"disposition": "inline"})
+    assert dl.status_code == 200
+    assert dl.headers["Content-Disposition"].startswith("inline;")
+
+
+def test_drain_web_artifact_deliveries_marks_pending_sent(_filebox_env) -> None:
+    env = _filebox_env
+    conversation_key = "managed_thread:draintest"
+    delivery_id = _enqueue_web_delivery(
+        env.repo_root, filename="drained.bin", conversation_key=conversation_key
+    )
+    service = ArtifactDeliveryService(env.repo_root)
+    pending = service.list_deliveries(
+        states=("pending",),
+        target_surface="web",
+        target_conversation_key=conversation_key,
+    )
+    assert any(intent.delivery_id == delivery_id for intent in pending)
+
+    asyncio.run(
+        drain_web_artifact_deliveries(
+            workspace_root=env.repo_root,
+            managed_thread_id="draintest",
+            logger=logging.getLogger("test.web_artifact_delivery"),
+        )
+    )
+
+    sent = service.list_deliveries(
+        states=("sent",),
+        target_surface="web",
+        target_conversation_key=conversation_key,
+    )
+    assert any(intent.delivery_id == delivery_id for intent in sent)

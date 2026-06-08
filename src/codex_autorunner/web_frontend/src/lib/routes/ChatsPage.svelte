@@ -1182,6 +1182,19 @@
     if (fileDrawerOpen) void refreshChatFileBox({ quiet: true });
   });
 
+  // When a turn finishes, the backend may have drained newly delivered artifacts
+  // for this thread. Refresh so they surface in the transcript without requiring
+  // a manual chat switch or file refresh.
+  let previousRunActive = false;
+  $effect(() => {
+    const active = runActive;
+    const chat = activeChat;
+    if (previousRunActive && !active && chat) {
+      void refreshArtifactDeliveries(chat.repoId ?? null, undefined, { quiet: true });
+    }
+    previousRunActive = active;
+  });
+
   onDestroy(() => {
     removeDocumentChatPointerCapture?.();
     pageController.destroy();
@@ -1723,9 +1736,18 @@
     deliveries: ArtifactDelivery[]
   ): ArtifactDelivery[] {
     if (!chat) return [];
-    const ref = surfaceRefFromThreadRaw(chat.raw as Record<string, unknown>);
+    // Native web/PMA threads have no surface_urn (only Discord/Telegram do), so
+    // fall back to a web surface keyed on the managed-thread id. This matches
+    // deliveries targeted at managed_thread:{id} by the web outbox drain.
+    const ref =
+      surfaceRefFromThreadRaw(chat.raw as Record<string, unknown>) ??
+      (chat.id ? { kind: 'web', key: chat.id } : null);
     if (!ref) return [];
-    const targetKeys = new Set([ref.key, `${ref.kind}:${ref.key}`].map((value) => value.toLowerCase()));
+    const targetKeys = new Set(
+      [ref.key, `${ref.kind}:${ref.key}`, `managed_thread:${ref.key}`].map((value) =>
+        value.toLowerCase()
+      )
+    );
     const surface = ref.kind.toLowerCase();
     return deliveries.filter((delivery) => {
       const deliverySurface = delivery.targetSurface?.toLowerCase() ?? '';
