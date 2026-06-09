@@ -843,6 +843,47 @@ async def test_collect_output_does_not_start_grace_on_user_completion(
 
 
 @pytest.mark.anyio
+async def test_collect_output_does_not_start_grace_on_roleless_prompt_echo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _echo_then_assistant_completion():
+        yield SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"u1"},'
+            '"parts":[{"type":"text","text":"User prompt"}]}',
+        )
+        for _ in range(10):
+            await asyncio.sleep(0.002)
+            yield SSEEvent(
+                event="session.status",
+                data='{"sessionID":"s1","status":{"type":"busy"}}',
+            )
+        yield SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"a1","role":"assistant"},'
+            '"parts":[{"type":"text","text":"Hello"}]}',
+        )
+        yield SSEEvent(event="session.idle", data='{"sessionID":"s1"}')
+
+    monkeypatch.setattr(
+        opencode_stream_lifecycle,
+        "_OPENCODE_POST_COMPLETION_GRACE_SECONDS",
+        0.01,
+    )
+
+    output = await collect_opencode_output_from_events(
+        None,
+        session_id="s1",
+        prompt="User prompt",
+        event_stream_factory=lambda: _echo_then_assistant_completion(),
+        stall_timeout_seconds=30.0,
+    )
+
+    assert output.text == "Hello"
+    assert output.error is None
+
+
+@pytest.mark.anyio
 async def test_collect_output_ignores_completed_text_when_role_missing() -> None:
     events = [
         SSEEvent(
@@ -1435,6 +1476,50 @@ async def test_stream_lifecycle_preserves_idle_before_post_stall_deadline(
     assert decision.action == opencode_stream_lifecycle.LifecycleAction.BREAK
     assert decision.error is None
     assert decision.should_flush_if_pending is False
+
+
+@pytest.mark.anyio
+async def test_role_missing_terminal_completion_uses_grace_not_stall(
+    monkeypatch,
+) -> None:
+    async def _status_fetcher():
+        return {"status": {"type": "busy"}}
+
+    async def _event_stream():
+        yield SSEEvent(
+            event="message.completed",
+            data=json.dumps(
+                {
+                    "sessionID": "s1",
+                    "info": {"id": "m1"},
+                    "finish": "stop",
+                    "parts": [{"type": "text", "text": "final answer"}],
+                }
+            ),
+        )
+        while True:
+            await asyncio.sleep(3600)
+            yield SSEEvent(event="keepalive", data="{}")
+
+    monkeypatch.setattr(
+        opencode_stream_lifecycle,
+        "_OPENCODE_POST_COMPLETION_GRACE_SECONDS",
+        0.001,
+    )
+
+    output = await collect_opencode_output_from_events(
+        None,
+        session_id="s1",
+        event_stream_factory=lambda: _event_stream(),
+        session_fetcher=_status_fetcher,
+        stall_timeout_seconds=1.0,
+        first_event_timeout_seconds=None,
+    )
+
+    assert output.text == "final answer"
+    assert output.error is None
+    assert output.output_source == "event_stream"
+    assert output.terminal_signal == "message.completed"
 
 
 @pytest.mark.anyio
