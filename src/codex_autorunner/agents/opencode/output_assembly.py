@@ -277,7 +277,7 @@ class OutputAssembler:
 
     def on_primary_assistant_completion(
         self, payload: Any, message_role: Optional[str]
-    ) -> None:
+    ) -> bool:
         """Record primary-session assistant completion for final-output selection.
 
         Also checks whether the completion phase is ``commentary`` — commentary
@@ -286,14 +286,14 @@ class OutputAssembler:
         message_result = parse_message_response(payload)
         if message_role != "assistant":
             if message_role is not None:
-                return
+                return False
             if not message_result.text or prompt_echo_matches(
                 message_result.text,
                 prompt=self._prompt,
             ):
-                return
+                return False
         if not message_completion_is_turn_terminal(payload):
-            return
+            return False
         msg_id = extract_event_message_id(payload)
         if msg_id:
             self._last_terminal_assistant_message_id = msg_id
@@ -308,6 +308,7 @@ class OutputAssembler:
                     scope=msg_id or _NO_MESSAGE_SCOPE,
                 )
             )
+        return True
 
     async def on_text_delta(
         self,

@@ -720,17 +720,19 @@ async def collect_opencode_output_from_events(
                     payload, is_primary_session=is_primary_session
                 )
             if event.event == "message.completed" and is_primary_session:
-                assembler.on_primary_assistant_completion(payload, message_role)
+                assistant_completion_accepted = (
+                    assembler.on_primary_assistant_completion(payload, message_role)
+                )
                 completion_is_terminal = message_completion_is_turn_terminal(payload)
                 assistant_compatible_completion = message_role in {"assistant", None}
-                if assistant_compatible_completion and completion_is_terminal:
+                if assistant_completion_accepted and completion_is_terminal:
                     terminal_assistant_completion_seen = True
                 elif (
                     assistant_compatible_completion
                     and parse_message_response(payload).text
                 ):
                     nonterminal_assistant_checkpoint_seen = True
-                if assistant_compatible_completion and completion_is_terminal:
+                if assistant_completion_accepted and completion_is_terminal:
                     lifecycle.on_primary_completion()
             if event.event == "session.idle" or (
                 event.event == "session.status"

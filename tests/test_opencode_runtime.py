@@ -843,6 +843,47 @@ async def test_collect_output_does_not_start_grace_on_user_completion(
 
 
 @pytest.mark.anyio
+async def test_collect_output_does_not_start_grace_on_roleless_prompt_echo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _echo_then_assistant_completion():
+        yield SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"u1"},'
+            '"parts":[{"type":"text","text":"User prompt"}]}',
+        )
+        for _ in range(10):
+            await asyncio.sleep(0.002)
+            yield SSEEvent(
+                event="session.status",
+                data='{"sessionID":"s1","status":{"type":"busy"}}',
+            )
+        yield SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"a1","role":"assistant"},'
+            '"parts":[{"type":"text","text":"Hello"}]}',
+        )
+        yield SSEEvent(event="session.idle", data='{"sessionID":"s1"}')
+
+    monkeypatch.setattr(
+        opencode_stream_lifecycle,
+        "_OPENCODE_POST_COMPLETION_GRACE_SECONDS",
+        0.01,
+    )
+
+    output = await collect_opencode_output_from_events(
+        None,
+        session_id="s1",
+        prompt="User prompt",
+        event_stream_factory=lambda: _echo_then_assistant_completion(),
+        stall_timeout_seconds=30.0,
+    )
+
+    assert output.text == "Hello"
+    assert output.error is None
+
+
+@pytest.mark.anyio
 async def test_collect_output_ignores_completed_text_when_role_missing() -> None:
     events = [
         SSEEvent(
