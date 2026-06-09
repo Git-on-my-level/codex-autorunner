@@ -258,6 +258,17 @@ describe('/chats page', () => {
     expect(body).toContain('Attach files');
   });
 
+  it('wires chat-pane file drag and drop into pending attachments', () => {
+    const pageSource = chatDetailPageSource();
+
+    expect(pageSource).toContain('ondragenter={handleChatDragEnter}');
+    expect(pageSource).toContain('ondragover={handleChatDragOver}');
+    expect(pageSource).toContain('ondragleave={handleChatDragLeave}');
+    expect(pageSource).toContain('ondrop={handleChatDrop}');
+    expect(pageSource).toContain('Drop to attach');
+    expect(pageSource).toContain('if (files?.length) addFiles(files);');
+  });
+
   it('does not re-apply chat search locally after requesting a backend search window', () => {
     const pageSource = chatDetailPageSource();
     const listReadModelSource = chatDetailListReadModelSource();

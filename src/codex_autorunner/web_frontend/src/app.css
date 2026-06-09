@@ -1753,9 +1753,72 @@ a.scope-chip-label:hover {
 .active-chat {
   display: flex;
   flex-direction: column;
+  position: relative;
   min-width: 0;
   min-height: 0;
   padding: var(--space-3) var(--space-4);
+}
+
+.active-chat.drop-active {
+  border-color: color-mix(in srgb, var(--color-accent) 54%, var(--color-border));
+  box-shadow: 0 0 0 3px var(--color-accent-ring);
+}
+
+.chat-drop-indicator {
+  position: absolute;
+  inset: var(--space-3);
+  z-index: 9;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  border: 1px dashed color-mix(in srgb, var(--color-accent) 62%, var(--color-border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.chat-drop-card {
+  display: grid;
+  gap: 2px;
+  justify-items: center;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-3);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.chat-drop-indicator strong {
+  color: var(--color-ink);
+  font-size: var(--font-size-2);
+  font-weight: 760;
+}
+
+.chat-drop-indicator em {
+  color: var(--color-ink-muted);
+  font-size: var(--font-size-0);
+  font-style: normal;
+}
+
+.chat-drop-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: var(--space-2);
+  border-radius: 999px;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.chat-drop-icon svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.9;
 }
 
 /* Two-column grid at every width: title/scope/subtitle in column 1. Tools stay
