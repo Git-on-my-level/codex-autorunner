@@ -1097,6 +1097,11 @@
   });
 
   $effect(() => {
+    activeChatId;
+    resetChatDragState();
+  });
+
+  $effect(() => {
     // Once a draft's first send mints the managed thread, the backend row appears
     // in `persistedChats`. Drop the now-stale local draft record so the chat stops
     // being treated as an unsent draft.
@@ -2513,7 +2518,7 @@
   }
 
   function handleChatDragLeave(event: DragEvent): void {
-    if (!activeChat || !dragHasFiles(event)) return;
+    if (chatDragDepth === 0) return;
     event.preventDefault();
     chatDragDepth = Math.max(0, chatDragDepth - 1);
     if (chatDragDepth === 0) chatDropFileCount = 0;
