@@ -428,6 +428,8 @@
   let slashSelectedIndex = $state(0);
   let composerFocused = $state(false);
   let composerEditVersion = 0;
+  let chatDragDepth = $state(0);
+  let chatDropFileCount = $state(0);
   let pendingInitialDraftCreate = false;
   let pendingPointerChatId: string | null = null;
   let removeDocumentChatPointerCapture: (() => void) | null = null;
@@ -814,6 +816,7 @@
   const canInterruptWithDraft = $derived(chatDetailDisplay.canInterruptWithDraft);
   const canStopRun = $derived(chatDetailDisplay.canStopRun);
   const composerWillQueue = $derived(chatDetailDisplay.composerWillQueue);
+  const chatDropActive = $derived(chatDragDepth > 0 && Boolean(activeChat));
   const slashSuggestions = $derived<SlashCommandSuggestion[]>(
     buildSlashCommandSuggestions(draft, {
       hasActiveChat: Boolean(activeChat),
@@ -2475,6 +2478,56 @@
     markComposerEdited();
   }
 
+  function dragHasFiles(event: DragEvent): boolean {
+    const transfer = event.dataTransfer;
+    if (!transfer) return false;
+    if (Array.from(transfer.items ?? []).some((item) => item.kind === 'file')) return true;
+    return Array.from(transfer.types ?? []).includes('Files');
+  }
+
+  function dragFileCount(event: DragEvent): number {
+    const files = event.dataTransfer?.files;
+    if (files?.length) return files.length;
+    const itemCount = Array.from(event.dataTransfer?.items ?? []).filter((item) => item.kind === 'file').length;
+    return itemCount || 0;
+  }
+
+  function resetChatDragState(): void {
+    chatDragDepth = 0;
+    chatDropFileCount = 0;
+  }
+
+  function handleChatDragEnter(event: DragEvent): void {
+    if (!activeChat || !dragHasFiles(event)) return;
+    event.preventDefault();
+    chatDragDepth += 1;
+    chatDropFileCount = dragFileCount(event);
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+  }
+
+  function handleChatDragOver(event: DragEvent): void {
+    if (!activeChat || !dragHasFiles(event)) return;
+    event.preventDefault();
+    chatDropFileCount = dragFileCount(event) || chatDropFileCount;
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+  }
+
+  function handleChatDragLeave(event: DragEvent): void {
+    if (!activeChat || !dragHasFiles(event)) return;
+    event.preventDefault();
+    chatDragDepth = Math.max(0, chatDragDepth - 1);
+    if (chatDragDepth === 0) chatDropFileCount = 0;
+  }
+
+  function handleChatDrop(event: DragEvent): void {
+    if (!activeChat || !dragHasFiles(event)) return;
+    event.preventDefault();
+    const files = event.dataTransfer?.files;
+    if (files?.length) addFiles(files);
+    resetChatDragState();
+    composerTextarea?.focus();
+  }
+
   function openLinkDialog(): void {
     linkDraft = '';
     linkDialogOpen = true;
@@ -3025,7 +3078,31 @@
       </span>
     </div>
   {/snippet}
-  <div class="active-chat">
+  <div
+    class="active-chat"
+    class:drop-active={chatDropActive}
+    role="region"
+    aria-label="Chat pane"
+    ondragenter={handleChatDragEnter}
+    ondragover={handleChatDragOver}
+    ondragleave={handleChatDragLeave}
+    ondrop={handleChatDrop}
+  >
+    {#if chatDropActive}
+      <div class="chat-drop-indicator" role="status" aria-live="polite">
+        <span class="chat-drop-card">
+          <span class="chat-drop-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <path d="M12 3v12" />
+              <path d="m7 10 5 5 5-5" />
+              <path d="M5 19h14" />
+            </svg>
+          </span>
+          <strong>Drop to attach</strong>
+          <em>{chatDropFileCount > 1 ? `${chatDropFileCount} files will be added` : 'File will be added to this message'}</em>
+        </span>
+      </div>
+    {/if}
     <div class="chat-header">
       <div class="chat-header-copy">
         {#if activeChat && titleEditorOpen}
@@ -3507,7 +3584,10 @@
         type="file"
         multiple
         aria-label="Upload file attachment"
-        onchange={(event) => addFiles(event.currentTarget.files ?? [])}
+        onchange={(event) => {
+          addFiles(event.currentTarget.files ?? []);
+          event.currentTarget.value = '';
+        }}
       />
       <input
         bind:this={imageInput}
@@ -3516,7 +3596,10 @@
         accept="image/*"
         multiple
         aria-label="Upload image attachment"
-        onchange={(event) => addFiles(event.currentTarget.files ?? [], 'image')}
+        onchange={(event) => {
+          addFiles(event.currentTarget.files ?? [], 'image');
+          event.currentTarget.value = '';
+        }}
       />
       <div class="attachment-actions" aria-label="Attachment controls">
         <button class="icon-button attachment-button file" type="button" aria-label="Attach files" title="Attach files" onclick={() => fileInput?.click()}>
