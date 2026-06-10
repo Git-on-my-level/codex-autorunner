@@ -2,8 +2,16 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Iterable, Optional
+from urllib.parse import quote
 
+from ..artifact_delivery import (
+    ArtifactDeliveryService,
+    DeliveryIntent,
+    artifact_delivery_db_path,
+    delivery_filename,
+)
 from ..ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
@@ -1450,6 +1458,105 @@ def _append_delivery_state_items(
     return sequence
 
 
+def _web_artifact_download_url(
+    *,
+    delivery_id: str,
+    repo_id: Optional[str],
+) -> str:
+    encoded_delivery_id = quote(delivery_id, safe="")
+    if repo_id:
+        return (
+            f"/hub/filebox/{quote(repo_id, safe='')}/artifacts/deliveries/"
+            f"{encoded_delivery_id}/download"
+        )
+    return f"/hub/artifacts/deliveries/{encoded_delivery_id}/download"
+
+
+def _web_artifact_delivery_payload(
+    *,
+    intent: DeliveryIntent,
+    artifact: Any,
+    repo_id: Optional[str],
+) -> dict[str, Any]:
+    filename = delivery_filename(intent, artifact)
+    url = _web_artifact_download_url(delivery_id=intent.delivery_id, repo_id=repo_id)
+    payload: dict[str, Any] = {
+        "artifact_kind": "artifact",
+        "kind": "attachment",
+        "id": intent.delivery_id,
+        "artifact_id": intent.artifact_id,
+        "delivery_id": intent.delivery_id,
+        "name": filename,
+        "title": filename,
+        "url": url,
+        "href": url,
+        "target_surface": intent.target_surface,
+        "target_conversation_key": intent.target_conversation_key,
+        "state": intent.state,
+        "created_at": intent.sent_at or intent.updated_at or intent.created_at,
+        "updated_at": intent.updated_at,
+        "sent_at": intent.sent_at,
+        "metadata": dict(intent.metadata_json),
+        "receipt": dict(intent.receipt_json or {}),
+    }
+    if artifact is not None:
+        payload.update(
+            {
+                "filename": artifact.filename,
+                "mime_type": artifact.mime_type,
+                "size": artifact.size,
+                "checksum_sha256": artifact.checksum_sha256,
+            }
+        )
+    return payload
+
+
+def _append_web_artifact_delivery_items(
+    items: list[ManagedThreadTimelineItem],
+    *,
+    thread: dict[str, Any],
+    managed_thread_id: str,
+    sequence: int,
+) -> int:
+    workspace_root = _normalize_optional_text(thread.get("workspace_root"))
+    if workspace_root is None:
+        return sequence
+    workspace_path = Path(workspace_root)
+    if not artifact_delivery_db_path(workspace_path).exists():
+        return sequence
+    service = ArtifactDeliveryService(workspace_path)
+    conversation_key = f"managed_thread:{managed_thread_id}"
+    repo_id = _normalize_optional_text(thread.get("repo_id"))
+    for intent in service.list_deliveries(
+        states=("sent",),
+        target_surface="web",
+        target_conversation_key=conversation_key,
+    ):
+        artifact = service.store.get_artifact(intent.artifact_id)
+        item_id = f"artifact_delivery:{intent.delivery_id}"
+        timestamp = intent.sent_at or intent.updated_at or intent.created_at
+        items.append(
+            ManagedThreadTimelineItem(
+                item_id=item_id,
+                kind="artifact",
+                order_key=_order_key(timestamp, sequence, item_id),
+                timestamp=timestamp,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=None,
+                status=intent.state,
+                identity=_timeline_identity(item_id),
+                provenance=_timeline_provenance(),
+                payload=_web_artifact_delivery_payload(
+                    intent=intent,
+                    artifact=artifact,
+                    repo_id=repo_id,
+                ),
+            )
+        )
+        sequence += 1
+    return sequence
+
+
 def _decode_action_payload(action: dict[str, Any]) -> dict[str, Any]:
     payload_json = action.get("payload_json")
     if not isinstance(payload_json, str) or not payload_json.strip():
@@ -1679,6 +1786,12 @@ def build_managed_thread_timeline(
             sequence=sequence,
         )
         action_index += 1
+    sequence = _append_web_artifact_delivery_items(
+        items,
+        thread=thread,
+        managed_thread_id=normalized_thread_id,
+        sequence=sequence,
+    )
     sequence = _append_delivery_state_items(
         items,
         hub_root=hub_root,

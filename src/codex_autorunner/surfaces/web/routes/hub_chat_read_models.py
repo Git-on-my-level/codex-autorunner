@@ -8,17 +8,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import TYPE_CHECKING, Annotated, Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
+from ....core.managed_thread_store import ManagedThreadStore
 from ..read_model_contracts import dump_read_model_contract
 from ..services.chat_read_models import (
     ChatIndexContractFilter,
     ChatReadModelService,
     hub_group_dict_to_contract,
 )
+from ..services.web_artifact_delivery import drain_web_artifact_deliveries_for_thread
 from .shared import SSE_HEADERS
 
 if TYPE_CHECKING:
@@ -196,13 +199,31 @@ def build_hub_chat_read_model_router(context: HubAppContext) -> APIRouter:
         )
 
     @router.get("/hub/read-models/chats/{chat_id}")
-    def chat_read_model_detail(
+    async def chat_read_model_detail(
         chat_id: str,
         timeline_limit: Annotated[int, Query(ge=1, le=200)] = 50,
     ):
         try:
+            thread_store = ManagedThreadStore.connect_readonly(
+                context.config.root,
+                durable=True,
+            )
+            thread = await asyncio.to_thread(thread_store.get_thread, chat_id)
+            try:
+                await drain_web_artifact_deliveries_for_thread(
+                    thread=thread,
+                    managed_thread_id=chat_id,
+                    logger=logging.getLogger("codex_autorunner.web_artifact_delivery"),
+                )
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Failed to drain web artifact deliveries before chat detail "
+                    "snapshot (managed_thread_id=%s)",
+                    chat_id,
+                )
             return dump_read_model_contract(
-                service.chat_detail_contract(
+                await asyncio.to_thread(
+                    service.chat_detail_contract,
                     chat_id,
                     timeline_limit=timeline_limit,
                 )

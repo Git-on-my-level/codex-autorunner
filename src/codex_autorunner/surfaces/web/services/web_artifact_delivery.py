@@ -27,6 +27,7 @@ from ....core.artifact_delivery import (
     ArtifactDeliveryService,
     ArtifactRecord,
     DeliveryIntent,
+    artifact_delivery_db_path,
 )
 from ....core.filebox import outbox_sent_dir
 from ....core.pma.message_options import (
@@ -48,6 +49,11 @@ class _WebArtifactTransport:
             "surface": WEB_ARTIFACT_SURFACE,
             "delivery_id": intent.delivery_id,
             "artifact_id": artifact.artifact_id,
+            "visibility": "managed_thread_transcript",
+            "transcript_item_id": f"artifact_delivery:{intent.delivery_id}",
+            "filename": artifact.filename,
+            "mime_type": artifact.mime_type,
+            "size": artifact.size,
         }
 
 
@@ -78,4 +84,45 @@ async def drain_web_artifact_deliveries(
     )
 
 
-__all__ = ["drain_web_artifact_deliveries"]
+def _thread_workspace_root(thread: Any) -> str | None:
+    if isinstance(thread, dict):
+        value = thread.get("workspace_root")
+    else:
+        value = getattr(thread, "workspace_root", None)
+    text = str(value or "").strip()
+    return text or None
+
+
+async def drain_web_artifact_deliveries_for_thread(
+    *,
+    thread: Any,
+    managed_thread_id: str,
+    logger: logging.Logger,
+) -> bool:
+    """Best-effort drain for a managed thread row with a workspace root."""
+
+    workspace_root_text = _thread_workspace_root(thread)
+    if not workspace_root_text:
+        return False
+    workspace_root = Path(workspace_root_text)
+    if not artifact_delivery_db_path(workspace_root).exists():
+        return False
+    conversation_key = web_artifact_conversation_key(managed_thread_id)
+    service = ArtifactDeliveryService(workspace_root)
+    pending_before = service.list_deliveries(
+        states=("pending",),
+        target_surface=WEB_ARTIFACT_SURFACE,
+        target_conversation_key=conversation_key,
+    )
+    await drain_web_artifact_deliveries(
+        workspace_root=workspace_root,
+        managed_thread_id=managed_thread_id,
+        logger=logger,
+    )
+    return bool(pending_before)
+
+
+__all__ = [
+    "drain_web_artifact_deliveries",
+    "drain_web_artifact_deliveries_for_thread",
+]

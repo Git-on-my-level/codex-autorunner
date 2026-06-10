@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from codex_autorunner.core.artifact_delivery import ArtifactDeliveryService
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import (
     OrchestrationBindingStore,
@@ -1680,6 +1681,34 @@ def test_hub_read_models_chat_detail_contract_snapshot(hub_env) -> None:
     assert body["timeline"][0]["managedTurnId"] == running["managed_turn_id"]
     assert body["timeline"][0]["section"] == "user_message"
     assert body["timeline"][0]["sectionOrder"] == 10
+
+
+def test_hub_read_models_chat_detail_drains_web_artifacts(hub_env) -> None:
+    store = ManagedThreadStore(hub_env.hub_root, durable=True)
+    thread = store.create_thread("codex", hub_env.repo_root, repo_id=hub_env.repo_id)
+    thread_id = str(thread["managed_thread_id"])
+    source = hub_env.repo_root / "read-model-artifact.txt"
+    source.write_text("artifact\n", encoding="utf-8")
+    service = ArtifactDeliveryService(hub_env.repo_root)
+    intent = service.enqueue_file(
+        source,
+        target_surface="web",
+        target_conversation_key=f"managed_thread:{thread_id}",
+        workspace_scope=f"repo:{hub_env.repo_root}",
+    )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(f"/hub/read-models/chats/{thread_id}")
+
+    assert response.status_code == 200
+    sent = ArtifactDeliveryService(hub_env.repo_root).inspect(intent.delivery_id)
+    assert sent is not None
+    assert sent.state == "sent"
+    body = response.json()
+    assert any(
+        item["kind"] == "artifact" and item["itemId"].startswith("artifact_delivery:")
+        for item in body["timeline"]
+    )
 
 
 def test_hub_read_models_chat_detail_patch_stream_is_repairable(hub_env) -> None:

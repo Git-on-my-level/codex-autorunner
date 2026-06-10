@@ -190,6 +190,87 @@ def test_artifacts_diagnose_flags_legacy_hub_pending_file(tmp_path: Path) -> Non
     )
 
 
+def test_artifacts_diagnose_flags_stale_unclaimed_pending_delivery(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "pending.txt"
+    source.write_text("pending\n", encoding="utf-8")
+    service = ArtifactDeliveryService(tmp_path)
+    intent = service.enqueue_file(
+        source,
+        target_surface="web",
+        target_conversation_key="managed_thread:abc",
+    )
+    with sqlite3.connect(service.store.db_path) as conn:
+        conn.execute(
+            """
+            UPDATE delivery_intents
+               SET created_at = ?, updated_at = ?
+             WHERE delivery_id = ?
+            """,
+            (
+                "2000-01-01T00:00:00Z",
+                "2000-01-01T00:00:00Z",
+                intent.delivery_id,
+            ),
+        )
+
+    result = runner.invoke(
+        app,
+        [
+            "artifacts",
+            "diagnose",
+            "--root",
+            str(tmp_path),
+            "--stale-after-seconds",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    findings = json.loads(result.output)["findings"]
+    assert any(
+        finding["kind"] == "stale_unclaimed_pending_delivery"
+        and finding["delivery_id"] == intent.delivery_id
+        for finding in findings
+    )
+
+
+def test_artifacts_diagnose_flags_weak_web_sent_receipt(tmp_path: Path) -> None:
+    source = tmp_path / "sent.txt"
+    source.write_text("sent\n", encoding="utf-8")
+    service = ArtifactDeliveryService(tmp_path)
+    intent = service.enqueue_file(
+        source,
+        target_surface="web",
+        target_conversation_key="managed_thread:abc",
+    )
+    claimed = service.claim_next(
+        target_surface="web",
+        target_conversation_key="managed_thread:abc",
+    )
+    assert claimed is not None
+    service.mark_sending(intent.delivery_id, claim_token=claimed.claim_token)
+    service.mark_sent(
+        intent.delivery_id,
+        receipt={"surface": "web", "delivery_id": intent.delivery_id},
+        claim_token=claimed.claim_token,
+    )
+
+    result = runner.invoke(
+        app,
+        ["artifacts", "diagnose", "--root", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0, result.output
+    findings = json.loads(result.output)["findings"]
+    assert any(
+        finding["kind"] == "weak_web_sent_receipt"
+        and finding["delivery_id"] == intent.delivery_id
+        for finding in findings
+    )
+
+
 def test_artifacts_import_legacy_queues_scoped_delivery_records(tmp_path: Path) -> None:
     legacy = tmp_path / ".codex-autorunner" / "filebox" / "outbox" / "report.txt"
     legacy.parent.mkdir(parents=True)
