@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -222,6 +223,90 @@ def _legacy_pending(root: Path) -> list[dict[str, object]]:
     return findings
 
 
+def _parse_iso_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _age_seconds(value: str | None) -> float | None:
+    timestamp = _parse_iso_timestamp(value)
+    if timestamp is None:
+        return None
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - timestamp).total_seconds()
+
+
+def _stale_unclaimed_pending_finding(
+    *,
+    root: Path,
+    intent,
+    stale_after_seconds: int,
+) -> dict[str, object] | None:
+    if intent.state != "pending" or intent.claimed_at is not None:
+        return None
+    age = _age_seconds(intent.created_at)
+    if age is None or age < stale_after_seconds:
+        return None
+    return {
+        "kind": "stale_unclaimed_pending_delivery",
+        "root": str(root),
+        "delivery_id": intent.delivery_id,
+        "target_surface": intent.target_surface,
+        "target_conversation_key": intent.target_conversation_key,
+        "state": intent.state,
+        "created_at": intent.created_at,
+        "age_seconds": int(age),
+        "message": (
+            "Delivery is pending and has never been claimed by a delivery consumer."
+        ),
+    }
+
+
+def _weak_web_sent_receipt_finding(
+    *,
+    root: Path,
+    intent,
+    artifact,
+) -> dict[str, object] | None:
+    if intent.state != "sent" or intent.target_surface != "web":
+        return None
+    if artifact is None:
+        return {
+            "kind": "unprojectable_web_sent_delivery",
+            "root": str(root),
+            "delivery_id": intent.delivery_id,
+            "target_surface": intent.target_surface,
+            "target_conversation_key": intent.target_conversation_key,
+            "state": intent.state,
+            "message": (
+                "Web delivery is marked sent but its artifact record is missing, "
+                "so it cannot be projected into the transcript."
+            ),
+        }
+    receipt = intent.receipt_json if isinstance(intent.receipt_json, dict) else {}
+    if receipt.get("visibility") == "managed_thread_transcript" and receipt.get(
+        "transcript_item_id"
+    ):
+        return None
+    return {
+        "kind": "weak_web_sent_receipt",
+        "root": str(root),
+        "delivery_id": intent.delivery_id,
+        "target_surface": intent.target_surface,
+        "target_conversation_key": intent.target_conversation_key,
+        "state": intent.state,
+        "message": (
+            "Web delivery is marked sent without transcript visibility receipt "
+            "metadata."
+        ),
+    }
+
+
 def register_artifacts_commands(app: typer.Typer) -> None:
     @app.command("list")
     def list_deliveries(
@@ -399,6 +484,11 @@ def register_artifacts_commands(app: typer.Typer) -> None:
         conversation: Optional[str] = typer.Option(
             None, "--conversation", help="Current conversation key for mismatch checks"
         ),
+        stale_after_seconds: int = typer.Option(
+            60,
+            "--stale-after-seconds",
+            help="Age threshold for pending unclaimed delivery findings",
+        ),
     ) -> None:
         """Find stranded or mismatched artifact deliveries."""
         current_root = _root(root)
@@ -410,6 +500,13 @@ def register_artifacts_commands(app: typer.Typer) -> None:
                 continue
             service = ArtifactDeliveryService(candidate)
             for intent in service.list_deliveries(states=ACTIVE_DELIVERY_STATES):
+                stale_finding = _stale_unclaimed_pending_finding(
+                    root=candidate,
+                    intent=intent,
+                    stale_after_seconds=stale_after_seconds,
+                )
+                if stale_finding is not None:
+                    findings.append(stale_finding)
                 if surface and intent.target_surface != surface:
                     findings.append(
                         {
@@ -431,4 +528,14 @@ def register_artifacts_commands(app: typer.Typer) -> None:
                             ),
                         }
                     )
+            for intent in service.list_deliveries(
+                states=("sent",), target_surface="web"
+            ):
+                weak_receipt_finding = _weak_web_sent_receipt_finding(
+                    root=candidate,
+                    intent=intent,
+                    artifact=service.store.get_artifact(intent.artifact_id),
+                )
+                if weak_receipt_finding is not None:
+                    findings.append(weak_receipt_finding)
         _echo_json({"findings": findings})

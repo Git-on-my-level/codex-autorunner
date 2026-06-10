@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -24,6 +25,7 @@ from .....core.orchestration.runtime_thread_events import (
 from .....core.orchestration.turn_timeline import list_turn_timeline
 from ...services.pma import get_pma_request_context
 from ...services.pma.common import normalize_optional_text
+from ...services.web_artifact_delivery import drain_web_artifact_deliveries_for_thread
 from ..shared import SSE_HEADERS
 from .managed_thread_tail_serializers import (
     _canonical_turn_request_metadata,
@@ -738,6 +740,21 @@ async def _build_managed_thread_transcript_snapshot(
     runtime_projection_state: ProgressProjectionState | None = None,
 ) -> dict[str, Any]:
     context = get_pma_request_context(request)
+    thread = await asyncio.to_thread(
+        context.thread_store().get_thread, managed_thread_id
+    )
+    try:
+        await drain_web_artifact_deliveries_for_thread(
+            thread=thread,
+            managed_thread_id=managed_thread_id,
+            logger=logging.getLogger("codex_autorunner.web_artifact_delivery"),
+        )
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "Failed to drain web artifact deliveries before transcript snapshot "
+            "(managed_thread_id=%s)",
+            managed_thread_id,
+        )
     progress_snapshot = await _build_managed_thread_tail_snapshot(
         request=request,
         service=service,
@@ -948,6 +965,42 @@ def build_managed_thread_tail_routes(
                 await asyncio.sleep(_PERSISTED_TAIL_POLL_SECONDS)
                 if await request.is_disconnected():
                     return
+                artifact_delivery_changed = False
+                try:
+                    artifact_delivery_changed = (
+                        await drain_web_artifact_deliveries_for_thread(
+                            thread=thread_target,
+                            managed_thread_id=managed_thread_id,
+                            logger=logging.getLogger(
+                                "codex_autorunner.web_artifact_delivery"
+                            ),
+                        )
+                    )
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "Failed to drain web artifact deliveries during transcript "
+                        "stream (managed_thread_id=%s)",
+                        managed_thread_id,
+                    )
+                if artifact_delivery_changed:
+                    artifact_snapshot = await _build_managed_thread_transcript_snapshot(
+                        request=request,
+                        service=service,
+                        managed_thread_id=managed_thread_id,
+                        harness=harness,
+                        limit=min(limit, _TRANSCRIPT_STREAM_LIMIT),
+                        level=normalized_level,
+                        runtime_projection_state=runtime_projection_state,
+                    )
+                    artifact_id_line = (
+                        f"id: {last_event_id}\n" if last_event_id > 0 else ""
+                    )
+                    yield (
+                        "event: transcript.snapshot\n"
+                        f"{artifact_id_line}"
+                        "data: "
+                        f"{json.dumps(artifact_snapshot, ensure_ascii=True)}\n\n"
+                    )
                 refreshed = await _build_managed_thread_tail_snapshot(
                     request=request,
                     service=service,

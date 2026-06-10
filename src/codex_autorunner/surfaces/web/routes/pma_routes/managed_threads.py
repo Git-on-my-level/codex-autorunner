@@ -84,6 +84,7 @@ from ...services.pma.managed_thread_scope import (
     provision_managed_thread_workspace,
     resolve_managed_thread_create_resolution,
 )
+from ...services.web_artifact_delivery import drain_web_artifact_deliveries_for_thread
 from .hermes_supervisors import resolve_cached_hermes_supervisor
 
 _logger = logging.getLogger(__name__)
@@ -897,7 +898,7 @@ def build_managed_thread_crud_routes(
         }
 
     @router.get("/threads/{managed_thread_id}/timeline")
-    def get_managed_thread_timeline(
+    async def get_managed_thread_timeline(
         managed_thread_id: str,
         request: Request,
         limit: int = Query(
@@ -914,7 +915,21 @@ def build_managed_thread_crud_routes(
         context = get_pma_request_context(request)
         store = context.thread_store()
         try:
-            return build_managed_thread_timeline(
+            thread = await asyncio.to_thread(store.get_thread, managed_thread_id)
+            try:
+                await drain_web_artifact_deliveries_for_thread(
+                    thread=thread,
+                    managed_thread_id=managed_thread_id,
+                    logger=logging.getLogger("codex_autorunner.web_artifact_delivery"),
+                )
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Failed to drain web artifact deliveries before timeline snapshot "
+                    "(managed_thread_id=%s)",
+                    managed_thread_id,
+                )
+            return await asyncio.to_thread(
+                build_managed_thread_timeline,
                 context.hub_root,
                 thread_store=store,
                 managed_thread_id=managed_thread_id,

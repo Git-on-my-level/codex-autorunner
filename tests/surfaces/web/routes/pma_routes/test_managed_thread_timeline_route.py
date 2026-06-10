@@ -6,6 +6,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 from tests.pma_support import _enable_pma, _repo_owner
 
+from codex_autorunner.core.artifact_delivery import ArtifactDeliveryService
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import SQLiteChatSurfaceEventJournal
 from codex_autorunner.core.orchestration.cold_trace_store import ColdTraceWriter
@@ -215,6 +216,91 @@ def test_managed_thread_transcript_endpoint_returns_backend_owned_rows(hub_env) 
     assert rows[0]["message"]["text"] == "hello transcript"
     assert rows[1]["message"]["role"] == "assistant"
     assert rows[1]["message"]["text"] == "hello from transcript"
+
+
+def test_managed_thread_transcript_drains_and_projects_web_artifacts(hub_env) -> None:
+    _enable_pma(
+        hub_env.hub_root,
+        managed_thread_terminal_followup_default=False,
+    )
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        source = hub_env.repo_root / "report.txt"
+        source.write_text("artifact body\n", encoding="utf-8")
+        service = ArtifactDeliveryService(hub_env.repo_root)
+        intent = service.enqueue_file(
+            source,
+            target_surface="web",
+            target_conversation_key=f"managed_thread:{managed_thread_id}",
+            workspace_scope=f"repo:{hub_env.repo_root}",
+        )
+        assert intent.state == "pending"
+
+        transcript_resp = client.get(f"/hub/pma/threads/{managed_thread_id}/transcript")
+
+    assert transcript_resp.status_code == 200
+    payload = transcript_resp.json()
+    rows = payload["rows"]
+    artifact_rows = [row for row in rows if row["kind"] == "artifact"]
+    assert len(artifact_rows) == 1
+    artifact = artifact_rows[0]["artifact"]
+    assert artifact["delivery_id"] == intent.delivery_id
+    assert artifact["title"] == "report.txt"
+    assert artifact["url"].startswith(
+        f"/hub/filebox/{hub_env.repo_id}/artifacts/deliveries/"
+    )
+    sent = ArtifactDeliveryService(hub_env.repo_root).inspect(intent.delivery_id)
+    assert sent is not None
+    assert sent.state == "sent"
+    assert sent.receipt_json["visibility"] == "managed_thread_transcript"
+    assert sent.receipt_json["transcript_item_id"] == (
+        f"artifact_delivery:{intent.delivery_id}"
+    )
+
+
+def test_managed_thread_timeline_drains_and_projects_web_artifacts(hub_env) -> None:
+    _enable_pma(
+        hub_env.hub_root,
+        managed_thread_terminal_followup_default=False,
+    )
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        source = hub_env.repo_root / "timeline-report.txt"
+        source.write_text("artifact body\n", encoding="utf-8")
+        service = ArtifactDeliveryService(hub_env.repo_root)
+        intent = service.enqueue_file(
+            source,
+            target_surface="web",
+            target_conversation_key=f"managed_thread:{managed_thread_id}",
+            workspace_scope=f"repo:{hub_env.repo_root}",
+        )
+
+        timeline_resp = client.get(f"/hub/pma/threads/{managed_thread_id}/timeline")
+
+    assert timeline_resp.status_code == 200
+    payload = timeline_resp.json()
+    artifact_items = [item for item in payload["items"] if item["kind"] == "artifact"]
+    assert len(artifact_items) == 1
+    assert artifact_items[0]["payload"]["delivery_id"] == intent.delivery_id
+    sent = ArtifactDeliveryService(hub_env.repo_root).inspect(intent.delivery_id)
+    assert sent is not None
+    assert sent.state == "sent"
 
 
 def test_managed_thread_transcript_endpoint_exposes_capsule_visibility_contract(
