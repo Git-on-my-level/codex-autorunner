@@ -114,12 +114,23 @@ async def drain_web_artifact_deliveries_for_thread(
         target_surface=WEB_ARTIFACT_SURFACE,
         target_conversation_key=conversation_key,
     )
+    pending_before_ids = {intent.delivery_id for intent in pending_before}
     await drain_web_artifact_deliveries(
         workspace_root=workspace_root,
         managed_thread_id=managed_thread_id,
         logger=logger,
     )
-    return bool(pending_before)
+    if not pending_before_ids:
+        return False
+    pending_after_ids = {
+        intent.delivery_id
+        for intent in service.list_deliveries(
+            states=("pending",),
+            target_surface=WEB_ARTIFACT_SURFACE,
+            target_conversation_key=conversation_key,
+        )
+    }
+    return bool(pending_before_ids - pending_after_ids)
 
 
 __all__ = [
