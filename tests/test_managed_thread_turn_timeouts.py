@@ -15,6 +15,7 @@ from codex_autorunner.adapters.telegram.handlers.commands import (
     execution as telegram_execution,
 )
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.core.config_defaults import PMA_DEFAULT_TURN_STALL_TIMEOUT_SECONDS
 from codex_autorunner.surfaces.web.routes.pma_routes import (
     chat_runtime,
     managed_thread_runtime,
@@ -115,7 +116,9 @@ def test_web_pma_turn_idle_timeout_reads_request_config() -> None:
     assert managed_thread_runtime._pma_turn_idle_timeout_seconds(request) == 345
 
 
-def test_web_managed_thread_pma_surface_uses_idle_timeout_only() -> None:
+def test_web_managed_thread_pma_surface_uses_short_stall_and_long_idle_timeout() -> (
+    None
+):
     request = SimpleNamespace(
         app=SimpleNamespace(
             state=SimpleNamespace(
@@ -129,7 +132,7 @@ def test_web_managed_thread_pma_surface_uses_idle_timeout_only() -> None:
     errors = managed_thread_runtime._pma_finalization_errors(request)
 
     assert errors.timeout_seconds == 345.0
-    assert errors.stall_timeout_seconds == 345.0
+    assert errors.stall_timeout_seconds == float(PMA_DEFAULT_TURN_STALL_TIMEOUT_SECONDS)
     assert errors.idle_timeout_only is True
 
 
@@ -199,7 +202,35 @@ class TestPmaTimeoutIsolationInvariants:
         assert coordinator.errors.stall_timeout_seconds == 42.0
         assert coordinator.errors.idle_timeout_only is True
 
-    def test_telegram_pma_surface_uses_hub_config_timeout(self, tmp_path: Path) -> None:
+    def test_telegram_pma_surface_uses_short_stall_and_long_idle_timeout(
+        self, tmp_path: Path
+    ) -> None:
+        _write_hub_config(tmp_path, timeout_seconds=345)
+        handlers = SimpleNamespace(
+            _hub_root=tmp_path,
+            _config=SimpleNamespace(root=tmp_path),
+            _hub_supervisor=None,
+        )
+        coordinator = telegram_execution._build_telegram_managed_thread_coordinator(
+            handlers,
+            orchestration_service=SimpleNamespace(),
+            surface_key="telegram:-1:1",
+            chat_id=-1,
+            thread_id=1,
+            public_execution_error="e",
+            timeout_error="t",
+            interrupted_error="i",
+            pma_enabled=True,
+        )
+        assert coordinator.errors.timeout_seconds == 345.0
+        assert coordinator.errors.stall_timeout_seconds == float(
+            PMA_DEFAULT_TURN_STALL_TIMEOUT_SECONDS
+        )
+        assert coordinator.errors.idle_timeout_only is True
+
+    def test_telegram_pma_surface_caps_stall_at_total_timeout(
+        self, tmp_path: Path
+    ) -> None:
         _write_hub_config(tmp_path, timeout_seconds=55)
         handlers = SimpleNamespace(
             _hub_root=tmp_path,
