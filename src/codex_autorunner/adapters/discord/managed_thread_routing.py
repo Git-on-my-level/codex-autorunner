@@ -10,6 +10,7 @@ from ...adapters.chat.agents import resolve_chat_runtime_agent
 from ...agents import registry as agent_registry
 from ...core.config import load_hub_config
 from ...core.config_contract import ConfigError
+from ...core.config_defaults import PMA_DEFAULT_TURN_STALL_TIMEOUT_SECONDS
 from ...core.hub_control_plane import (
     RemoteSurfaceBindingStore,
     RemoteThreadExecutionStore,
@@ -49,7 +50,7 @@ _logger = logging.getLogger(__name__)
 
 _DEFAULT_DISCORD_REPO_TURN_TIMEOUT_SECONDS = 7200
 _DEFAULT_DISCORD_PMA_IDLE_TIMEOUT_SECONDS = 1800
-_DEFAULT_DISCORD_PMA_STALL_TIMEOUT_SECONDS = 1800
+_DEFAULT_DISCORD_PMA_STALL_TIMEOUT_SECONDS = PMA_DEFAULT_TURN_STALL_TIMEOUT_SECONDS
 _build_managed_thread_input_items = _shared_build_managed_thread_input_items
 
 

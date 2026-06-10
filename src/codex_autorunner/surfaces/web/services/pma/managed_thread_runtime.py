@@ -31,6 +31,7 @@ from .....adapters.github.managed_thread_pr_binding import (
     self_claim_and_arm_pr_binding,
 )
 from .....core.config import ConfigError, load_repo_config
+from .....core.config_defaults import PMA_DEFAULT_TURN_STALL_TIMEOUT_SECONDS
 from .....core.managed_thread_store import (
     ManagedThreadStore,
 )
@@ -95,6 +96,8 @@ logger = logging.getLogger(__name__)
 
 PMA_TURN_IDLE_TIMEOUT_SECONDS = 1800
 _DEFAULT_PMA_TURN_IDLE_TIMEOUT_SECONDS = 1800
+PMA_TURN_STALL_TIMEOUT_SECONDS = PMA_DEFAULT_TURN_STALL_TIMEOUT_SECONDS
+_DEFAULT_PMA_TURN_STALL_TIMEOUT_SECONDS = PMA_DEFAULT_TURN_STALL_TIMEOUT_SECONDS
 
 
 def _managed_thread_request_for_app(app: Any) -> Any:
@@ -133,6 +136,16 @@ def _pma_turn_idle_timeout_seconds(request: Request) -> float:
     if configured_timeout is None:
         return float(_DEFAULT_PMA_TURN_IDLE_TIMEOUT_SECONDS)
     return float(configured_timeout)
+
+
+def _pma_turn_stall_timeout_seconds(request: Request) -> float:
+    idle_timeout_seconds = _pma_turn_idle_timeout_seconds(request)
+    overridden_timeout = globals().get(
+        "PMA_TURN_STALL_TIMEOUT_SECONDS",
+        _DEFAULT_PMA_TURN_STALL_TIMEOUT_SECONDS,
+    )
+    resolved_timeout = float(overridden_timeout)
+    return min(max(resolved_timeout, 0.0), idle_timeout_seconds)
 
 
 def _managed_thread_task_pool(app: Any) -> set[asyncio.Task[Any]]:
@@ -500,12 +513,13 @@ async def _run_managed_thread_execution(
 
 def _pma_finalization_errors(request: Request) -> ManagedThreadErrorMessages:
     timeout_seconds = _pma_turn_idle_timeout_seconds(request)
+    stall_timeout_seconds = _pma_turn_stall_timeout_seconds(request)
     return ManagedThreadErrorMessages(
         public_execution_error=MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
         timeout_error="Managed thread timed out",
         interrupted_error="Managed thread interrupted",
         timeout_seconds=timeout_seconds,
-        stall_timeout_seconds=timeout_seconds,
+        stall_timeout_seconds=stall_timeout_seconds,
         idle_timeout_only=True,
     )
 

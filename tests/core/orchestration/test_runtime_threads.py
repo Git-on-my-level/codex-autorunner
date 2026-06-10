@@ -2097,6 +2097,53 @@ async def test_runtime_thread_timeout_cancels_wait_collector(
     assert harness.wait_cancelled.is_set()
 
 
+async def test_runtime_thread_timeout_preserves_timeout_when_cleanup_interrupt_races(
+    tmp_path: Path,
+) -> None:
+    @dataclass
+    class _HarnessWithDroppedTurnInterrupt(_HarnessWithBlockingWait):
+        async def interrupt(
+            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
+        ) -> None:
+            self.interrupt_calls.append((workspace_root, conversation_id, turn_id))
+            raise RuntimeError("no active turn to interrupt")
+
+    harness = _HarnessWithDroppedTurnInterrupt()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="user-visible prompt",
+        ),
+    )
+    outcome_task = asyncio.create_task(
+        await_runtime_thread_outcome(
+            started,
+            interrupt_event=asyncio.Event(),
+            timeout_seconds=0.01,
+            execution_error_message="Managed thread execution failed",
+        )
+    )
+    await harness.wait_started.wait()
+    outcome = await outcome_task
+
+    assert outcome.status == "error"
+    assert outcome.error == "Runtime thread timed out"
+    assert outcome.completion_source == "timeout"
+    assert outcome.failure_cause == "Runtime thread timed out"
+    assert "no active turn" not in str(outcome.error)
+    assert harness.interrupt_calls == [
+        (workspace_root, "backend-thread-1", "backend-turn-1")
+    ]
+    assert harness.wait_cancelled.is_set()
+
+
 async def test_runtime_thread_progress_stall_timeout_keeps_hard_wall_clock_by_default(
     tmp_path: Path,
 ) -> None:

@@ -338,21 +338,24 @@ async def await_runtime_thread_outcome(
                 and timeout_deadline is not None
                 and time.monotonic() >= timeout_deadline
             ):
-                await execution.harness.interrupt(
+                await _interrupt_runtime_thread_best_effort(
+                    execution,
                     execution.workspace_root,
                     backend_thread_id,
                     backend_turn_id,
                 )
                 return state.build_timeout_outcome(RUNTIME_THREAD_TIMEOUT_ERROR)
             if interrupt_task is not None and interrupt_task in done:
-                await execution.harness.interrupt(
+                await _interrupt_runtime_thread_best_effort(
+                    execution,
                     execution.workspace_root,
                     backend_thread_id,
                     backend_turn_id,
                 )
                 return state.build_interrupted_outcome(RUNTIME_THREAD_INTERRUPTED_ERROR)
             if timeout_task is not None and timeout_task in done:
-                await execution.harness.interrupt(
+                await _interrupt_runtime_thread_best_effort(
+                    execution,
                     execution.workspace_root,
                     backend_thread_id,
                     backend_turn_id,
@@ -382,7 +385,8 @@ async def await_runtime_thread_outcome(
                 if late_result is not None:
                     state.note_transport_result(late_result)
                     return state.build_outcome(execution_error_message)
-                await execution.harness.interrupt(
+                await _interrupt_runtime_thread_best_effort(
+                    execution,
                     execution.workspace_root,
                     backend_thread_id,
                     backend_turn_id,
@@ -416,6 +420,22 @@ async def await_runtime_thread_outcome(
 async def _wait_for_interrupt(interrupt_event: asyncio.Event) -> None:
     while not interrupt_event.is_set():
         await asyncio.sleep(_INTERRUPT_POLL_INTERVAL_SECONDS)
+
+
+async def _interrupt_runtime_thread_best_effort(
+    execution: RuntimeThreadExecution,
+    workspace_root: Path,
+    backend_thread_id: str,
+    backend_turn_id: str,
+) -> None:
+    try:
+        await execution.harness.interrupt(
+            workspace_root,
+            backend_thread_id,
+            backend_turn_id,
+        )
+    except Exception:
+        return
 
 
 async def _wait_for_progress_stall(

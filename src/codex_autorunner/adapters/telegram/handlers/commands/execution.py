@@ -103,6 +103,7 @@ from .....core.artifact_instructions import (
 )
 from .....core.config import load_hub_config
 from .....core.config_contract import ConfigError
+from .....core.config_defaults import PMA_DEFAULT_TURN_STALL_TIMEOUT_SECONDS
 from .....core.context_awareness import (
     PlannedPromptInjection,
     has_file_context_signal,
@@ -203,6 +204,8 @@ TELEGRAM_PMA_INTERRUPTED_ERROR = "Telegram PMA turn interrupted"
 TELEGRAM_REPO_INTERRUPTED_ERROR = "Telegram turn interrupted"
 TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS = 1800
 _DEFAULT_TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS = 1800
+TELEGRAM_PMA_STALL_TIMEOUT_SECONDS = PMA_DEFAULT_TURN_STALL_TIMEOUT_SECONDS
+_DEFAULT_TELEGRAM_PMA_STALL_TIMEOUT_SECONDS = PMA_DEFAULT_TURN_STALL_TIMEOUT_SECONDS
 _DEFAULT_TELEGRAM_REPO_TURN_TIMEOUT_SECONDS = 7200
 
 
@@ -671,6 +674,13 @@ def _build_telegram_managed_thread_coordinator(
         if pma_enabled
         else float(_DEFAULT_TELEGRAM_REPO_TURN_TIMEOUT_SECONDS)
     )
+    stall_timeout_seconds = (
+        _load_telegram_pma_turn_stall_timeout_seconds(
+            timeout_seconds=timeout_seconds,
+        )
+        if pma_enabled
+        else None
+    )
     return build_managed_thread_surface_coordinator(
         orchestration_service=orchestration_service,
         state_root=_telegram_state_root(handlers),
@@ -695,7 +705,7 @@ def _build_telegram_managed_thread_coordinator(
         timeout_error=timeout_error,
         interrupted_error=interrupted_error,
         timeout_seconds=timeout_seconds,
-        stall_timeout_seconds=timeout_seconds if pma_enabled else None,
+        stall_timeout_seconds=stall_timeout_seconds,
         idle_timeout_only=pma_enabled,
         logger=getattr(handlers, "_logger", logging.getLogger(__name__)),
         turn_preview="",
@@ -740,6 +750,18 @@ def _load_telegram_pma_turn_idle_timeout_seconds(handlers: Any) -> float:
     if configured_timeout is None:
         return float(_DEFAULT_TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS)
     return float(configured_timeout)
+
+
+def _load_telegram_pma_turn_stall_timeout_seconds(
+    *,
+    timeout_seconds: float,
+) -> float:
+    overridden_timeout = globals().get(
+        "TELEGRAM_PMA_STALL_TIMEOUT_SECONDS",
+        _DEFAULT_TELEGRAM_PMA_STALL_TIMEOUT_SECONDS,
+    )
+    resolved_timeout = float(overridden_timeout)
+    return min(max(resolved_timeout, 0.0), float(timeout_seconds))
 
 
 async def _reset_telegram_thread_binding(
