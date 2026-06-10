@@ -486,6 +486,12 @@ class StreamLifecycleController:
         )
 
         if not reconnected:
+            if not self._received_any_event and await self._turn_is_active():
+                return await self._continue_silent_active_turn(
+                    now=now,
+                    timeout_kind="stall",
+                    status_type=status_type,
+                )
             if status_type and not status_is_idle(status_type):
                 idle_wait_started_at = time.monotonic()
                 last_status_type = status_type

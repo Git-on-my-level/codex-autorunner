@@ -13,6 +13,10 @@ from codex_autorunner.agents.opencode.runtime import (
     OpenCodeTurnOutput,
     collect_opencode_output_from_events,
 )
+from codex_autorunner.agents.opencode.stream_lifecycle import (
+    LifecycleAction,
+    StreamLifecycleController,
+)
 from codex_autorunner.agents.opencode.turn_lifecycle import (
     OpenCodeTurnLifecycleState,
 )
@@ -278,6 +282,44 @@ async def test_collector_fails_stalled_stream_after_relevant_event_when_command_
 
     assert output.error is not None
     assert output.error.startswith("opencode_stream_stalled_timeout")
+
+
+@pytest.mark.asyncio
+async def test_stream_lifecycle_keeps_active_command_leniency_before_first_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        stream_lifecycle_module,
+        "_OPENCODE_STREAM_MAX_STALL_RECONNECT_ATTEMPTS",
+        0,
+    )
+
+    async def _event_stream():
+        while True:
+            await asyncio.sleep(3600)
+            yield SSEEvent(event="server.heartbeat", data="")
+
+    async def _session_status() -> dict[str, object]:
+        return {"status": {"type": "busy"}}
+
+    controller = StreamLifecycleController(
+        session_id="session-1",
+        event_stream_factory=_event_stream,
+        session_fetcher=_session_status,
+        stall_timeout_seconds=0.001,
+        first_event_timeout_seconds=0.001,
+        status_event_handler=None,
+        turn_activity_fetcher=lambda: True,
+    )
+    controller.set_stream_iterator(_event_stream().__aiter__())
+
+    try:
+        decision = await controller.on_timeout_error(now=1000.0)
+    finally:
+        await controller.close()
+
+    assert decision.action is LifecycleAction.CONTINUE
+    assert decision.error is None
 
 
 @pytest.mark.asyncio
