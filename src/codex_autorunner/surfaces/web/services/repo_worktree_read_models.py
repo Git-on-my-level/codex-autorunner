@@ -937,6 +937,7 @@ class RepoWorktreeReadModelService:
         owner_kind: Literal["repo", "worktree"],
         owner_id: str,
         ticket_limit: int = 100,
+        ticket_cursor: Optional[str] = None,
         run_limit: int = 10,
         chat_limit: int = 25,
         artifact_limit: int = 25,
@@ -950,6 +951,7 @@ class RepoWorktreeReadModelService:
             )
         enriched = await asyncio.to_thread(self._enricher.enrich_repo, snapshot_obj)
         ticket_limit = _bounded_limit(ticket_limit, maximum=100)
+        ticket_offset = _offset_cursor(ticket_cursor)
         run_limit = _bounded_limit(run_limit, maximum=100)
         chat_limit = _bounded_limit(chat_limit, maximum=100)
         artifact_limit = _bounded_limit(artifact_limit, maximum=100)
@@ -977,7 +979,7 @@ class RepoWorktreeReadModelService:
             children_task,
         )
         total_tickets = len(tickets)
-        windowed_tickets = tickets[:ticket_limit]
+        windowed_tickets = tickets[ticket_offset : ticket_offset + ticket_limit]
         artifacts = list(enriched.get("current_run_artifacts") or [])[:artifact_limit]
         parent_links: dict[str, Any] = {}
         if owner_kind == "worktree":
@@ -995,7 +997,9 @@ class RepoWorktreeReadModelService:
             chat_queue=chats,
             contextspace_summary=contextspace,
             current_artifacts=artifacts,
-            ticket_window=_window(offset=0, limit=ticket_limit, total=total_tickets),
+            ticket_window=_window(
+                offset=ticket_offset, limit=ticket_limit, total=total_tickets
+            ),
             run_window=_window(offset=0, limit=run_limit, total=len(runs)),
             chat_window=_window(offset=0, limit=chat_limit, total=len(chats)),
             artifact_window=_window(
@@ -1151,7 +1155,14 @@ class RepoWorktreeReadModelService:
                 snapshot_obj.path,
                 linked_run.run_id,
             )
-        windowed_tickets = tickets[:ticket_limit]
+        total_tickets = len(tickets)
+        ticket_window_offset = min(
+            max(0, index - (ticket_limit // 2)),
+            max(0, total_tickets - ticket_limit),
+        )
+        windowed_tickets = tickets[
+            ticket_window_offset : ticket_window_offset + ticket_limit
+        ]
         detail = TicketDetailSnapshot(
             cursor=_cursor("ticket.detail"),
             ticket=_ticket_projection(selected),

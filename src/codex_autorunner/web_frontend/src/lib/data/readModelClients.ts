@@ -32,8 +32,14 @@ export type ReadModelSnapshotClient = {
   automationWorkspaceIndex(): Promise<ApiResult<AutomationWorkspace>>;
   repoWorktreeTopology(kind?: 'all' | 'repo' | 'worktree', limit?: number, cursor?: string | null): Promise<ApiResult<RepoWorktreeTopologySnapshot>>;
   repoWorktreeRuntime(kind?: 'all' | 'repo' | 'worktree', limit?: number, cursor?: string | null): Promise<ApiResult<RepoWorktreeRuntimeSnapshot>>;
-  repoDetail(repoId: string): Promise<ApiResult<RepoWorktreeDetailSnapshot>>;
-  worktreeDetail(worktreeId: string): Promise<ApiResult<RepoWorktreeDetailSnapshot>>;
+  repoDetail(
+    repoId: string,
+    options?: { ticketLimit?: number; ticketCursor?: string | null }
+  ): Promise<ApiResult<RepoWorktreeDetailSnapshot>>;
+  worktreeDetail(
+    worktreeId: string,
+    options?: { ticketLimit?: number; ticketCursor?: string | null }
+  ): Promise<ApiResult<RepoWorktreeDetailSnapshot>>;
   servicesReadModel(scope?: string | null): Promise<ApiResult<PreviewServicesReadModel>>;
   ticketDetail(ticketId: string, owner: { kind: 'repo' | 'worktree'; id: string }): Promise<ApiResult<TicketDetailSnapshot>>;
   ticketIndex(owner?: { repo?: string; worktree?: string }): Promise<ApiResult<TicketSummary[]>>;
@@ -68,8 +74,8 @@ export function createReadModelSnapshotClient(api: WebApiClient = webApi): ReadM
     automationWorkspaceIndex: () => api.hub.getAutomationWorkspaceIndex(),
     repoWorktreeTopology: (kind, limit, cursor) => api.readModels.repoWorktreeTopology(kind, limit, cursor),
     repoWorktreeRuntime: (kind, limit, cursor) => api.readModels.repoWorktreeRuntime(kind, limit, cursor),
-    repoDetail: (repoId) => api.readModels.repoDetail(repoId),
-    worktreeDetail: (worktreeId) => api.readModels.worktreeDetail(worktreeId),
+    repoDetail: (repoId, options) => api.readModels.repoDetail(repoId, options),
+    worktreeDetail: (worktreeId, options) => api.readModels.worktreeDetail(worktreeId, options),
     servicesReadModel: (scope) => api.hub.getServicesReadModel(scope),
     ticketDetail: async (ticketId, owner) =>
       mapResult(await api.readModels.ticketDetail(ticketId, owner), (payload) => mapReadModelContract<TicketDetailSnapshot>(payload)),

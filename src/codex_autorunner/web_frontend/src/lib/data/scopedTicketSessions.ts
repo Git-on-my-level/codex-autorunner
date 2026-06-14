@@ -41,8 +41,14 @@ import { scopedOwnerKey, selectChatRuns, selectTicketSummaries } from './readMod
 export type ScopedTicketSessionApi = {
   requestJson<T>(path: string, options?: unknown): Promise<ApiResult<T>>;
   readModels: {
-    repoDetail(repoId: string): Promise<ApiResult<RepoWorktreeDetailSnapshot>>;
-    worktreeDetail(worktreeId: string): Promise<ApiResult<RepoWorktreeDetailSnapshot>>;
+    repoDetail(
+      repoId: string,
+      options?: { ticketLimit?: number; ticketCursor?: string | null }
+    ): Promise<ApiResult<RepoWorktreeDetailSnapshot>>;
+    worktreeDetail(
+      worktreeId: string,
+      options?: { ticketLimit?: number; ticketCursor?: string | null }
+    ): Promise<ApiResult<RepoWorktreeDetailSnapshot>>;
     ticketDetail(
       ticketId: string,
       owner: { kind: 'repo' | 'worktree'; id: string }
@@ -97,10 +103,7 @@ export async function loadScopedTicketListSession(
     store?: ReadModelEntityStore;
   } = {}
 ): Promise<ScopedTicketListSession> {
-  const detail =
-    config.kind === 'repo'
-      ? await api.readModels.repoDetail(config.resourceId)
-      : await api.readModels.worktreeDetail(config.resourceId);
+  const detail = await loadCompleteScopedTicketDetail(api, config);
   if (!detail.ok) return { ok: false, error: detail.error };
 
   const parentRepoId = parentRepoIdFromSnapshot(detail.data);
@@ -132,6 +135,51 @@ export async function loadScopedTicketListSession(
     sectionIssues,
     parentRepoId,
     redirectTo
+  };
+}
+
+async function loadCompleteScopedTicketDetail(
+  api: ScopedTicketSessionApi,
+  config: ScopedTicketQueueConfig
+): Promise<ApiResult<RepoWorktreeDetailSnapshot>> {
+  const first =
+    config.kind === 'repo'
+      ? await api.readModels.repoDetail(config.resourceId)
+      : await api.readModels.worktreeDetail(config.resourceId);
+  if (!first.ok) return first;
+
+  const ticketQueue = [...first.data.ticketQueue];
+  const seenCursors = new Set<string>();
+  let nextCursor = first.data.ticketWindow.nextCursor ?? null;
+  let lastWindow = first.data.ticketWindow;
+  while (nextCursor && !seenCursors.has(nextCursor)) {
+    seenCursors.add(nextCursor);
+    const page =
+      config.kind === 'repo'
+        ? await api.readModels.repoDetail(config.resourceId, { ticketCursor: nextCursor })
+        : await api.readModels.worktreeDetail(config.resourceId, { ticketCursor: nextCursor });
+    if (!page.ok) return page;
+    ticketQueue.push(...page.data.ticketQueue);
+    lastWindow = page.data.ticketWindow;
+    nextCursor = page.data.ticketWindow.nextCursor ?? null;
+  }
+
+  return {
+    ok: true,
+    data: {
+      ...first.data,
+      ticketQueue,
+      ticketWindow: {
+        ...lastWindow,
+        previousCursor: first.data.ticketWindow.previousCursor ?? null,
+        nextCursor: null,
+        totalEstimate: Math.max(
+          lastWindow.totalEstimate ?? ticketQueue.length,
+          ticketQueue.length
+        ),
+        totalIsExact: lastWindow.totalIsExact
+      }
+    }
   };
 }
 

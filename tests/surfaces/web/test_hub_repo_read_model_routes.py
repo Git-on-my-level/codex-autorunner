@@ -265,6 +265,27 @@ def test_repo_detail_ticket_queue_is_bounded_by_default(hub_env) -> None:
     assert payload["scopedTickets"] == payload["ticketQueue"]
 
 
+def test_repo_detail_ticket_queue_supports_cursor_windows(hub_env) -> None:
+    _write_tickets(hub_env.repo_root, 120)
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(
+        f"/hub/read-models/repos/{hub_env.repo_id}/detail",
+        params={"ticket_limit": 25, "ticket_cursor": "25"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["ticketQueue"]) == 25
+    assert payload["ticketQueue"][0]["frontmatter"]["title"] == "Ticket 026"
+    assert payload["ticketQueue"][-1]["frontmatter"]["title"] == "Ticket 050"
+    assert payload["scopedTickets"] == payload["ticketQueue"]
+    assert payload["ticketWindow"]["limit"] == 25
+    assert payload["ticketWindow"]["previousCursor"] == "0"
+    assert payload["ticketWindow"]["nextCursor"] == "50"
+    assert payload["ticketWindow"]["totalEstimate"] == 120
+
+
 def test_ticket_detail_snapshot_uses_owner_scoped_ticket_queue(hub_env) -> None:
     _write_tickets(hub_env.repo_root, 12)
     other_root = _add_workspace(hub_env.hub_root, repo_id="other")
@@ -306,6 +327,25 @@ def test_ticket_detail_snapshot_bounds_owner_queue(hub_env) -> None:
     assert len(payload["scopedTickets"]) == 100
     assert payload["ticket"]["routeId"] == "1"
     assert len(payload["siblings"]) > 0
+
+
+def test_ticket_detail_snapshot_window_includes_selected_ticket(hub_env) -> None:
+    _write_tickets(hub_env.repo_root, 150)
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(
+        "/hub/read-models/tickets/120",
+        params={"owner_kind": "repo", "owner_id": hub_env.repo_id, "ticket_limit": 25},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    titles = [ticket["frontmatter"]["title"] for ticket in payload["ticketQueue"]]
+    assert len(titles) == 25
+    assert "Ticket 120" in titles
+    assert "Ticket 001" not in titles
+    assert payload["ticket"]["routeId"] == "120"
+    assert payload["scopedTickets"] == payload["ticketQueue"]
 
 
 def test_ticket_detail_assembly_runs_blocking_work_off_event_loop(hub_env) -> None:
