@@ -241,8 +241,14 @@ async def test_stream_lifecycle_keeps_active_command_leniency_after_relevant_eve
     monkeypatch.setattr(
         stream_lifecycle_module,
         "_OPENCODE_POST_STALL_IDLE_POLL_SECONDS",
-        0.0,
+        0.25,
     )
+    sleeps: list[float] = []
+
+    async def _sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(stream_lifecycle_module.asyncio, "sleep", _sleep)
 
     async def _event_stream():
         if False:
@@ -269,6 +275,7 @@ async def test_stream_lifecycle_keeps_active_command_leniency_after_relevant_eve
 
     assert decision.action is LifecycleAction.CONTINUE
     assert decision.error is None
+    assert sleeps == [0.25]
 
 
 @pytest.mark.asyncio
