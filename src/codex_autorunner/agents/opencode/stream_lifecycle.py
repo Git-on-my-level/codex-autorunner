@@ -496,6 +496,12 @@ class StreamLifecycleController:
                 idle_wait_started_at = time.monotonic()
                 last_status_type = status_type
                 while True:
+                    if await self._turn_is_active():
+                        return await self._continue_silent_active_turn(
+                            now=time.monotonic(),
+                            timeout_kind="stall",
+                            status_type=last_status_type,
+                        )
                     elapsed_wait = time.monotonic() - idle_wait_started_at
                     if elapsed_wait >= _OPENCODE_POST_STALL_IDLE_WAIT_SECONDS:
                         error_msg = (
