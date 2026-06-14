@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from tests.surfaces.web._hub_test_support import write_discord_binding_rows
@@ -9,6 +11,9 @@ from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.manifest import load_manifest, save_manifest
 from codex_autorunner.server import create_hub_app
+from codex_autorunner.surfaces.web.services.repo_worktree_read_models import (
+    RepoWorktreeReadModelService,
+)
 
 
 def _add_workspace(
@@ -301,3 +306,70 @@ def test_ticket_detail_snapshot_bounds_owner_queue(hub_env) -> None:
     assert len(payload["scopedTickets"]) == 100
     assert payload["ticket"]["routeId"] == "1"
     assert len(payload["siblings"]) > 0
+
+
+def test_ticket_detail_assembly_runs_blocking_work_off_event_loop(hub_env) -> None:
+    """Regression guard: ticket_detail must delegate blocking reads to worker threads."""
+    _write_tickets(hub_env.repo_root, 5)
+
+    # _snapshot_by_id runs synchronously on the event-loop thread; the blocking
+    # helpers must run on a different thread via asyncio.to_thread.
+    event_loop_thread_ids: list[int] = []
+    scoped_tickets_thread_ids: list[int] = []
+    scoped_chats_thread_ids: list[int] = []
+    scoped_runs_thread_ids: list[int] = []
+
+    original_snapshot_by_id = RepoWorktreeReadModelService._snapshot_by_id
+    original_scoped_tickets = RepoWorktreeReadModelService._scoped_tickets
+    original_scoped_chats = RepoWorktreeReadModelService._scoped_chats
+    original_scoped_runs = RepoWorktreeReadModelService._scoped_runs
+
+    def spy_snapshot_by_id(self, repo_id: str) -> object:
+        event_loop_thread_ids.append(threading.get_ident())
+        return original_snapshot_by_id(self, repo_id)
+
+    def spy_scoped_tickets(self, snapshot: object) -> list[dict]:
+        scoped_tickets_thread_ids.append(threading.get_ident())
+        return original_scoped_tickets(self, snapshot)
+
+    def spy_scoped_chats(self, **kwargs: object) -> list[dict]:
+        scoped_chats_thread_ids.append(threading.get_ident())
+        return original_scoped_chats(self, **kwargs)
+
+    def spy_scoped_runs(self, workspace_root: Path, **kwargs: object) -> list[dict]:
+        scoped_runs_thread_ids.append(threading.get_ident())
+        return original_scoped_runs(self, workspace_root, **kwargs)
+
+    with (
+        patch.object(
+            RepoWorktreeReadModelService, "_snapshot_by_id", spy_snapshot_by_id
+        ),
+        patch.object(
+            RepoWorktreeReadModelService, "_scoped_tickets", spy_scoped_tickets
+        ),
+        patch.object(RepoWorktreeReadModelService, "_scoped_chats", spy_scoped_chats),
+        patch.object(RepoWorktreeReadModelService, "_scoped_runs", spy_scoped_runs),
+    ):
+        client = TestClient(create_hub_app(hub_env.hub_root))
+        response = client.get(
+            "/hub/read-models/tickets/1",
+            params={"owner_kind": "repo", "owner_id": hub_env.repo_id},
+        )
+
+    assert response.status_code == 200
+    assert event_loop_thread_ids, "_snapshot_by_id was never called"
+    event_loop_tid = event_loop_thread_ids[0]
+
+    assert scoped_tickets_thread_ids, "_scoped_tickets was never called"
+    assert scoped_chats_thread_ids, "_scoped_chats was never called"
+    assert scoped_runs_thread_ids, "_scoped_runs was never called"
+
+    assert all(
+        tid != event_loop_tid for tid in scoped_tickets_thread_ids
+    ), "_scoped_tickets ran on the event-loop thread instead of a worker thread"
+    assert all(
+        tid != event_loop_tid for tid in scoped_chats_thread_ids
+    ), "_scoped_chats ran on the event-loop thread instead of a worker thread"
+    assert all(
+        tid != event_loop_tid for tid in scoped_runs_thread_ids
+    ), "_scoped_runs ran on the event-loop thread instead of a worker thread"

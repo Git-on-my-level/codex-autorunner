@@ -1015,6 +1015,18 @@ class RepoWorktreeReadModelService:
         )
         return payload
 
+    def _safe_dispatch_history(
+        self, workspace_root: Path, run_id: str
+    ) -> list[dict[str, Any]]:
+        try:
+            history = get_dispatch_history(workspace_root, run_id, "ticket_flow")
+            raw_history = history.get("history")
+            if isinstance(raw_history, list):
+                return [item for item in raw_history[:25] if isinstance(item, dict)]
+            return []
+        except Exception:
+            return []
+
     async def ticket_detail(
         self,
         *,
@@ -1024,8 +1036,8 @@ class RepoWorktreeReadModelService:
         ticket_limit: int = 100,
     ) -> dict[str, Any]:
         snapshot_obj = self._snapshot_by_id(owner_id)
-        tickets = self._scoped_tickets(snapshot_obj)
         ticket_limit = _bounded_limit(ticket_limit, maximum=100)
+        tickets = await asyncio.to_thread(self._scoped_tickets, snapshot_obj)
         selected = next(
             (
                 ticket
@@ -1089,9 +1101,16 @@ class RepoWorktreeReadModelService:
                     ),
                 )
             )
-        chats = self._scoped_chats(owner_kind=owner_kind, owner_id=owner_id, limit=50)
+        chats, runs = await asyncio.gather(
+            asyncio.to_thread(
+                self._scoped_chats,
+                owner_kind=owner_kind,
+                owner_id=owner_id,
+                limit=50,
+            ),
+            asyncio.to_thread(self._scoped_runs, snapshot_obj.path, limit=50),
+        )
         run_id = selected.get("run_id")
-        runs = self._scoped_runs(snapshot_obj.path, limit=50)
         linked_run_payload = next(
             (
                 run
@@ -1127,17 +1146,11 @@ class RepoWorktreeReadModelService:
         )
         dispatches: list[dict[str, Any]] = []
         if linked_run is not None:
-            try:
-                history = get_dispatch_history(
-                    snapshot_obj.path, linked_run.run_id, "ticket_flow"
-                )
-                raw_history = history.get("history")
-                if isinstance(raw_history, list):
-                    dispatches = [
-                        item for item in raw_history[:25] if isinstance(item, dict)
-                    ]
-            except Exception:
-                dispatches = []
+            dispatches = await asyncio.to_thread(
+                self._safe_dispatch_history,
+                snapshot_obj.path,
+                linked_run.run_id,
+            )
         windowed_tickets = tickets[:ticket_limit]
         detail = TicketDetailSnapshot(
             cursor=_cursor("ticket.detail"),
