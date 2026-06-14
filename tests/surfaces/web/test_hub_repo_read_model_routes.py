@@ -222,6 +222,7 @@ def test_worktree_detail_snapshot_is_scoped_and_does_not_include_global_tickets(
     response = client.get(
         "/hub/read-models/worktrees/repo--feature/detail",
         params={
+            "ticket_limit": 25,
             "run_limit": 3,
             "chat_limit": 3,
             "artifact_limit": 3,
@@ -234,13 +235,29 @@ def test_worktree_detail_snapshot_is_scoped_and_does_not_include_global_tickets(
     assert payload["kind"] == "repo_worktree.detail.snapshot"
     assert payload["ownerKind"] == "worktree"
     assert payload["parentLinks"]["repo_id"] == hub_env.repo_id
-    assert len(payload["ticketQueue"]) == 501
+    assert len(payload["ticketQueue"]) == 25
     assert {ticket["workspace_id"] for ticket in payload["ticketQueue"]} == {
         "repo--feature"
     }
     assert payload["scopedTickets"] == payload["ticketQueue"]
-    assert payload["ticketWindow"]["limit"] == 501
+    assert payload["ticketWindow"]["limit"] == 25
     assert payload["ticketWindow"]["totalEstimate"] == 501
+    assert payload["ticketWindow"]["totalIsExact"] is True
+    assert payload["ticketWindow"]["nextCursor"] == "25"
+
+
+def test_repo_detail_ticket_queue_is_bounded_by_default(hub_env) -> None:
+    _write_tickets(hub_env.repo_root, 550)
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(f"/hub/read-models/repos/{hub_env.repo_id}/detail")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["ticketQueue"]) == 100
+    assert payload["ticketWindow"]["limit"] == 100
+    assert payload["ticketWindow"]["totalEstimate"] == 550
+    assert payload["scopedTickets"] == payload["ticketQueue"]
 
 
 def test_ticket_detail_snapshot_uses_owner_scoped_ticket_queue(hub_env) -> None:
@@ -267,3 +284,20 @@ def test_ticket_detail_snapshot_uses_owner_scoped_ticket_queue(hub_env) -> None:
     assert {ticket["workspace_id"] for ticket in payload["scopedTickets"]} == {
         hub_env.repo_id
     }
+
+
+def test_ticket_detail_snapshot_bounds_owner_queue(hub_env) -> None:
+    _write_tickets(hub_env.repo_root, 150)
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(
+        "/hub/read-models/tickets/1",
+        params={"owner_kind": "repo", "owner_id": hub_env.repo_id},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["ticketQueue"]) == 100
+    assert len(payload["scopedTickets"]) == 100
+    assert payload["ticket"]["routeId"] == "1"
+    assert len(payload["siblings"]) > 0

@@ -936,9 +936,10 @@ class RepoWorktreeReadModelService:
         *,
         owner_kind: Literal["repo", "worktree"],
         owner_id: str,
-        run_limit: int,
-        chat_limit: int,
-        artifact_limit: int,
+        ticket_limit: int = 100,
+        run_limit: int = 10,
+        chat_limit: int = 25,
+        artifact_limit: int = 25,
     ) -> dict[str, Any]:
         snapshot_obj = self._snapshot_by_id(owner_id)
         if owner_kind == "repo" and snapshot_obj.kind == "worktree":
@@ -948,6 +949,7 @@ class RepoWorktreeReadModelService:
                 status_code=404, detail=f"Worktree not found: {owner_id}"
             )
         enriched = await asyncio.to_thread(self._enricher.enrich_repo, snapshot_obj)
+        ticket_limit = _bounded_limit(ticket_limit, maximum=100)
         run_limit = _bounded_limit(run_limit, maximum=100)
         chat_limit = _bounded_limit(chat_limit, maximum=100)
         artifact_limit = _bounded_limit(artifact_limit, maximum=100)
@@ -974,6 +976,8 @@ class RepoWorktreeReadModelService:
             contextspace_task,
             children_task,
         )
+        total_tickets = len(tickets)
+        windowed_tickets = tickets[:ticket_limit]
         artifacts = list(enriched.get("current_run_artifacts") or [])[:artifact_limit]
         parent_links: dict[str, Any] = {}
         if owner_kind == "worktree":
@@ -986,14 +990,12 @@ class RepoWorktreeReadModelService:
             parent_links=parent_links,
             topology={"children": children},
             runtime=_runtime_projection(enriched).model_dump(mode="json"),
-            ticket_queue=tickets,
+            ticket_queue=windowed_tickets,
             run_queue=runs,
             chat_queue=chats,
             contextspace_summary=contextspace,
             current_artifacts=artifacts,
-            ticket_window=_window(
-                offset=0, limit=max(1, len(tickets)), total=len(tickets)
-            ),
+            ticket_window=_window(offset=0, limit=ticket_limit, total=total_tickets),
             run_window=_window(offset=0, limit=run_limit, total=len(runs)),
             chat_window=_window(offset=0, limit=chat_limit, total=len(chats)),
             artifact_window=_window(
@@ -1006,7 +1008,7 @@ class RepoWorktreeReadModelService:
         payload = dump_read_model_contract(detail)
         payload.update(
             _repo_worktree_detail_compatibility_fields(
-                scoped_tickets=tickets,
+                scoped_tickets=windowed_tickets,
                 scoped_runs=runs,
                 scoped_chats=chats,
             )
@@ -1019,9 +1021,11 @@ class RepoWorktreeReadModelService:
         owner_kind: Literal["repo", "worktree"],
         owner_id: str,
         ticket_id: str,
+        ticket_limit: int = 100,
     ) -> dict[str, Any]:
         snapshot_obj = self._snapshot_by_id(owner_id)
         tickets = self._scoped_tickets(snapshot_obj)
+        ticket_limit = _bounded_limit(ticket_limit, maximum=100)
         selected = next(
             (
                 ticket
@@ -1134,11 +1138,12 @@ class RepoWorktreeReadModelService:
                     ]
             except Exception:
                 dispatches = []
+        windowed_tickets = tickets[:ticket_limit]
         detail = TicketDetailSnapshot(
             cursor=_cursor("ticket.detail"),
             ticket=_ticket_projection(selected),
             ticket_detail=selected,
-            ticket_queue=tickets,
+            ticket_queue=windowed_tickets,
             run_queue=runs,
             chat_queue=chats,
             siblings=siblings,
@@ -1153,7 +1158,7 @@ class RepoWorktreeReadModelService:
         payload.update(
             _ticket_detail_compatibility_fields(
                 selected_ticket=selected,
-                scoped_tickets=tickets,
+                scoped_tickets=windowed_tickets,
                 scoped_runs=runs,
                 scoped_chats=chats,
             )

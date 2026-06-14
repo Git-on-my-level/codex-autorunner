@@ -48,10 +48,10 @@ def build_hub_repo_read_model_router(
         chat_limit: int = 25,
         artifact_limit: int = 25,
     ):
-        del ticket_limit  # Detail snapshots return the full ticket queue until ticket pagination exists.
         return await service.detail(
             owner_kind="repo",
             owner_id=repo_id,
+            ticket_limit=ticket_limit,
             run_limit=run_limit,
             chat_limit=chat_limit,
             artifact_limit=artifact_limit,
@@ -65,10 +65,10 @@ def build_hub_repo_read_model_router(
         chat_limit: int = 25,
         artifact_limit: int = 25,
     ):
-        del ticket_limit  # Detail snapshots return the full ticket queue until ticket pagination exists.
         return await service.detail(
             owner_kind="worktree",
             owner_id=worktree_id,
+            ticket_limit=ticket_limit,
             run_limit=run_limit,
             chat_limit=chat_limit,
             artifact_limit=artifact_limit,
@@ -76,12 +76,16 @@ def build_hub_repo_read_model_router(
 
     @router.get("/hub/read-models/tickets/{ticket_id}")
     async def ticket_detail(
-        ticket_id: str, owner_kind: Literal["repo", "worktree"], owner_id: str
+        ticket_id: str,
+        owner_kind: Literal["repo", "worktree"],
+        owner_id: str,
+        ticket_limit: int = 100,
     ):
         return await service.ticket_detail(
             owner_kind=owner_kind,
             owner_id=owner_id,
             ticket_id=ticket_id,
+            ticket_limit=ticket_limit,
         )
 
     return router
