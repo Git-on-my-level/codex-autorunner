@@ -936,9 +936,11 @@ class RepoWorktreeReadModelService:
         *,
         owner_kind: Literal["repo", "worktree"],
         owner_id: str,
-        run_limit: int,
-        chat_limit: int,
-        artifact_limit: int,
+        ticket_limit: int = 100,
+        ticket_cursor: Optional[str] = None,
+        run_limit: int = 10,
+        chat_limit: int = 25,
+        artifact_limit: int = 25,
     ) -> dict[str, Any]:
         snapshot_obj = self._snapshot_by_id(owner_id)
         if owner_kind == "repo" and snapshot_obj.kind == "worktree":
@@ -948,6 +950,8 @@ class RepoWorktreeReadModelService:
                 status_code=404, detail=f"Worktree not found: {owner_id}"
             )
         enriched = await asyncio.to_thread(self._enricher.enrich_repo, snapshot_obj)
+        ticket_limit = _bounded_limit(ticket_limit, maximum=100)
+        ticket_offset = _offset_cursor(ticket_cursor)
         run_limit = _bounded_limit(run_limit, maximum=100)
         chat_limit = _bounded_limit(chat_limit, maximum=100)
         artifact_limit = _bounded_limit(artifact_limit, maximum=100)
@@ -974,6 +978,8 @@ class RepoWorktreeReadModelService:
             contextspace_task,
             children_task,
         )
+        total_tickets = len(tickets)
+        windowed_tickets = tickets[ticket_offset : ticket_offset + ticket_limit]
         artifacts = list(enriched.get("current_run_artifacts") or [])[:artifact_limit]
         parent_links: dict[str, Any] = {}
         if owner_kind == "worktree":
@@ -986,13 +992,13 @@ class RepoWorktreeReadModelService:
             parent_links=parent_links,
             topology={"children": children},
             runtime=_runtime_projection(enriched).model_dump(mode="json"),
-            ticket_queue=tickets,
+            ticket_queue=windowed_tickets,
             run_queue=runs,
             chat_queue=chats,
             contextspace_summary=contextspace,
             current_artifacts=artifacts,
             ticket_window=_window(
-                offset=0, limit=max(1, len(tickets)), total=len(tickets)
+                offset=ticket_offset, limit=ticket_limit, total=total_tickets
             ),
             run_window=_window(offset=0, limit=run_limit, total=len(runs)),
             chat_window=_window(offset=0, limit=chat_limit, total=len(chats)),
@@ -1006,12 +1012,24 @@ class RepoWorktreeReadModelService:
         payload = dump_read_model_contract(detail)
         payload.update(
             _repo_worktree_detail_compatibility_fields(
-                scoped_tickets=tickets,
+                scoped_tickets=windowed_tickets,
                 scoped_runs=runs,
                 scoped_chats=chats,
             )
         )
         return payload
+
+    def _safe_dispatch_history(
+        self, workspace_root: Path, run_id: str
+    ) -> list[dict[str, Any]]:
+        try:
+            history = get_dispatch_history(workspace_root, run_id, "ticket_flow")
+            raw_history = history.get("history")
+            if isinstance(raw_history, list):
+                return [item for item in raw_history[:25] if isinstance(item, dict)]
+            return []
+        except Exception:
+            return []
 
     async def ticket_detail(
         self,
@@ -1019,9 +1037,11 @@ class RepoWorktreeReadModelService:
         owner_kind: Literal["repo", "worktree"],
         owner_id: str,
         ticket_id: str,
+        ticket_limit: int = 100,
     ) -> dict[str, Any]:
         snapshot_obj = self._snapshot_by_id(owner_id)
-        tickets = self._scoped_tickets(snapshot_obj)
+        ticket_limit = _bounded_limit(ticket_limit, maximum=100)
+        tickets = await asyncio.to_thread(self._scoped_tickets, snapshot_obj)
         selected = next(
             (
                 ticket
@@ -1085,9 +1105,16 @@ class RepoWorktreeReadModelService:
                     ),
                 )
             )
-        chats = self._scoped_chats(owner_kind=owner_kind, owner_id=owner_id, limit=50)
+        chats, runs = await asyncio.gather(
+            asyncio.to_thread(
+                self._scoped_chats,
+                owner_kind=owner_kind,
+                owner_id=owner_id,
+                limit=50,
+            ),
+            asyncio.to_thread(self._scoped_runs, snapshot_obj.path, limit=50),
+        )
         run_id = selected.get("run_id")
-        runs = self._scoped_runs(snapshot_obj.path, limit=50)
         linked_run_payload = next(
             (
                 run
@@ -1123,22 +1150,24 @@ class RepoWorktreeReadModelService:
         )
         dispatches: list[dict[str, Any]] = []
         if linked_run is not None:
-            try:
-                history = get_dispatch_history(
-                    snapshot_obj.path, linked_run.run_id, "ticket_flow"
-                )
-                raw_history = history.get("history")
-                if isinstance(raw_history, list):
-                    dispatches = [
-                        item for item in raw_history[:25] if isinstance(item, dict)
-                    ]
-            except Exception:
-                dispatches = []
+            dispatches = await asyncio.to_thread(
+                self._safe_dispatch_history,
+                snapshot_obj.path,
+                linked_run.run_id,
+            )
+        total_tickets = len(tickets)
+        ticket_window_offset = min(
+            max(0, index - (ticket_limit // 2)),
+            max(0, total_tickets - ticket_limit),
+        )
+        windowed_tickets = tickets[
+            ticket_window_offset : ticket_window_offset + ticket_limit
+        ]
         detail = TicketDetailSnapshot(
             cursor=_cursor("ticket.detail"),
             ticket=_ticket_projection(selected),
             ticket_detail=selected,
-            ticket_queue=tickets,
+            ticket_queue=windowed_tickets,
             run_queue=runs,
             chat_queue=chats,
             siblings=siblings,
@@ -1153,7 +1182,7 @@ class RepoWorktreeReadModelService:
         payload.update(
             _ticket_detail_compatibility_fields(
                 selected_ticket=selected,
-                scoped_tickets=tickets,
+                scoped_tickets=windowed_tickets,
                 scoped_runs=runs,
                 scoped_chats=chats,
             )

@@ -486,7 +486,7 @@ class StreamLifecycleController:
         )
 
         if not reconnected:
-            if await self._turn_is_active():
+            if not self._received_any_event and await self._turn_is_active():
                 return await self._continue_silent_active_turn(
                     now=now,
                     timeout_kind="stall",

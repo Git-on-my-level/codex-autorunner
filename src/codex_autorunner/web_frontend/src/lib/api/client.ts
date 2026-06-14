@@ -1082,16 +1082,40 @@ export class WebApiClient {
         (payload) => mapReadModelContract<RepoWorktreeRuntimeSnapshot>(payload)
       );
     },
-    repoDetail: async (repoId: string): Promise<ApiResult<RepoWorktreeDetailSnapshot>> =>
-      mapResult(
-        await this.getJson<JsonRecord>(`/hub/read-models/repos/${encodeURIComponent(repoId)}/detail`),
+    repoDetail: async (
+      repoId: string,
+      options: { ticketLimit?: number; ticketCursor?: string | null } = {}
+    ): Promise<ApiResult<RepoWorktreeDetailSnapshot>> => {
+      const params = new URLSearchParams();
+      if (options.ticketLimit !== undefined) {
+        params.set('ticket_limit', String(options.ticketLimit));
+      }
+      if (options.ticketCursor) params.set('ticket_cursor', options.ticketCursor);
+      const query = params.toString();
+      return mapResult(
+        await this.getJson<JsonRecord>(
+          `/hub/read-models/repos/${encodeURIComponent(repoId)}/detail${query ? `?${query}` : ''}`
+        ),
         (payload) => mapReadModelContract<RepoWorktreeDetailSnapshot>(payload)
-      ),
-    worktreeDetail: async (worktreeId: string): Promise<ApiResult<RepoWorktreeDetailSnapshot>> =>
-      mapResult(
-        await this.getJson<JsonRecord>(`/hub/read-models/worktrees/${encodeURIComponent(worktreeId)}/detail`),
+      );
+    },
+    worktreeDetail: async (
+      worktreeId: string,
+      options: { ticketLimit?: number; ticketCursor?: string | null } = {}
+    ): Promise<ApiResult<RepoWorktreeDetailSnapshot>> => {
+      const params = new URLSearchParams();
+      if (options.ticketLimit !== undefined) {
+        params.set('ticket_limit', String(options.ticketLimit));
+      }
+      if (options.ticketCursor) params.set('ticket_cursor', options.ticketCursor);
+      const query = params.toString();
+      return mapResult(
+        await this.getJson<JsonRecord>(
+          `/hub/read-models/worktrees/${encodeURIComponent(worktreeId)}/detail${query ? `?${query}` : ''}`
+        ),
         (payload) => mapReadModelContract<RepoWorktreeDetailSnapshot>(payload)
-      ),
+      );
+    },
     ticketDetail: async (
       ticketId: string,
       owner: { kind: 'repo' | 'worktree'; id: string }

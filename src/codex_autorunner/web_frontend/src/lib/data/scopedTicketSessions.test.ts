@@ -43,6 +43,41 @@ describe('scoped ticket sessions', () => {
     );
   });
 
+  it('follows repo detail ticket windows for scoped ticket lists', async () => {
+    const store = new ReadModelEntityStore();
+    const pageOne = {
+      ...repoDetailSnapshot('repo-1'),
+      ticketQueue: [ticketSummary('t-1', 'Ticket One')],
+      ticketWindow: { ...window(), nextCursor: '1', totalEstimate: 2 }
+    };
+    const pageTwo = {
+      ...repoDetailSnapshot('repo-1'),
+      ticketQueue: [ticketSummary('t-2', 'Ticket Two')],
+      ticketWindow: { ...window(), previousCursor: '0', nextCursor: null, totalEstimate: 2 }
+    };
+    const repoDetail = vi.fn().mockResolvedValueOnce(ok(pageOne)).mockResolvedValueOnce(ok(pageTwo));
+    const api = mockApi({
+      repoDetail,
+      requestJson: vi.fn().mockResolvedValue(ok({ actions: [] }))
+    });
+
+    const result = await loadScopedTicketListSession(
+      api,
+      {
+        kind: 'repo',
+        resourceId: 'repo-1',
+        apiBasePath: '/repos/repo-1/api/flows',
+        displayLabel: 'repo'
+      },
+      { store }
+    );
+
+    expect(result.ok && result.tickets.map((ticket) => ticket.id)).toEqual(['t-1', 't-2']);
+    expect(store.snapshot().ticketOrderByOwner['repo:repo-1']).toEqual(['t-1', 't-2']);
+    expect(repoDetail).toHaveBeenNthCalledWith(1, 'repo-1');
+    expect(repoDetail).toHaveBeenNthCalledWith(2, 'repo-1', { ticketCursor: '1' });
+  });
+
   it('returns worktree legacy redirects with parent repo context', async () => {
     const store = new ReadModelEntityStore();
     const api = mockApi({

@@ -144,18 +144,20 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
                 break
             except OSError:
                 time.sleep(0.1)
+        if basetemp_root.exists():
+            shutil.rmtree(basetemp_root, ignore_errors=True)
     failures: list[str] = []
     if summary.active_paths:
         failures.append(
             "active processes remained under pytest basetemp root: "
             + _format_temp_processes(summary.active_processes)
         )
-    if summary.failed_paths:
-        failures.append("; ".join(summary.failed_paths))
-    if basetemp_root.exists():
-        failures.append(
-            f"pytest basetemp root still exists after cleanup: {basetemp_root}"
-        )
+        if summary.failed_paths:
+            failures.append("; ".join(summary.failed_paths))
+        if basetemp_root.exists():
+            failures.append(
+                f"pytest basetemp root still exists after cleanup: {basetemp_root}"
+            )
     if failures:
         raise AssertionError(" ; ".join(failures))
     try:

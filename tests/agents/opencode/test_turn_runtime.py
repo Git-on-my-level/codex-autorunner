@@ -7,10 +7,15 @@ from typing import Any
 
 import pytest
 
+from codex_autorunner.agents.opencode import stream_lifecycle as stream_lifecycle_module
 from codex_autorunner.agents.opencode.protocol_payload import PERMISSION_ALLOW
 from codex_autorunner.agents.opencode.runtime import (
     OpenCodeTurnOutput,
     collect_opencode_output_from_events,
+)
+from codex_autorunner.agents.opencode.stream_lifecycle import (
+    LifecycleAction,
+    StreamLifecycleController,
 )
 from codex_autorunner.agents.opencode.turn_lifecycle import (
     OpenCodeTurnLifecycleState,
@@ -217,6 +222,104 @@ async def test_turn_runtime_collector_handles_question_tool_part() -> None:
 
     assert output.error is None
     assert question_answers == [("que-q1", [["Yes"]])]
+
+
+@pytest.mark.asyncio
+async def test_collector_fails_stalled_stream_after_relevant_event_when_command_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        stream_lifecycle_module,
+        "_OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS",
+        (0.0,),
+    )
+    monkeypatch.setattr(
+        stream_lifecycle_module,
+        "_OPENCODE_STREAM_MAX_STALL_RECONNECT_ATTEMPTS",
+        1,
+    )
+
+    stream_count = 0
+
+    async def _event_stream():
+        nonlocal stream_count
+        stream_count += 1
+        if stream_count == 1:
+            yield SSEEvent(
+                event="message.part.updated",
+                data=json.dumps(
+                    {
+                        "sessionID": "session-1",
+                        "properties": {
+                            "part": {
+                                "id": "tool-1",
+                                "type": "tool",
+                                "tool": "bash",
+                                "state": {"status": "running"},
+                            }
+                        },
+                    }
+                ),
+            )
+        while True:
+            await asyncio.sleep(3600)
+            yield SSEEvent(event="server.heartbeat", data="")
+
+    async def _session_status() -> dict[str, object]:
+        return {}
+
+    output = await asyncio.wait_for(
+        collect_opencode_output_from_events(
+            session_id="session-1",
+            event_stream_factory=_event_stream,
+            session_fetcher=_session_status,
+            turn_activity_fetcher=lambda: True,
+            stall_timeout_seconds=0.001,
+            first_event_timeout_seconds=1.0,
+        ),
+        timeout=1.0,
+    )
+
+    assert output.error is not None
+    assert output.error.startswith("opencode_stream_stalled_timeout")
+
+
+@pytest.mark.asyncio
+async def test_stream_lifecycle_keeps_active_command_leniency_before_first_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        stream_lifecycle_module,
+        "_OPENCODE_STREAM_MAX_STALL_RECONNECT_ATTEMPTS",
+        0,
+    )
+
+    async def _event_stream():
+        while True:
+            await asyncio.sleep(3600)
+            yield SSEEvent(event="server.heartbeat", data="")
+
+    async def _session_status() -> dict[str, object]:
+        return {"status": {"type": "busy"}}
+
+    controller = StreamLifecycleController(
+        session_id="session-1",
+        event_stream_factory=_event_stream,
+        session_fetcher=_session_status,
+        stall_timeout_seconds=0.001,
+        first_event_timeout_seconds=0.001,
+        status_event_handler=None,
+        turn_activity_fetcher=lambda: True,
+    )
+    controller.set_stream_iterator(_event_stream().__aiter__())
+
+    try:
+        decision = await controller.on_timeout_error(now=1000.0)
+    finally:
+        await controller.close()
+
+    assert decision.action is LifecycleAction.CONTINUE
+    assert decision.error is None
 
 
 @pytest.mark.asyncio
