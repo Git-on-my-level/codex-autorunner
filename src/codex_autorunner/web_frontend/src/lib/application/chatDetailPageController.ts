@@ -130,6 +130,7 @@ export class ChatDetailPageController {
   private unsubscribeChatIndexSession: (() => void) | null = null;
   private filterRefreshTimer: unknown = null;
   private activeClockInterval: unknown = null;
+  private destroyed = false;
 
   constructor(deps: ChatDetailPageControllerDeps) {
     this.deps = deps;
@@ -228,6 +229,7 @@ export class ChatDetailPageController {
   }
 
   destroy(): void {
+    this.destroyed = true;
     this.unsubscribeReadModels?.();
     this.unsubscribeChatIndexSession?.();
     this.deps.chatIndexSession.stop();
@@ -291,11 +293,13 @@ export class ChatDetailPageController {
       this.deps.supportApi.repoWorktreeTopology('all', 50),
       this.deps.supportApi.repoWorktreeRuntime('all', 50)
     ]);
+    if (this.destroyed) return;
     if (artifactResult.ok) this.deps.readModelStore.setSurfaceArtifacts('__global__', artifactResult.data);
     if (topologyResult.ok) this.deps.readModelStore.applyRepoWorktreeTopologySnapshot(topologyResult.data as Parameters<ReadModelEntityStore['applyRepoWorktreeTopologySnapshot']>[0]);
     if (runtimeResult.ok) this.deps.readModelStore.applyRepoWorktreeRuntimeSnapshot(runtimeResult.data as Parameters<ReadModelEntityStore['applyRepoWorktreeRuntimeSnapshot']>[0]);
     const scopeState = this.deps.readModelStore.snapshot();
     const exactRouteScope = await this.loadExactRouteScope(scopeState);
+    if (this.destroyed) return;
     const repoSummaries = selectRepoSummaries(scopeState);
     const worktreeSummaries = selectWorktreeSummaries(scopeState);
     if (exactRouteScope?.ownerKind === 'repo' && !repoSummaries.some((repo) => repo.id === exactRouteScope.ownerId)) {
@@ -359,6 +363,7 @@ export class ChatDetailPageController {
       requested.kind === 'repo'
         ? await this.deps.supportApi.repoDetail(requested.id)
         : await this.deps.supportApi.worktreeDetail(requested.id);
+    if (this.destroyed) return null;
     if (!result.ok) return null;
     if (requested.kind === 'repo') this.deps.readModelStore.applyRepoDetailSnapshot(result.data);
     else this.deps.readModelStore.applyWorktreeDetailSnapshot(result.data);

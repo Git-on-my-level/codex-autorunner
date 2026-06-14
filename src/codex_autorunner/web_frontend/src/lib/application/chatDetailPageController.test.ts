@@ -215,12 +215,75 @@ describe('ChatDetailPageController', () => {
     expect(harness.session.activate).toHaveBeenLastCalledWith({ companionRequests: [], refresh: false });
     expect(harness.liveProjection.close).toHaveBeenCalledTimes(1);
   });
+
+  it('does not publish support data when destroy runs while load is in flight', async () => {
+    let resolveListAgents!: (value: ApiResult<{ agents: JsonRecord[]; agentStatuses: JsonRecord[]; defaults: JsonRecord; default: string; setupPrompt: string }>) => void;
+    const supportDataSpy = vi.fn();
+    const deferredAgents = new Promise<ApiResult<{ agents: JsonRecord[]; agentStatuses: JsonRecord[]; defaults: JsonRecord; default: string; setupPrompt: string }>>((resolve) => {
+      resolveListAgents = resolve;
+    });
+    const harness = createHarness({
+      supportApi: {
+        ...supportApi(),
+        listAgents: () => deferredAgents
+      },
+      onSupportDataLoaded: supportDataSpy
+    });
+
+    harness.controller.mount({
+      route: route(),
+      currentRequest: { filter: 'all', limit: 50 },
+      ticketRunGroupRequest: CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST
+    });
+    await flushAsyncWork();
+
+    harness.controller.destroy();
+    resolveListAgents(ok({ agents: [{ id: 'codex' }], agentStatuses: [], defaults: {}, default: 'codex', setupPrompt: '' }));
+    await flushAsyncWork();
+
+    expect(supportDataSpy).not.toHaveBeenCalled();
+  });
+
+  it('loads support data normally on a fresh remount after a destroyed predecessor', async () => {
+    let resolveListAgents!: (value: ApiResult<{ agents: JsonRecord[]; agentStatuses: JsonRecord[]; defaults: JsonRecord; default: string; setupPrompt: string }>) => void;
+    const deferredAgents = new Promise<ApiResult<{ agents: JsonRecord[]; agentStatuses: JsonRecord[]; defaults: JsonRecord; default: string; setupPrompt: string }>>((resolve) => {
+      resolveListAgents = resolve;
+    });
+    const firstHarness = createHarness({
+      supportApi: {
+        ...supportApi(),
+        listAgents: () => deferredAgents
+      }
+    });
+
+    firstHarness.controller.mount({
+      route: route(),
+      currentRequest: { filter: 'all', limit: 50 },
+      ticketRunGroupRequest: CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST
+    });
+    await flushAsyncWork();
+    firstHarness.controller.destroy();
+    resolveListAgents(ok({ agents: [{ id: 'codex' }], agentStatuses: [], defaults: {}, default: 'codex', setupPrompt: '' }));
+    await flushAsyncWork();
+    expect(firstHarness.supportData).toHaveLength(0);
+
+    const secondHarness = createHarness();
+    secondHarness.controller.mount({
+      route: route(),
+      currentRequest: { filter: 'all', limit: 50 },
+      ticketRunGroupRequest: CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST
+    });
+    await flushAsyncWork();
+
+    expect(secondHarness.supportData.at(-1)?.agents).toEqual([{ id: 'codex' }]);
+  });
 });
 
 function createHarness(options: {
   now?: () => number;
   supportApi?: ReturnType<typeof supportApi>;
   onCreateInitialDraft?: () => void;
+  onSupportDataLoaded?: (data: ChatDetailPageSupportData) => void;
 } = {}) {
   const store = new ReadModelEntityStore();
   let sessionState: ChatDetailSessionState = initialChatDetailSessionState();
@@ -261,7 +324,7 @@ function createHarness(options: {
     onPinnedChatsLoaded: vi.fn(),
     onInitialDraft: vi.fn(),
     onCreateInitialDraft: options.onCreateInitialDraft ?? vi.fn(),
-    onSupportDataLoaded: (data) => supportData.push(data),
+    onSupportDataLoaded: options.onSupportDataLoaded ?? ((data) => supportData.push(data)),
     onSyncSelectors: vi.fn(),
     onMarkRead: vi.fn(),
     timers: { now }
