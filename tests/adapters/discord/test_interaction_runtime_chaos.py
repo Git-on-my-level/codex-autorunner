@@ -21,6 +21,9 @@ from codex_autorunner.adapters.discord.command_runner import (
     CommandRunner,
     RunnerConfig,
 )
+from codex_autorunner.adapters.discord.delivery_recovery import (
+    _INTERACTION_RECOVERY_METADATA_KEY,
+)
 from codex_autorunner.adapters.discord.ingress import (
     CommandSpec,
     IngressContext,
@@ -35,7 +38,6 @@ from codex_autorunner.adapters.discord.interaction_session import (
 from codex_autorunner.adapters.discord.response_helpers import DiscordResponder
 from codex_autorunner.adapters.discord.service import (
     _CHAT_OPERATION_RECOVERY_METADATA_KEY,
-    _INTERACTION_RECOVERY_METADATA_KEY,
     DiscordBotService,
 )
 from codex_autorunner.adapters.discord.state import DiscordStateStore
