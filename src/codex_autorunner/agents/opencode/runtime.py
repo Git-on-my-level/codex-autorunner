@@ -259,6 +259,40 @@ async def collect_opencode_output_from_events(
         logger=logger,
     )
 
+    last_recovered_snapshot_text = ""
+    messages_snapshot_progress_seeded = False
+
+    async def _recover_messages_snapshot_text(*, log_name: str) -> str:
+        if messages_fetcher is None:
+            return ""
+        try:
+            messages_payload = await messages_fetcher()
+        except (httpx.HTTPError, ValueError, OSError, AttributeError) as exc:
+            log_event(
+                logger,
+                logging.DEBUG,
+                log_name,
+                session_id=session_id,
+                exc=exc,
+            )
+            return ""
+        recovered = recover_last_assistant_message(messages_payload, prompt=prompt)
+        return recovered.text.strip() if recovered.text else ""
+
+    async def _messages_snapshot_made_progress() -> bool:
+        nonlocal last_recovered_snapshot_text, messages_snapshot_progress_seeded
+        recovered_text = await _recover_messages_snapshot_text(
+            log_name="opencode.messages.progress_fetch_failed",
+        )
+        if not messages_snapshot_progress_seeded:
+            messages_snapshot_progress_seeded = True
+            last_recovered_snapshot_text = recovered_text
+            return False
+        if not recovered_text or recovered_text == last_recovered_snapshot_text:
+            return False
+        last_recovered_snapshot_text = recovered_text
+        return True
+
     lifecycle = StreamLifecycleController(
         session_id=session_id,
         event_stream_factory=event_stream_factory,
@@ -267,6 +301,7 @@ async def collect_opencode_output_from_events(
         first_event_timeout_seconds=first_event_timeout_seconds,
         status_event_handler=part_handler,
         turn_activity_fetcher=turn_activity_fetcher,
+        stall_progress_fetcher=_messages_snapshot_made_progress,
         logger=logger,
     )
 
