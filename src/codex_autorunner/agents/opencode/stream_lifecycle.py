@@ -547,6 +547,12 @@ class StreamLifecycleController:
                         break
                     if polled:
                         last_status_type = polled
+                    if await self._turn_is_active():
+                        return await self._continue_silent_active_turn(
+                            now=time.monotonic(),
+                            timeout_kind="stall",
+                            status_type=last_status_type,
+                        )
                 return LifecycleDecision(
                     action=LifecycleAction.BREAK,
                     should_flush_if_pending=False,
