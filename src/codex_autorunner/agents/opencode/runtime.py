@@ -260,24 +260,34 @@ async def collect_opencode_output_from_events(
     )
 
     last_recovered_snapshot_text = ""
+    messages_snapshot_progress_seeded = False
 
-    async def _messages_snapshot_made_progress() -> bool:
-        nonlocal last_recovered_snapshot_text
+    async def _recover_messages_snapshot_text(*, log_name: str) -> str:
         if messages_fetcher is None:
-            return False
+            return ""
         try:
             messages_payload = await messages_fetcher()
         except (httpx.HTTPError, ValueError, OSError, AttributeError) as exc:
             log_event(
                 logger,
                 logging.DEBUG,
-                "opencode.messages.progress_fetch_failed",
+                log_name,
                 session_id=session_id,
                 exc=exc,
             )
-            return False
+            return ""
         recovered = recover_last_assistant_message(messages_payload, prompt=prompt)
-        recovered_text = recovered.text.strip() if recovered.text else ""
+        return recovered.text.strip() if recovered.text else ""
+
+    async def _messages_snapshot_made_progress() -> bool:
+        nonlocal last_recovered_snapshot_text, messages_snapshot_progress_seeded
+        recovered_text = await _recover_messages_snapshot_text(
+            log_name="opencode.messages.progress_fetch_failed",
+        )
+        if not messages_snapshot_progress_seeded:
+            messages_snapshot_progress_seeded = True
+            last_recovered_snapshot_text = recovered_text
+            return False
         if not recovered_text or recovered_text == last_recovered_snapshot_text:
             return False
         last_recovered_snapshot_text = recovered_text
