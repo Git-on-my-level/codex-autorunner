@@ -39,6 +39,7 @@ _OPENCODE_POST_STALL_IDLE_POLL_SECONDS = 5.0
 
 StatusEventHandler = Callable[[str, dict[str, Any], Optional[str]], Awaitable[None]]
 TurnActivityFetcher = Callable[[], bool | Awaitable[bool]]
+StallProgressFetcher = Callable[[], bool | Awaitable[bool]]
 
 
 class LifecycleAction(Enum):
@@ -79,12 +80,14 @@ class StreamLifecycleController:
         first_event_timeout_seconds: Optional[float],
         status_event_handler: Optional[StatusEventHandler],
         turn_activity_fetcher: Optional[TurnActivityFetcher] = None,
+        stall_progress_fetcher: Optional[StallProgressFetcher] = None,
         logger: Optional[logging.Logger] = None,
     ):
         self._session_id = session_id
         self._event_stream_factory = event_stream_factory
         self._session_fetcher = session_fetcher
         self._turn_activity_fetcher = turn_activity_fetcher
+        self._stall_progress_fetcher = stall_progress_fetcher
         self._stall_timeout_seconds = stall_timeout_seconds
         self._first_event_timeout_seconds = first_event_timeout_seconds
         self._status_event_handler = status_event_handler
@@ -300,6 +303,18 @@ class StreamLifecycleController:
             self._logger.debug("turn activity check failed", exc_info=True)
             return False
 
+    async def _stall_made_progress(self) -> bool:
+        if self._stall_progress_fetcher is None:
+            return False
+        try:
+            progressed = self._stall_progress_fetcher()
+            if inspect.isawaitable(progressed):
+                progressed = await progressed
+            return bool(progressed)
+        except Exception:
+            self._logger.debug("stall progress check failed", exc_info=True)
+            return False
+
     async def _continue_silent_active_turn(
         self,
         *,
@@ -307,11 +322,43 @@ class StreamLifecycleController:
         timeout_kind: str,
         status_type: Optional[str],
     ) -> LifecycleDecision:
+        return await self._continue_silent_turn(
+            now=now,
+            timeout_kind=timeout_kind,
+            status_type=status_type,
+            log_name="opencode.stream.silent_while_turn_active",
+            status_payload_type="stream_silent_turn_active",
+        )
+
+    async def _continue_silent_stall_progress(
+        self,
+        *,
+        now: float,
+        timeout_kind: str,
+        status_type: Optional[str],
+    ) -> LifecycleDecision:
+        return await self._continue_silent_turn(
+            now=now,
+            timeout_kind=timeout_kind,
+            status_type=status_type,
+            log_name="opencode.stream.silent_stall_progress",
+            status_payload_type="stream_silent_stall_progress",
+        )
+
+    async def _continue_silent_turn(
+        self,
+        *,
+        now: float,
+        timeout_kind: str,
+        status_type: Optional[str],
+        log_name: str,
+        status_payload_type: str,
+    ) -> LifecycleDecision:
         idle_seconds = now - self._last_relevant_event_at
         log_event(
             self._logger,
             logging.WARNING,
-            "opencode.stream.silent_while_turn_active",
+            log_name,
             session_id=self._session_id,
             idle_seconds=idle_seconds,
             timeout_kind=timeout_kind,
@@ -320,7 +367,7 @@ class StreamLifecycleController:
         )
         await self._emit_status(
             {
-                "type": "stream_silent_turn_active",
+                "type": status_payload_type,
                 "idleSeconds": idle_seconds,
                 "timeoutKind": timeout_kind,
                 "status": status_type,
@@ -549,6 +596,12 @@ class StreamLifecycleController:
                         last_status_type = polled
                     if await self._turn_is_active():
                         return await self._continue_silent_active_turn(
+                            now=time.monotonic(),
+                            timeout_kind="stall",
+                            status_type=last_status_type,
+                        )
+                    if await self._stall_made_progress():
+                        return await self._continue_silent_stall_progress(
                             now=time.monotonic(),
                             timeout_kind="stall",
                             status_type=last_status_type,

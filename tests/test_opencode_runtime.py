@@ -1423,6 +1423,80 @@ async def test_stream_lifecycle_bounds_post_stall_idle_wait(monkeypatch) -> None
 
 
 @pytest.mark.anyio
+async def test_collect_output_uses_message_snapshot_progress_during_post_stall_wait(
+    monkeypatch,
+) -> None:
+    progress_events: list[dict[str, object]] = []
+    stream_count = 0
+
+    async def _status_fetcher():
+        return {"status": {"type": "busy"}}
+
+    async def _messages_fetcher():
+        return {
+            "data": [
+                {
+                    "info": {"id": "assistant-1", "role": "assistant"},
+                    "parts": [{"type": "text", "text": "CI is still running."}],
+                }
+            ]
+        }
+
+    async def _status_handler(_event_type, payload, _event_id):
+        progress_events.append(payload)
+
+    async def _event_stream():
+        nonlocal stream_count
+        stream_count += 1
+        if stream_count == 1:
+            yield SSEEvent(
+                event="message.updated",
+                data=json.dumps({"sessionID": "s1", "info": {"role": "assistant"}}),
+            )
+            while True:
+                await asyncio.sleep(3600)
+                yield SSEEvent(event="server.heartbeat", data="")
+        yield SSEEvent(event="session.idle", data=json.dumps({"sessionID": "s1"}))
+
+    monkeypatch.setattr(
+        opencode_stream_lifecycle,
+        "_OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS",
+        (0.0,),
+    )
+    monkeypatch.setattr(
+        opencode_stream_lifecycle,
+        "_OPENCODE_STREAM_MAX_STALL_RECONNECT_ATTEMPTS",
+        0,
+    )
+    monkeypatch.setattr(
+        opencode_stream_lifecycle,
+        "_OPENCODE_POST_STALL_IDLE_POLL_SECONDS",
+        0.0,
+    )
+
+    output = await collect_opencode_output_from_events(
+        None,
+        session_id="s1",
+        event_stream_factory=lambda: _event_stream(),
+        session_fetcher=_status_fetcher,
+        messages_fetcher=_messages_fetcher,
+        part_handler=_status_handler,
+        turn_activity_fetcher=lambda: False,
+        stall_timeout_seconds=0.001,
+        first_event_timeout_seconds=None,
+    )
+
+    assert output.error is None
+    assert output.text == "CI is still running."
+    assert any(
+        event.get("type") == "stream_silent_stall_progress" for event in progress_events
+    )
+    assert not any(
+        event.get("type") == "stall_idle_wait_timeout" for event in progress_events
+    )
+
+
+@pytest.mark.anyio
 async def test_stream_lifecycle_preserves_idle_before_post_stall_deadline(
     monkeypatch,
 ) -> None:

@@ -259,6 +259,30 @@ async def collect_opencode_output_from_events(
         logger=logger,
     )
 
+    last_recovered_snapshot_text = ""
+
+    async def _messages_snapshot_made_progress() -> bool:
+        nonlocal last_recovered_snapshot_text
+        if messages_fetcher is None:
+            return False
+        try:
+            messages_payload = await messages_fetcher()
+        except (httpx.HTTPError, ValueError, OSError, AttributeError) as exc:
+            log_event(
+                logger,
+                logging.DEBUG,
+                "opencode.messages.progress_fetch_failed",
+                session_id=session_id,
+                exc=exc,
+            )
+            return False
+        recovered = recover_last_assistant_message(messages_payload, prompt=prompt)
+        recovered_text = recovered.text.strip() if recovered.text else ""
+        if not recovered_text or recovered_text == last_recovered_snapshot_text:
+            return False
+        last_recovered_snapshot_text = recovered_text
+        return True
+
     lifecycle = StreamLifecycleController(
         session_id=session_id,
         event_stream_factory=event_stream_factory,
@@ -267,6 +291,7 @@ async def collect_opencode_output_from_events(
         first_event_timeout_seconds=first_event_timeout_seconds,
         status_event_handler=part_handler,
         turn_activity_fetcher=turn_activity_fetcher,
+        stall_progress_fetcher=_messages_snapshot_made_progress,
         logger=logger,
     )
 
