@@ -62,7 +62,7 @@ def process_command(pid: int) -> Optional[str]:
         return None
     try:
         result = subprocess.run(
-            ["ps", "-o", "command=", "-p", str(pid)],
+            ["ps", "-ww", "-o", "command=", "-p", str(pid)],
             capture_output=True,
             text=True,
             check=False,
