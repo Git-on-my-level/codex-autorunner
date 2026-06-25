@@ -332,12 +332,16 @@ def _tail_event_from_progress_item(
     event_type = _tail_event_type_from_progress_item(item)
     grouped_items = progress_items or [item]
     progress_event_ids: list[int] = []
+    progress_event_id_seen: set[int] = set()
     progress_item_ids: list[str] = []
+    progress_item_id_seen: set[str] = set()
     for grouped_item in grouped_items:
-        if grouped_item.item_id not in progress_item_ids:
+        if grouped_item.item_id not in progress_item_id_seen:
+            progress_item_id_seen.add(grouped_item.item_id)
             progress_item_ids.append(grouped_item.item_id)
         for grouped_event_id in grouped_item.event_ids:
-            if grouped_event_id not in progress_event_ids:
+            if grouped_event_id not in progress_event_id_seen:
+                progress_event_id_seen.add(grouped_event_id)
                 progress_event_ids.append(grouped_event_id)
     return {
         "event_id": event_id,

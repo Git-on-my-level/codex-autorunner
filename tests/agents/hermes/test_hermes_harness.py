@@ -21,7 +21,7 @@ class _StubSupervisor:
         self.interrupted: list[tuple[Path, str, str | None]] = []
         self.streamed: list[tuple[Path, str, str]] = []
         self.ready_workspace: Path | None = None
-        self.snapshot_turn_ids: list[str] = []
+        self.snapshot_calls: list[tuple[str, int, int | None]] = []
         self.resume_error: Exception | None = None
 
     async def ensure_ready(self, workspace_root: Path) -> None:
@@ -161,8 +161,14 @@ class _StubSupervisor:
             },
         }
 
-    async def list_turn_events_snapshot(self, turn_id: str) -> list[dict[str, Any]]:
-        self.snapshot_turn_ids.append(turn_id)
+    async def list_turn_events_snapshot(
+        self,
+        turn_id: str,
+        *,
+        after_id: int = 0,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        self.snapshot_calls.append((turn_id, after_id, limit))
         return [{"method": "snapshot"}]
 
 
@@ -174,7 +180,23 @@ async def test_hermes_harness_list_progress_events_delegates_to_supervisor_snaps
     harness = HermesHarness(supervisor)
     got = await harness.list_progress_events("session-x", "turn-y")
     assert got == [{"method": "snapshot"}]
-    assert supervisor.snapshot_turn_ids == ["turn-y"]
+    assert supervisor.snapshot_calls == [("turn-y", 0, None)]
+
+
+@pytest.mark.asyncio
+async def test_hermes_harness_list_progress_events_passes_cursor_and_limit() -> None:
+    supervisor = _StubSupervisor()
+    harness = HermesHarness(supervisor)
+
+    got = await harness.list_progress_events(
+        "session-x",
+        "turn-y",
+        after_id=7,
+        limit=3,
+    )
+
+    assert got == [{"method": "snapshot"}]
+    assert supervisor.snapshot_calls == [("turn-y", 7, 3)]
 
 
 @pytest.mark.asyncio

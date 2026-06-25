@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import time
+
+from codex_autorunner.core.orchestration.progress_projection import (
+    ProgressProjectionItem,
+)
 from codex_autorunner.core.pma.tail_serialization import (
     _run_event_from_timeline_entry,
     _serialize_persisted_timeline_tail_events,
+    _tail_event_from_progress_item,
     build_live_activity_projection,
 )
 from codex_autorunner.core.ports.run_event import Interrupted
@@ -97,3 +103,35 @@ def test_persisted_tail_serializes_turn_interrupted_as_interrupted_event() -> No
     assert events[0]["event_type"] == "turn_interrupted"
     assert events[0]["progress_kind"] == "turn_interrupted"
     assert events[0]["summary"] == "Turn interrupted"
+
+
+def test_grouped_progress_tail_event_collects_ids_linearly() -> None:
+    grouped_items = [
+        ProgressProjectionItem(
+            item_id=f"tool:{idx % 700}",
+            kind="tool",
+            state="completed",
+            title="Tool completed",
+            summary=f"Tool {idx}",
+            event_ids=(idx, idx + 1),
+            timestamp="2026-06-25T00:00:00+00:00",
+            group_id="group-1",
+            group_kind="tool",
+            tool_name="shell",
+        )
+        for idx in range(1, 5001)
+    ]
+
+    started = time.perf_counter()
+    payload = _tail_event_from_progress_item(
+        grouped_items[-1],
+        received_at="2026-06-25T00:00:00+00:00",
+        progress_items=grouped_items,
+    )
+    elapsed = time.perf_counter() - started
+
+    assert payload["progress_item_ids"][:3] == ["tool:1", "tool:2", "tool:3"]
+    assert len(payload["progress_item_ids"]) == 700
+    assert payload["progress_event_ids"][:3] == [1, 2, 3]
+    assert payload["progress_event_ids"][-1] == 5001
+    assert elapsed < 1.0

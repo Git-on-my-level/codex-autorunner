@@ -815,11 +815,17 @@ class HermesSupervisor:
         async for event in state.event_buffer.tail():
             yield event
 
-    async def list_turn_events_snapshot(self, turn_id: str) -> list[dict[str, Any]]:
+    async def list_turn_events_snapshot(
+        self,
+        turn_id: str,
+        *,
+        after_id: int = 0,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
         async with self._lock:
             for (_, state_turn_id), state in self._turn_states.items():
                 if state_turn_id == turn_id:
-                    return state.event_buffer.snapshot()
+                    return state.event_buffer.snapshot(after_id=after_id, limit=limit)
         return []
 
     async def interrupt_turn(

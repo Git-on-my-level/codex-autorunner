@@ -304,6 +304,17 @@ def test_hub_lifecycle_worker_adaptive_backoff_on_idle() -> None:
     assert worker._current_interval() > worker._base_poll_interval_seconds
 
 
+def test_hub_lifecycle_worker_backoff_saturates_without_overflow() -> None:
+    worker = HubLifecycleWorker(
+        process_once=lambda: False,
+        poll_interval_seconds=0.1,
+        max_poll_interval_seconds=3.0,
+    )
+    worker._idle_streak = 10**9
+
+    assert worker._current_interval() == 3.0
+
+
 def test_hub_lifecycle_worker_resets_backoff_on_productive() -> None:
     call_count = 0
     completed = threading.Event()

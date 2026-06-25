@@ -257,10 +257,14 @@ class HubLifecycleWorker:
     def _current_interval(self) -> float:
         if self._idle_streak <= 0:
             return self._base_poll_interval_seconds
-        grown = self._base_poll_interval_seconds * (
-            self._BACKOFF_GROW_FACTOR**self._idle_streak
-        )
-        return min(grown, self._max_poll_interval_seconds)
+        interval = self._base_poll_interval_seconds
+        remaining_steps = self._idle_streak
+        while remaining_steps > 0:
+            interval *= self._BACKOFF_GROW_FACTOR
+            if interval >= self._max_poll_interval_seconds:
+                return self._max_poll_interval_seconds
+            remaining_steps -= 1
+        return min(interval, self._max_poll_interval_seconds)
 
     def wake(self) -> None:
         self._idle_streak = 0

@@ -1416,6 +1416,36 @@ async def test_opencode_harness_list_progress_events_returns_buffered_copy(
 
 
 @pytest.mark.asyncio
+async def test_opencode_harness_list_progress_events_honors_cursor_and_limit(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
+    harness = OpenCodeHarness(_StubSupervisor(_StubClient([])))
+    turn = await harness.start_turn(
+        workspace,
+        "session-1",
+        prompt="hello",
+        model=None,
+        reasoning=None,
+        approval_mode=None,
+        sandbox_policy=None,
+    )
+    pending = harness._pending_turns[("session-1", turn.turn_id)]
+    for idx in range(1, 6):
+        await pending.event_buffer.append({"id": idx, "message": {"method": "tool"}})
+
+    assert await harness.list_progress_events(
+        "session-1",
+        turn.turn_id,
+        after_id=2,
+        limit=2,
+    ) == [
+        {"id": 3, "message": {"method": "tool"}},
+        {"id": 4, "message": {"method": "tool"}},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_opencode_harness_wait_for_turn_uses_session_scoped_event_stream(
     tmp_path: Path,
 ) -> None:

@@ -35,6 +35,47 @@ async def test_turn_event_buffer_snapshot_returns_copy() -> None:
 
 
 @pytest.mark.asyncio
+async def test_turn_event_buffer_snapshot_filters_after_id_and_limit() -> None:
+    buf = TurnEventBuffer()
+    for idx in range(1, 6):
+        await buf.append({"id": idx, "value": idx})
+    await buf.append({"id": "not-a-number", "value": "ignored-after-cursor"})
+
+    assert buf.snapshot(after_id=2, limit=2) == [
+        {"id": 3, "value": 3},
+        {"id": 4, "value": 4},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_turn_event_buffer_snapshot_without_cursor_returns_newest_limit() -> None:
+    buf = TurnEventBuffer()
+    for idx in range(1, 6):
+        await buf.append({"id": idx, "value": idx})
+
+    assert buf.snapshot(limit=2) == [
+        {"id": 4, "value": 4},
+        {"id": 5, "value": 5},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_turn_event_buffer_snapshot_filters_unindexed_events_by_buffer_cursor() -> (
+    None
+):
+    buf = TurnEventBuffer()
+    await buf.append({"value": "first"})
+    await buf.append({"value": "second"})
+    await buf.append({"value": "third"})
+
+    snapshot = buf.snapshot(after_id=1, limit=1)
+
+    assert len(snapshot) == 1
+    assert snapshot[0]["value"] == "second"
+    assert "_car_buffer_sequence_id" not in snapshot[0]
+
+
+@pytest.mark.asyncio
 async def test_turn_event_buffer_tail_yields_events_as_they_arrive() -> None:
     buf = TurnEventBuffer()
     seen: list[dict] = []

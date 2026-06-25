@@ -794,9 +794,13 @@ def test_send_message_resolves_alias_backed_hermes_profile_runtime(
                 yield {}
 
         async def list_turn_events_snapshot(
-            self, turn_id: str
+            self,
+            turn_id: str,
+            *,
+            after_id: int = 0,
+            limit: int | None = None,
         ) -> list[dict[str, object]]:
-            _ = turn_id
+            _ = turn_id, after_id, limit
             return []
 
     def _fake_build_supervisor(
