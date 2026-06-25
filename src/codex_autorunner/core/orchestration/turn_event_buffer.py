@@ -53,7 +53,11 @@ class TurnEventBuffer:
         if min_id > 0:
             events = [event for event in events if _event_cursor(event) > min_id]
         if limit is not None:
-            events = events[: max(0, int(limit))]
+            normalized_limit = max(0, int(limit))
+            if min_id > 0:
+                events = events[:normalized_limit]
+            else:
+                events = events[-normalized_limit:] if normalized_limit > 0 else []
         return [dict(event) for _sequence_id, event in events]
 
     async def tail(self) -> AsyncIterator[dict[str, Any]]:

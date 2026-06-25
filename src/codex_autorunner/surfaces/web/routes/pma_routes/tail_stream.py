@@ -426,7 +426,11 @@ async def _build_managed_thread_tail_snapshot(
                 except TypeError:
                     raw_events = []
             if len(raw_events) > limit:
-                raw_events = raw_events[:limit]
+                raw_events = (
+                    raw_events[:limit]
+                    if persisted_max_event_id > 0
+                    else raw_events[-limit:]
+                )
             state = RuntimeThreadRunEventState()
             projection_state = runtime_projection_state or ProgressProjectionState()
             event_id_start = persisted_max_event_id
@@ -460,7 +464,11 @@ async def _build_managed_thread_tail_snapshot(
                     tail_events.append(entry)
                     event_id_start = int(entry.get("event_id") or event_id_start)
             if len(tail_events) > limit:
-                tail_events = tail_events[-limit:]
+                tail_events = (
+                    tail_events[:limit]
+                    if effective_resume_after > 0
+                    else tail_events[-limit:]
+                )
 
     last_event_id = effective_resume_after
     last_activity_at: Optional[str] = raw_last_activity_at

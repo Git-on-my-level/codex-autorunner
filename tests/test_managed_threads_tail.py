@@ -860,21 +860,38 @@ def test_managed_thread_tail_snapshot_passes_cursor_and_caps_runtime_overlay(
             f"/hub/pma/threads/{managed_thread_id}/tail",
             params={"since_event_id": 2, "limit": 2},
         )
+        initial_resp = client.get(
+            f"/hub/pma/threads/{managed_thread_id}/tail",
+            params={"limit": 2},
+        )
 
     assert resp.status_code == 200
-    assert harness.calls == [
+    assert initial_resp.status_code == 200
+    assert harness.calls[:2] == [
         {
             "conversation_id": "opencode-session-capped",
             "turn_id": "opencode-turn-capped",
             "after_id": 2,
             "limit": 2,
-        }
+        },
+        {
+            "conversation_id": "opencode-session-capped",
+            "turn_id": "opencode-turn-capped",
+            "after_id": 0,
+            "limit": 2,
+        },
     ]
     payload = resp.json()
     assert [event["event_id"] for event in payload["events"]] == [3, 4]
     assert [event["summary"] for event in payload["events"]] == [
         "Step 3",
         "Step 3 Step 4",
+    ]
+    initial_payload = initial_resp.json()
+    assert [event["event_id"] for event in initial_payload["events"]] == [6, 7]
+    assert [event["summary"] for event in initial_payload["events"]] == [
+        "Step 6",
+        "Step 6 Step 7",
     ]
 
 
