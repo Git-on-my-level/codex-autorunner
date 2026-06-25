@@ -28,12 +28,16 @@
   import '../app.css';
   import '../theme-presets.css';
 
+  const REPO_ATTENTION_CHANGED_EVENT = 'car:repo-attention-changed';
+
   let { children }: { children: Snippet } = $props();
   let collapsed = $state(false);
   let mobileOpen = $state(false);
   let hubTitle = $state('Web Hub');
   let titleDraft = $state('Web Hub');
   let titleSaving = $state(false);
+  let repoAttentionCount = $state(0);
+  let repoAttentionRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   const currentPath = $derived(stripRuntimeBasePath(page.url.pathname));
   const breadcrumbs = $derived(breadcrumbsForPath(currentPath));
 
@@ -58,9 +62,15 @@
       /* private mode / quota */
     }
     void loadHubState();
+    void loadRepoAttention();
     const unsubscribeReadModels = readModelEntityStore.subscribe(refreshPaletteSources);
+    window.addEventListener(REPO_ATTENTION_CHANGED_EVENT, handleRepoAttentionChanged);
     void loadPaletteSources();
-    return () => unsubscribeReadModels();
+    return () => {
+      unsubscribeReadModels();
+      window.removeEventListener(REPO_ATTENTION_CHANGED_EVENT, handleRepoAttentionChanged);
+      clearRepoAttentionRefreshTimer();
+    };
   });
 
   onDestroy(() => {
@@ -79,6 +89,40 @@
     if (!result.ok) return;
     hubTitle = result.data.title;
     titleDraft = result.data.title;
+  }
+
+  async function loadRepoAttention(): Promise<void> {
+    const result = await webApi.hub.getDashboard();
+    if (!result.ok) return;
+    const raw = result.data.raw as Record<string, unknown>;
+    const items = Array.isArray(raw.items) ? raw.items : [];
+    repoAttentionCount = items.filter((item) => {
+      if (!item || typeof item !== 'object') return false;
+      const record = item as Record<string, unknown>;
+      return record.item_type === 'run_dispatch' || record.next_action === 'reply_and_resume';
+    }).length;
+  }
+
+  function handleRepoAttentionChanged(event: Event): void {
+    const delta = event instanceof CustomEvent ? numericDelta(event.detail) : null;
+    if (delta !== null) repoAttentionCount = Math.max(0, repoAttentionCount + delta);
+    clearRepoAttentionRefreshTimer();
+    repoAttentionRefreshTimer = setTimeout(() => {
+      repoAttentionRefreshTimer = null;
+      void loadRepoAttention();
+    }, 8000);
+  }
+
+  function numericDelta(detail: unknown): number | null {
+    if (!detail || typeof detail !== 'object') return null;
+    const value = (detail as Record<string, unknown>).delta;
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  }
+
+  function clearRepoAttentionRefreshTimer(): void {
+    if (repoAttentionRefreshTimer === null) return;
+    clearTimeout(repoAttentionRefreshTimer);
+    repoAttentionRefreshTimer = null;
   }
 
   async function loadPaletteSources(): Promise<void> {
@@ -208,6 +252,11 @@
           >
             <span class="nav-initial" aria-hidden="true">{item.label.slice(0, 1)}</span>
             <span class="nav-label">{item.label}</span>
+            {#if item.href === '/repos' && repoAttentionCount > 0}
+              <span class="nav-attention-badge" aria-label={`${repoAttentionCount} repo item${repoAttentionCount === 1 ? '' : 's'} need response`}>
+                {repoAttentionCount > 9 ? '9+' : repoAttentionCount}
+              </span>
+            {/if}
           </a>
         {/each}
       </div>

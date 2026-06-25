@@ -433,6 +433,20 @@ a {
   text-align: center;
 }
 
+.nav-attention-badge {
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--color-warning-soft);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 42%, transparent);
+  color: var(--color-warning-ink, var(--color-warning));
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.35;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
 .nav-link.active .nav-badge {
   background: var(--color-accent-soft);
   color: var(--color-accent);
@@ -7239,6 +7253,7 @@ textarea:disabled {
 .sidebar-collapsed .brand-copy,
 .sidebar-collapsed .nav-label,
 .sidebar-collapsed .nav-badge,
+.sidebar-collapsed .nav-attention-badge,
 .sidebar-collapsed .nav-group-label,
 .sidebar-collapsed .sidebar-footer-copy {
   display: none;

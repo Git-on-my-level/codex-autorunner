@@ -30,10 +30,12 @@ from ....core.flows.failure_diagnostics import (
     get_failure_payload,
 )
 from ....core.flows.models import FlowRunStatus
+from ....core.flows.start_policy import evaluate_ticket_start_policy
 from ....core.flows.store import FlowStore, _get_durable_writes
 from ....core.flows.workspace_root import resolve_ticket_flow_workspace_root
 from ....core.state_roots import resolve_repo_flows_db_path
 from ....core.utils import find_repo_root
+from ....flows.ticket_flow.runtime_helpers import resume_ticket_flow_run
 from ....tickets.files import safe_relpath
 from ....tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ....tickets.replies import (
@@ -141,6 +143,96 @@ def _collect_reply_history(
     return history
 
 
+def _selected_active_dispatch(
+    history: list[dict[str, Any]],
+) -> Optional[dict[str, Any]]:
+    for entry in history:
+        dispatch = entry.get("dispatch")
+        if isinstance(dispatch, dict) and dispatch.get("is_handoff") is True:
+            return entry
+    for entry in history:
+        dispatch = entry.get("dispatch")
+        if isinstance(dispatch, dict) and dispatch.get("mode") != "turn_summary":
+            return entry
+    return history[0] if history else None
+
+
+def _validate_ticket_queue(repo_root: Path) -> None:
+    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+    lint_errors = list(evaluate_ticket_start_policy(ticket_dir).lint_errors)
+    if lint_errors:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Ticket validation failed",
+                "errors": lint_errors,
+            },
+        )
+
+
+async def _write_live_user_reply(
+    *,
+    repo_root: Path,
+    run_id: str,
+    record_input: dict[str, Any],
+    body: str,
+    title: Optional[str],
+    files: list[UploadFile],
+) -> dict[str, Any]:
+    workspace_root = _resolve_workspace_root(record_input, repo_root)
+    reply_paths = resolve_reply_paths(workspace_root=workspace_root, run_id=run_id)
+    ensure_reply_dirs(reply_paths)
+
+    cleaned_title = title.strip() if isinstance(title, str) and title.strip() else None
+    cleaned_body = body or ""
+
+    if cleaned_title:
+        fm = yaml.safe_dump({"title": cleaned_title}, sort_keys=False).strip()
+        raw = f"---\n{fm}\n---\n\n{cleaned_body}\n"
+    else:
+        raw = cleaned_body
+        if raw and not raw.endswith("\n"):
+            raw += "\n"
+
+    try:
+        reply_paths.user_reply_path.parent.mkdir(parents=True, exist_ok=True)
+        reply_paths.user_reply_path.write_text(raw, encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to write USER_REPLY.md: {exc}"
+        ) from exc
+
+    written_files: list[str] = []
+    for upload in files:
+        try:
+            filename = safe_attachment_name(upload.filename or "")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        dest = reply_paths.reply_dir / filename
+        data = await upload.read()
+        try:
+            dest.write_bytes(data)
+            written_files.append(filename)
+            try:
+                ensure_structure(repo_root)
+                save_file(repo_root, "inbox", filename, data)
+            except (OSError, ValueError):
+                _logger.debug("Failed to mirror attachment into FileBox", exc_info=True)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to write attachment: {exc}"
+            ) from exc
+
+    reply, errors = parse_user_reply(reply_paths.user_reply_path)
+    if errors or reply is None:
+        raise HTTPException(status_code=400, detail=errors or ["Invalid reply"])
+    return {
+        "reply": {"title": reply.title, "body": reply.body},
+        "files": written_files,
+        "workspace_root": str(workspace_root),
+    }
+
+
 def build_messages_routes() -> APIRouter:
     router = APIRouter()
 
@@ -168,7 +260,9 @@ def build_messages_routes() -> APIRouter:
             )
             if not history:
                 continue
-            latest = history[0]
+            latest = _selected_active_dispatch(history)
+            if latest is None:
+                continue
             return {
                 "active": True,
                 "run_id": record.id,
@@ -310,49 +404,14 @@ def build_messages_routes() -> APIRouter:
         input_data = dict(record.input_data or {})
         workspace_root = _resolve_workspace_root(input_data, repo_root)
         reply_paths = resolve_reply_paths(workspace_root=workspace_root, run_id=run_id)
-        ensure_reply_dirs(reply_paths)
-
-        cleaned_title = (
-            title.strip() if isinstance(title, str) and title.strip() else None
+        await _write_live_user_reply(
+            repo_root=repo_root,
+            run_id=run_id,
+            record_input=input_data,
+            body=body,
+            title=title,
+            files=files,
         )
-        cleaned_body = body or ""
-
-        if cleaned_title:
-            fm = yaml.safe_dump({"title": cleaned_title}, sort_keys=False).strip()
-            raw = f"---\n{fm}\n---\n\n{cleaned_body}\n"
-        else:
-            raw = cleaned_body
-            if raw and not raw.endswith("\n"):
-                raw += "\n"
-
-        try:
-            reply_paths.user_reply_path.parent.mkdir(parents=True, exist_ok=True)
-            reply_paths.user_reply_path.write_text(raw, encoding="utf-8")
-        except OSError as exc:
-            raise HTTPException(
-                status_code=500, detail=f"Failed to write USER_REPLY.md: {exc}"
-            ) from exc
-
-        for upload in files:
-            try:
-                filename = safe_attachment_name(upload.filename or "")
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            dest = reply_paths.reply_dir / filename
-            data = await upload.read()
-            try:
-                dest.write_bytes(data)
-                try:
-                    ensure_structure(repo_root)
-                    save_file(repo_root, "inbox", filename, data)
-                except (OSError, ValueError):
-                    _logger.debug(
-                        "Failed to mirror attachment into FileBox", exc_info=True
-                    )
-            except OSError as exc:
-                raise HTTPException(
-                    status_code=500, detail=f"Failed to write attachment: {exc}"
-                ) from exc
 
         seq = next_reply_seq(reply_paths.reply_history_dir)
         dispatch, errors = dispatch_reply(reply_paths, next_seq=seq)
@@ -364,6 +423,52 @@ def build_messages_routes() -> APIRouter:
             "status": "ok",
             "seq": dispatch.seq,
             "reply": {"title": dispatch.reply.title, "body": dispatch.reply.body},
+        }
+
+    @router.post("/api/messages/{run_id}/reply-and-resume")
+    async def post_reply_and_resume(
+        run_id: str,
+        body: str = Form(""),
+        title: Optional[str] = Form(None),
+        files: list[UploadFile] = File(default=[]),  # noqa: B006,B008
+    ):
+        repo_root = find_repo_root()
+        db_path = _flows_db_path(repo_root)
+        if not db_path.exists():
+            raise HTTPException(status_code=404, detail="No flows database")
+        try:
+            with FlowStore(db_path, durable=_get_durable_writes(repo_root)) as store:
+                record = store.get_flow_run(run_id)
+        except (sqlite3.Error, OSError, ValueError, KeyError):
+            raise HTTPException(
+                status_code=404, detail="Flows database unavailable"
+            ) from None
+        if not record:
+            raise HTTPException(status_code=404, detail="Run not found")
+        if record.status != FlowRunStatus.PAUSED:
+            raise HTTPException(status_code=409, detail="Run is not paused")
+        _validate_ticket_queue(repo_root)
+
+        written = await _write_live_user_reply(
+            repo_root=repo_root,
+            run_id=run_id,
+            record_input=dict(record.input_data or {}),
+            body=body,
+            title=title,
+            files=files,
+        )
+
+        try:
+            resumed = await resume_ticket_flow_run(repo_root, run_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return {
+            "status": "ok",
+            "run_id": resumed.id,
+            "run_status": resumed.status.value,
+            "reply": written["reply"],
+            "files": written["files"],
         }
 
     return router

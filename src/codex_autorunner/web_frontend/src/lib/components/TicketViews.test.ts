@@ -201,6 +201,7 @@ describe('TicketViews', () => {
               repo_id: 'repo-1',
               action_policy: [
                 { action: 'start', enabled: false, label: 'Start queue', disabled_reason: 'Ticket flow is already active', surface_visibility: { queue: true } },
+                { action: 'resume', enabled: false, label: 'Resume', disabled_reason: 'Run is not paused', surface_visibility: { queue: true } },
                 { action: 'stop', enabled: true, label: 'Stop', route: '/api/flows/run-policy/stop', surface_visibility: { queue: true } },
                 { action: 'restart', enabled: false, label: 'Restart', route: '/api/flows/run-policy/restart', requires_confirmation: true, disabled_reason: 'No restartable flow run', surface_visibility: { queue: true } }
               ]
@@ -215,6 +216,7 @@ describe('TicketViews', () => {
 
     expect(list.queueActions).toEqual([
       { action: 'start', enabled: false, label: 'Start queue', requiresConfirmation: false, disabledReason: 'Ticket flow is already active', method: 'POST', route: null },
+      { action: 'resume', enabled: false, label: 'Resume', requiresConfirmation: false, disabledReason: 'Run is not paused', method: 'POST', route: null },
       { action: 'stop', enabled: true, label: 'Stop', requiresConfirmation: false, disabledReason: null, method: 'POST', route: '/api/flows/run-policy/stop' },
       { action: 'restart', enabled: false, label: 'Restart', requiresConfirmation: true, disabledReason: 'No restartable flow run', method: 'POST', route: '/api/flows/run-policy/restart' }
     ]);
@@ -246,6 +248,7 @@ describe('TicketViews', () => {
       {
         actions: [
           { action_id: 'ticket_flow.start', enabled: false, label: 'Start queue', disabled_reason: 'Ticket flow is already active', method: 'POST', route: '/api/flows/ticket_flow/bootstrap' },
+          { action_id: 'ticket_flow.resume', enabled: true, label: 'Resume', disabled_reason: null, method: 'POST', route: '/api/flows/run-policy/resume' },
           { action_id: 'ticket_flow.stop', enabled: true, label: 'Stop', disabled_reason: null, method: 'POST', route: '/api/flows/run-policy/stop' },
           { action_id: 'ticket_flow.restart', enabled: false, label: 'Restart', requires_confirmation: true, disabled_reason: 'No restartable flow run', method: 'POST', route: '/api/flows/run-policy/restart' }
         ]
@@ -254,6 +257,7 @@ describe('TicketViews', () => {
 
     expect(list.queueActions).toEqual([
       { action: 'start', enabled: false, label: 'Start queue', requiresConfirmation: false, disabledReason: 'Ticket flow is already active', method: 'POST', route: '/api/flows/ticket_flow/bootstrap' },
+      { action: 'resume', enabled: true, label: 'Resume', requiresConfirmation: false, disabledReason: null, method: 'POST', route: '/api/flows/run-policy/resume' },
       { action: 'stop', enabled: true, label: 'Stop', requiresConfirmation: false, disabledReason: null, method: 'POST', route: '/api/flows/run-policy/stop' },
       { action: 'restart', enabled: false, label: 'Restart', requiresConfirmation: true, disabledReason: 'No restartable flow run', method: 'POST', route: '/api/flows/run-policy/restart' }
     ]);

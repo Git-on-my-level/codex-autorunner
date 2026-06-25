@@ -92,13 +92,21 @@ export type TicketQueueRun = {
 };
 
 export type TicketQueueAction = {
-  action: 'start' | 'stop' | 'restart';
+  action: 'start' | 'resume' | 'stop' | 'restart';
   enabled: boolean;
   label: string;
   requiresConfirmation: boolean;
   disabledReason: string | null;
   method: 'GET' | 'POST';
   route: string | null;
+};
+
+export type TicketHandoff = {
+  runId: string;
+  seq: number | null;
+  title: string;
+  body: string;
+  isHandoff: boolean;
 };
 
 export type SurfaceActionManifestAction = {
@@ -128,6 +136,7 @@ export type TicketListViewModel = {
   workspaceFilters: { id: string; label: string; count: number }[];
   queueRun: TicketQueueRun | null;
   queueActions: TicketQueueAction[];
+  handoff: TicketHandoff | null;
   flowStatus: TicketFlowStatusViewModel;
   /** Managed-thread id of the chat for the currently running ticket, when one exists. */
   currentChatId: string | null;
@@ -283,6 +292,7 @@ export function buildTicketListViewModel(
     workspaceFilters: buildWorkspaceFilters(rowsWithCurrent),
     queueRun,
     queueActions: buildQueueActions(queueRun, source.runs, actionManifest),
+    handoff: null,
     flowStatus,
     currentChatId,
     rows: rowsWithCurrent
@@ -846,7 +856,7 @@ function actionsFromManifest(manifest: SurfaceActionManifest | null): TicketQueu
 function queueActionFromManifest(action: SurfaceActionManifestAction): TicketQueueAction | null {
   const rawId = typeof action.action_id === 'string' ? action.action_id : '';
   const name = rawId.replace(/^ticket_flow\./, '');
-  if (name !== 'start' && name !== 'stop' && name !== 'restart') return null;
+  if (name !== 'start' && name !== 'resume' && name !== 'stop' && name !== 'restart') return null;
   return {
     action: name,
     enabled: action.enabled === true,
@@ -863,7 +873,7 @@ function queueActionFromPolicy(value: unknown): TicketQueueAction | null {
   const visibility = asRecord(action.surface_visibility);
   if (visibility.queue !== true) return null;
   const name = stringFromRaw(action, ['action']);
-  if (name !== 'start' && name !== 'stop' && name !== 'restart') return null;
+  if (name !== 'start' && name !== 'resume' && name !== 'stop' && name !== 'restart') return null;
   return {
     action: name,
     enabled: action.enabled === true,
@@ -877,7 +887,7 @@ function queueActionFromPolicy(value: unknown): TicketQueueAction | null {
 
 function orderQueueActions(actions: TicketQueueAction[]): TicketQueueAction[] {
   const byAction = new Map(actions.map((action) => [action.action, action]));
-  return (['start', 'stop', 'restart'] as const)
+  return (['start', 'resume', 'stop', 'restart'] as const)
     .map((action) => byAction.get(action))
     .filter((action): action is TicketQueueAction => Boolean(action));
 }

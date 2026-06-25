@@ -176,6 +176,94 @@ def test_ticket_flow_restart_route_starts_force_new_run(
     assert payload["status"] in {"pending", "running"}
 
 
+def test_ticket_flow_restart_route_replaces_paused_run(
+    tmp_path, monkeypatch, _flow_client
+):
+    _reset_state()
+    seed_hub_files(tmp_path, force=True)
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    (ticket_dir / "TICKET-001.md").write_text(
+        '---\nticket_id: "tkt_restart_paused001"\nagent: codex\ndone: false\n---\n',
+        encoding="utf-8",
+    )
+
+    db_path = tmp_path / ".codex-autorunner" / "flows.db"
+    store = FlowStore(db_path)
+    store.initialize()
+    old_run_id = str(uuid.uuid4())
+    store.create_flow_run(
+        run_id=old_run_id,
+        flow_type="ticket_flow",
+        input_data={},
+        metadata={},
+        state={"ticket_engine": {"status": "paused"}},
+        current_step="ticket_turn",
+    )
+    store.update_flow_run_status(old_run_id, FlowRunStatus.PAUSED)
+    store.close()
+
+    monkeypatch.setattr(
+        flow_routes, "_start_flow_worker", lambda *_args, **_kwargs: None
+    )
+
+    resp = _flow_client.post(f"/api/flows/{old_run_id}/restart", json={})
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["id"] != old_run_id
+    assert payload["flow_type"] == "ticket_flow"
+    assert payload["status"] in {"pending", "running"}
+
+
+def test_bootstrap_does_not_worker_resume_paused_run(
+    tmp_path, monkeypatch, _flow_client
+):
+    _reset_state()
+    seed_hub_files(tmp_path, force=True)
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    (ticket_dir / "TICKET-001.md").write_text(
+        '---\nticket_id: "tkt_paused_bootstrap001"\nagent: codex\ndone: false\n---\n',
+        encoding="utf-8",
+    )
+
+    db_path = tmp_path / ".codex-autorunner" / "flows.db"
+    store = FlowStore(db_path)
+    store.initialize()
+    run_id = str(uuid.uuid4())
+    store.create_flow_run(
+        run_id=run_id,
+        flow_type="ticket_flow",
+        input_data={},
+        metadata={},
+        state={"ticket_engine": {"status": "paused"}},
+        current_step="ticket_turn",
+    )
+    store.update_flow_run_status(run_id, FlowRunStatus.PAUSED)
+    store.close()
+
+    spawned = {"count": 0}
+
+    def fake_start_worker(*_args, **_kwargs):
+        spawned["count"] += 1
+
+    monkeypatch.setattr(flow_routes, "_start_flow_worker", fake_start_worker)
+
+    resp = _flow_client.post("/api/flows/ticket_flow/bootstrap", json={})
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["id"] == run_id
+    assert payload["status"] == "paused"
+    assert payload["state"]["hint"] == "paused_run_requires_resume"
+    assert spawned["count"] == 0
+
+
 def test_start_reuses_active_run_when_latest_is_terminal(
     tmp_path, monkeypatch, _flow_client
 ):
