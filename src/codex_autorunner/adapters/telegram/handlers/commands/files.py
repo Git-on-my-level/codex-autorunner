@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
+from .....core.artifact_filebox_storage import ArtifactFileBoxStorage
 from .....core.artifact_instructions import (
     ArtifactDeliveryContext,
 )
@@ -25,6 +26,7 @@ from .....core.surface_context_capsules import (
     build_artifact_delivery_capsule,
     render_capsules_for_prompt,
 )
+from ....chat.attachments import build_inbound_attachment_metadata
 from ....chat.constants import TOPIC_NOT_BOUND_MESSAGE
 from ....chat.media import IMAGE_CONTENT_TYPES, IMAGE_EXTS
 from ...adapter import TelegramAPIError, TelegramMessage
@@ -308,6 +310,30 @@ class FilesCommands(FileBoxCommandsMixin, TelegramCommandSupportMixin):
             input_items=input_items,
             record=record,
             placeholder_id=placeholder_id,
+            transcript_attachments=(
+                [
+                    build_inbound_attachment_metadata(
+                        path=image_inbox_path,
+                        original_name=(
+                            candidate.file_name
+                            or (Path(file_path).name if file_path else None)
+                            or image_inbox_path.name
+                        ),
+                        source_surface="telegram",
+                        source_message_id=str(message.message_id),
+                        source_thread_id=(
+                            str(message.thread_id)
+                            if message.thread_id is not None
+                            else None
+                        ),
+                        mime_type=candidate.mime_type,
+                        size_bytes=file_size or len(data),
+                        kind="image",
+                    )
+                ]
+                if image_inbox_path is not None
+                else None
+            ),
         )
 
     async def _handle_voice_message(
@@ -506,6 +532,25 @@ class FilesCommands(FileBoxCommandsMixin, TelegramCommandSupportMixin):
             text_override=prompt_text,
             record=record,
             placeholder_id=placeholder_id,
+            transcript_attachments=[
+                build_inbound_attachment_metadata(
+                    path=file_path_local,
+                    original_name=(
+                        candidate.file_name
+                        or (Path(file_path).name if file_path else None)
+                        or file_path_local.name
+                    ),
+                    source_surface="telegram",
+                    source_message_id=str(message.message_id),
+                    source_thread_id=(
+                        str(message.thread_id)
+                        if message.thread_id is not None
+                        else None
+                    ),
+                    mime_type=candidate.mime_type,
+                    size_bytes=file_size or len(data),
+                )
+            ],
         )
 
     async def _handle_media_batch(
@@ -1120,6 +1165,10 @@ class FilesCommands(FileBoxCommandsMixin, TelegramCommandSupportMixin):
         )
         token = secrets.token_hex(6)
         name = f"{stem}-{token}{ext}"
+        if pma_enabled and self._hub_root is not None:
+            return ArtifactFileBoxStorage(Path(self._hub_root)).save_filebox_file(
+                "inbox", name, data
+            )
         path = inbox_dir / name
         path.write_bytes(data)
         return path

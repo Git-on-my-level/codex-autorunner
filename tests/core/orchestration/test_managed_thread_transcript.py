@@ -67,6 +67,35 @@ def test_transcript_projects_legacy_injected_prompt_as_model_context() -> None:
     assert row["message"]["model_context_text"] == "repo guidance"
 
 
+def test_transcript_exposes_user_message_attachments_as_artifacts() -> None:
+    rows = transcript_rows_from_timeline_items(
+        [
+            _user_item(
+                {
+                    "text": "Review screenshot",
+                    "attachments": [
+                        {
+                            "kind": "image",
+                            "title": "screen.png",
+                            "url": "/hub/pma/files/inbox/screen.png",
+                            "size_bytes": 42,
+                        }
+                    ],
+                }
+            )
+        ]
+    )
+
+    assert rows[0]["message"]["artifacts"] == [
+        {
+            "kind": "image",
+            "title": "screen.png",
+            "url": "/hub/pma/files/inbox/screen.png",
+            "size_bytes": 42,
+        }
+    ]
+
+
 def test_transcript_omits_intermediate_progress_rows() -> None:
     rows = transcript_rows_from_timeline_items(
         [

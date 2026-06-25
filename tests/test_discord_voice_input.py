@@ -89,18 +89,25 @@ async def test_with_attachment_context_normalizes_discord_voice_transcription_me
         source_url="https://cdn.discordapp.com/attachments/1/2",
     )
 
-    prompt_text, saved_count, failed_count, transcript_message, native_input_items = (
-        await service._with_attachment_context(
-            prompt_text="",
-            workspace_root=tmp_path,
-            attachments=(attachment,),
-            channel_id="123",
-        )
+    (
+        prompt_text,
+        saved_count,
+        failed_count,
+        transcript_message,
+        native_input_items,
+        transcript_attachments,
+    ) = await service._with_attachment_context(
+        prompt_text="",
+        workspace_root=tmp_path,
+        attachments=(attachment,),
+        channel_id="123",
+        source_message_id="msg-1",
     )
 
     assert saved_count == 1
     assert failed_count == 0
     assert native_input_items is None
+    assert transcript_attachments[0]["source_message_id"] == "msg-1"
     assert "hello from discord" in (transcript_message or "")
     assert "Transcript: hello from discord" in prompt_text
 
@@ -213,13 +220,18 @@ async def test_with_attachment_context_uses_effective_provider_for_disclaimer(
         source_url="https://cdn.discordapp.com/attachments/1/2",
     )
 
-    prompt_text, saved_count, failed_count, transcript_message, native_input_items = (
-        await service._with_attachment_context(
-            prompt_text="",
-            workspace_root=tmp_path,
-            attachments=(attachment,),
-            channel_id="123",
-        )
+    (
+        prompt_text,
+        saved_count,
+        failed_count,
+        transcript_message,
+        native_input_items,
+        _transcript_attachments,
+    ) = await service._with_attachment_context(
+        prompt_text="",
+        workspace_root=tmp_path,
+        attachments=(attachment,),
+        channel_id="123",
     )
 
     assert saved_count == 1
