@@ -1286,7 +1286,10 @@ async def _execute_discord_thread_message(
     visible_seed = dispatch.turn_text.strip()
     if not visible_seed and transcript_message:
         visible_seed = transcript_message
-    if visible_seed:
+    envelope_user_text = visible_seed
+    if not envelope_user_text and transcript_attachments:
+        envelope_user_text = prompt_text.strip() or "(attachment)"
+    if envelope_user_text or transcript_attachments:
         turn_envelope = ChatTurnEnvelope(
             source=ChatTurnSource(
                 surface_kind="discord",
@@ -1295,9 +1298,9 @@ async def _execute_discord_thread_message(
                 thread_id=dispatch.event.thread.thread_id,
                 update_id=dispatch.event.update_id,
             ),
-            user_visible_text=visible_seed,
+            user_visible_text=envelope_user_text or "(attachment)",
             runtime_prompt=prompt_text,
-            title_seed=visible_seed,
+            title_seed=envelope_user_text or "(attachment)",
             input_items=turn_input_items,
             existing_session_runtime_prompt=existing_session_prompt_text,
             delivery_targets=(

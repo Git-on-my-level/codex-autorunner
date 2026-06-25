@@ -568,6 +568,33 @@ class FilesCommands(FileBoxCommandsMixin, TelegramCommandSupportMixin):
             return
         combined_prompt, input_items = self._build_media_prompt(context, result)
         last_message = context.sorted_messages[-1]
+        source_thread_id = (
+            str(last_message.thread_id) if last_message.thread_id is not None else None
+        )
+        transcript_attachments: list[dict[str, Any]] = []
+        for name, path, size in result.saved_image_inbox_info:
+            transcript_attachments.append(
+                build_inbound_attachment_metadata(
+                    path=Path(path),
+                    original_name=name,
+                    source_surface="telegram",
+                    source_message_id=str(last_message.message_id),
+                    source_thread_id=source_thread_id,
+                    size_bytes=size,
+                    kind="image",
+                )
+            )
+        for name, path, size in result.saved_file_info:
+            transcript_attachments.append(
+                build_inbound_attachment_metadata(
+                    path=Path(path),
+                    original_name=name,
+                    source_surface="telegram",
+                    source_message_id=str(last_message.message_id),
+                    source_thread_id=source_thread_id,
+                    size_bytes=size,
+                )
+            )
         log_event(
             self._logger,
             logging.INFO,
@@ -586,6 +613,7 @@ class FilesCommands(FileBoxCommandsMixin, TelegramCommandSupportMixin):
             input_items=input_items,
             record=context.record,
             placeholder_id=placeholder_id,
+            transcript_attachments=transcript_attachments or None,
         )
 
     async def _prepare_media_batch_context(
@@ -1169,9 +1197,9 @@ class FilesCommands(FileBoxCommandsMixin, TelegramCommandSupportMixin):
             return ArtifactFileBoxStorage(Path(self._hub_root)).save_filebox_file(
                 "inbox", name, data
             )
-        path = inbox_dir / name
-        path.write_bytes(data)
-        return path
+        return ArtifactFileBoxStorage(Path(workspace_path)).save_filebox_file(
+            "inbox", name, data
+        )
 
     def _format_file_prompt(
         self,
