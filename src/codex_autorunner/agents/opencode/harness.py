@@ -337,7 +337,9 @@ class OpenCodeHarness(AgentHarness):
         self, conversation_id: str, turn_id: str, **kwargs: Any
     ) -> list[dict[str, Any]]:
         """Return buffered progress events for a pending turn (snapshot-friendly)."""
-        _ = kwargs
+        after_id = int(kwargs.get("after_id") or 0)
+        limit = kwargs.get("limit")
+        normalized_limit = int(limit) if isinstance(limit, int) and limit >= 0 else None
         pending = self._pending_turns.get((conversation_id, turn_id or ""))
         if pending is None:
             for key, candidate in self._pending_turns.items():
@@ -362,7 +364,10 @@ class OpenCodeHarness(AgentHarness):
                 sample_keys,
             )
             return []
-        return pending.event_buffer.snapshot()
+        return pending.event_buffer.snapshot(
+            after_id=after_id,
+            limit=normalized_limit,
+        )
 
     def __init__(self, supervisor: OpenCodeHarnessSupervisorProtocol) -> None:
         self._supervisor = supervisor

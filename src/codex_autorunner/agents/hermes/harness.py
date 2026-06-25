@@ -194,8 +194,15 @@ class HermesHarness(AgentHarness):
     async def list_progress_events(
         self, conversation_id: str, turn_id: str, **kwargs: Any
     ) -> list[dict[str, Any]]:
-        _ = conversation_id, kwargs
-        return await self._supervisor.list_turn_events_snapshot(turn_id)
+        _ = conversation_id
+        after_id = int(kwargs.get("after_id") or 0)
+        limit = kwargs.get("limit")
+        normalized_limit = int(limit) if isinstance(limit, int) and limit >= 0 else None
+        return await self._supervisor.list_turn_events_snapshot(
+            turn_id,
+            after_id=after_id,
+            limit=normalized_limit,
+        )
 
 
 def _runtime_model_from_session_raw(raw: Mapping[str, Any]) -> Optional[dict[str, Any]]:

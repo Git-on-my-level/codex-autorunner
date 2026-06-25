@@ -791,6 +791,93 @@ def test_managed_thread_tail_snapshot_includes_opencode_list_progress_events(
     assert "Working" in str(first.get("summary") or "")
 
 
+def test_managed_thread_tail_snapshot_passes_cursor_and_caps_runtime_overlay(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_pma(hub_env.hub_root)
+
+    class _HarnessIgnoringLimit:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def supports(self, capability: str) -> bool:
+            return capability == "event_streaming"
+
+        def allows_parallel_event_stream(self) -> bool:
+            return True
+
+        async def list_progress_events(
+            self, conversation_id: str, turn_id: str, **kwargs: Any
+        ) -> list[dict[str, Any]]:
+            self.calls.append(
+                {
+                    "conversation_id": conversation_id,
+                    "turn_id": turn_id,
+                    **kwargs,
+                }
+            )
+            return [
+                {
+                    "id": idx,
+                    "method": "prompt/progress",
+                    "params": {"text": f"Step {idx}"},
+                }
+                for idx in range(3, 8)
+            ]
+
+        def stream_events(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: str,
+        ):
+            _ = workspace_root, conversation_id, turn_id
+
+            async def _stream():
+                if False:
+                    yield None
+
+            return _stream()
+
+    harness = _HarnessIgnoringLimit()
+    monkeypatch.setattr(
+        tail_stream,
+        "_managed_thread_harness",
+        lambda service, agent_id: harness,
+    )
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        managed_thread_id, _ = _seed_running_managed_thread(
+            hub_env,
+            app,
+            agent="opencode",
+            backend_thread_id="opencode-session-capped",
+            backend_turn_id="opencode-turn-capped",
+            name="opencode capped progress",
+        )
+        resp = client.get(
+            f"/hub/pma/threads/{managed_thread_id}/tail",
+            params={"since_event_id": 2, "limit": 2},
+        )
+
+    assert resp.status_code == 200
+    assert harness.calls == [
+        {
+            "conversation_id": "opencode-session-capped",
+            "turn_id": "opencode-turn-capped",
+            "after_id": 2,
+            "limit": 2,
+        }
+    ]
+    payload = resp.json()
+    assert [event["event_id"] for event in payload["events"]] == [3, 4]
+    assert [event["summary"] for event in payload["events"]] == [
+        "Step 3",
+        "Step 3 Step 4",
+    ]
+
+
 def test_managed_thread_tail_snapshot_prefers_persisted_live_timeline_for_opencode(
     hub_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:

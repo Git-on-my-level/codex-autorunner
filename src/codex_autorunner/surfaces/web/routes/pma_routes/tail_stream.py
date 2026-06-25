@@ -260,6 +260,23 @@ async def _build_managed_thread_orchestration_service_async(request: Request) ->
     return await asyncio.to_thread(build_managed_thread_orchestration_service, request)
 
 
+def _serialize_runtime_raw_tail_events_sync(
+    raw_event: Any, *args: Any, **kwargs: Any
+) -> list[dict[str, Any]]:
+    return asyncio.run(_serialize_runtime_raw_tail_events(raw_event, *args, **kwargs))
+
+
+async def _serialize_runtime_raw_tail_events_off_thread(
+    raw_event: Any, *args: Any, **kwargs: Any
+) -> list[dict[str, Any]]:
+    return await asyncio.to_thread(
+        _serialize_runtime_raw_tail_events_sync,
+        raw_event,
+        *args,
+        **kwargs,
+    )
+
+
 async def _build_managed_thread_tail_snapshot(
     *,
     request: Request,
@@ -403,6 +420,13 @@ async def _build_managed_thread_tail_snapshot(
                 Exception
             ):  # intentional: dynamic harness method - exception types depend on backend
                 raw_events = []
+            if not isinstance(raw_events, list):
+                try:
+                    raw_events = list(raw_events or [])
+                except TypeError:
+                    raw_events = []
+            if len(raw_events) > limit:
+                raw_events = raw_events[:limit]
             state = RuntimeThreadRunEventState()
             projection_state = runtime_projection_state or ProgressProjectionState()
             event_id_start = persisted_max_event_id
@@ -416,14 +440,16 @@ async def _build_managed_thread_tail_snapshot(
                         )
                     if activity_at:
                         raw_last_activity_at = activity_at
-                serialized_entries = await _serialize_runtime_raw_tail_events(
-                    raw_event,
-                    state,
-                    level=level,
-                    event_id_start=event_id_start,
-                    since_ms=since_ms,
-                    projection_state=projection_state,
-                    default_received_at=finished_at,
+                serialized_entries = (
+                    await _serialize_runtime_raw_tail_events_off_thread(
+                        raw_event,
+                        state,
+                        level=level,
+                        event_id_start=event_id_start,
+                        since_ms=since_ms,
+                        projection_state=projection_state,
+                        default_received_at=finished_at,
+                    )
                 )
                 if isinstance(state.token_usage, dict) and state.token_usage:
                     token_usage = dict(state.token_usage)
