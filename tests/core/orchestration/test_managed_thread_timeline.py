@@ -246,6 +246,49 @@ def test_user_attachment_metadata_gets_web_download_url_and_transcript_artifact(
     assert attachment["kind"] == "image"
 
 
+def test_hub_root_attachment_metadata_prefers_pma_download_url_with_repo_context(
+    tmp_path: Path,
+) -> None:
+    hub_root = _hub_root(tmp_path)
+    store = ManagedThreadStore(hub_root)
+    thread = store.create_thread("codex", hub_root, repo_id="repo-1")
+    thread_id = str(thread["managed_thread_id"])
+    turn = create_test_turn(
+        store,
+        thread_id,
+        prompt="Review PMA attachment",
+        metadata={
+            "attachments": [
+                {
+                    "name": "screen shot.png",
+                    "filename": "screen shot.png",
+                    "title": "Screenshot",
+                    "kind": "image",
+                    "box": "inbox",
+                    "size_bytes": 123,
+                }
+            ]
+        },
+    )
+    assert store.mark_turn_finished(
+        str(turn["managed_turn_id"]),
+        status="ok",
+        assistant_text="done",
+    )
+
+    payload = build_managed_thread_timeline(
+        hub_root,
+        thread_store=store,
+        managed_thread_id=thread_id,
+    )
+
+    user_item = next(
+        item for item in payload["items"] if item["kind"] == "user_message"
+    )
+    [attachment] = user_item["payload"]["attachments"]
+    assert attachment["url"] == "/hub/pma/files/inbox/screen%20shot.png"
+
+
 def test_multi_chunk_agent_thought_stream_projects_single_clean_reasoning(
     tmp_path: Path,
 ) -> None:

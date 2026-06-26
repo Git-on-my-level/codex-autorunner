@@ -1267,7 +1267,7 @@ class FilesCommands(FileBoxCommandsMixin, TelegramCommandSupportMixin):
                         ),
                     )
                 )
-        inbox_dir = self._files_inbox_dir(workspace_path, topic_key)
+        inbox_dir = filebox_inbox_dir(Path(workspace_path))
         topic_dir = self._files_topic_dir(workspace_path, topic_key)
         return render_capsules_for_prompt(
             (
