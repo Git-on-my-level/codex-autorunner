@@ -42,6 +42,7 @@ from ...adapters.chat.artifact_delivery import (
     LegacyArchivePolicy,
     import_and_drain_legacy_outbox,
 )
+from ...adapters.chat.attachments import build_inbound_attachment_metadata
 from ...adapters.chat.bound_live_progress import (
     bound_chat_progress_delivered_message_id,
     mark_bound_chat_progress_delivered,
@@ -113,6 +114,7 @@ from ...core.artifact_delivery import (
     DeliveryIntent,
     delivery_filename,
 )
+from ...core.artifact_filebox_storage import ArtifactFileBoxStorage
 from ...core.chat_queue_control import ChatQueueControlPlane, ChatQueueControlStore
 from ...core.config import (
     ConfigError,
@@ -2591,12 +2593,21 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         workspace_root: Path,
         attachments: tuple[Any, ...],
         channel_id: str,
-    ) -> tuple[str, int, int, Optional[str], Optional[list[dict[str, Any]]]]:
+        source_message_id: Optional[str] = None,
+        source_thread_id: Optional[str] = None,
+    ) -> tuple[
+        str,
+        int,
+        int,
+        Optional[str],
+        Optional[list[dict[str, Any]]],
+        list[dict[str, Any]],
+    ]:
         if not attachments:
-            return prompt_text, 0, 0, None, None
+            return prompt_text, 0, 0, None, None, []
 
         inbox = inbox_dir(workspace_root)
-        inbox.mkdir(parents=True, exist_ok=True)
+        storage = ArtifactFileBoxStorage(workspace_root)
         saved: list[SavedDiscordAttachment] = []
         failed = 0
         for index, attachment in enumerate(attachments, start=1):
@@ -2618,8 +2629,7 @@ class DiscordBotService(DiscordInteractionResponseMixin):
                     max_size_bytes=DISCORD_ATTACHMENT_MAX_BYTES,
                 )
                 file_name = self._build_attachment_filename(attachment, index=index)
-                path = inbox / file_name
-                path.write_bytes(data)
+                path = storage.save_filebox_file("inbox", file_name, data)
                 original_name = normalized.file_name or path.name
                 mime_type = normalized.mime_type
                 is_audio = normalized.is_audio(mime_type=mime_type)
@@ -2664,7 +2674,7 @@ class DiscordBotService(DiscordInteractionResponseMixin):
                 )
 
         if not saved:
-            return prompt_text, 0, failed, None, None
+            return prompt_text, 0, failed, None, None, []
 
         provider_name: Optional[str] = None
         if any(item.transcript_text for item in saved):
@@ -2694,12 +2704,26 @@ class DiscordBotService(DiscordInteractionResponseMixin):
             target_conversation_key=f"channel:{channel_id}",
             workspace_scope=f"repo:{workspace_root}",
         )
+        transcript_attachments = [
+            build_inbound_attachment_metadata(
+                path=item.path,
+                original_name=item.original_name,
+                source_surface="discord",
+                source_message_id=source_message_id,
+                source_thread_id=source_thread_id,
+                mime_type=item.mime_type,
+                size_bytes=item.size_bytes,
+                kind="image" if item.is_image else ("audio" if item.is_audio else None),
+            )
+            for item in saved
+        ]
         return (
             payload.prompt_text,
             payload.saved_count,
             payload.failed_count,
             payload.user_visible_transcript,
             cast(Optional[list[dict[str, Any]]], payload.native_input_items_payload),
+            transcript_attachments,
         )
 
     def _build_attachment_filename(self, attachment: Any, *, index: int) -> str:

@@ -465,9 +465,11 @@ async def test_discord_message_turns_delete_immediate_placeholder_when_backgroun
 
         async def _with_attachment_context(
             self, *, prompt_text: str, **_kwargs: object
-        ) -> tuple[str, int, int, None, list[dict[str, object]]]:
+        ) -> tuple[
+            str, int, int, None, list[dict[str, object]], list[dict[str, object]]
+        ]:
             _ = prompt_text
-            return "", 0, 1, None, []
+            return "", 0, 1, None, [], []
 
         async def _send_channel_message(
             self, channel_id: str, payload: dict[str, object]
@@ -682,9 +684,11 @@ async def test_discord_message_turns_show_busy_placeholder_for_attachment_prep(
 
         async def _with_attachment_context(
             self, *, prompt_text: str, **_kwargs: object
-        ) -> tuple[str, int, int, None, list[dict[str, object]]]:
+        ) -> tuple[
+            str, int, int, None, list[dict[str, object]], list[dict[str, object]]
+        ]:
             _ = prompt_text
-            return "", 0, 1, None, []
+            return "", 0, 1, None, [], []
 
         async def _send_channel_message(
             self, channel_id: str, payload: dict[str, object]
@@ -891,8 +895,10 @@ async def test_discord_notification_reply_routes_to_managed_thread_with_context(
 
         async def _with_attachment_context(
             self, *, prompt_text: str, **_kwargs: object
-        ) -> tuple[str, int, int, None, list[dict[str, object]]]:
-            return prompt_text, 0, 0, None, []
+        ) -> tuple[
+            str, int, int, None, list[dict[str, object]], list[dict[str, object]]
+        ]:
+            return prompt_text, 0, 0, None, [], []
 
         async def _maybe_inject_github_context(
             self,

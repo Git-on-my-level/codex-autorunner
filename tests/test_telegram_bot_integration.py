@@ -922,7 +922,7 @@ async def test_document_message_saves_inbox(tmp_path: Path) -> None:
         await service._handle_media_message(message, runtime, "")
     finally:
         await service._app_server_supervisor.close_all()
-    inbox_root = repo / ".codex-autorunner" / "uploads" / "telegram-files"
+    inbox_root = repo / ".codex-autorunner" / "filebox" / "inbox"
     inbox_files = [path for path in inbox_root.rglob("*") if path.is_file()]
     assert inbox_files
 
@@ -952,7 +952,7 @@ async def test_photo_batch_message_saves_inbox(tmp_path: Path) -> None:
         await service._handle_media_batch([message])
     finally:
         await service._app_server_supervisor.close_all()
-    inbox_root = repo / ".codex-autorunner" / "uploads" / "telegram-files"
+    inbox_root = repo / ".codex-autorunner" / "filebox" / "inbox"
     inbox_files = [path for path in inbox_root.rglob("*") if path.is_file()]
     assert inbox_files
     assert any(path.suffix.lower() == ".jpg" for path in inbox_files)

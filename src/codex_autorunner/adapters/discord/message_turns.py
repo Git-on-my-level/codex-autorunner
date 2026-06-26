@@ -635,11 +635,14 @@ async def _submit_discord_flow_reply(
             failed_attachments,
             transcript_message,
             _native_input_items,
+            _transcript_attachments,
         ) = await dispatch.service._with_attachment_context(
             prompt_text=dispatch.flow_reply_text,
             workspace_root=dispatch.workspace_root,
             attachments=dispatch.event.attachments,
             channel_id=dispatch.channel_id,
+            source_message_id=dispatch.event.message.message_id,
+            source_thread_id=dispatch.event.thread.thread_id,
         )
         if transcript_message:
             await dispatch.service._send_channel_message_safe(
@@ -1049,11 +1052,14 @@ async def _execute_discord_thread_message(
         failed_attachments,
         transcript_message,
         attachment_input_items,
+        transcript_attachments,
     ) = await dispatch.service._with_attachment_context(
         prompt_text=prompt_text,
         workspace_root=request_workspace_root,
         attachments=dispatch.event.attachments,
         channel_id=dispatch.channel_id,
+        source_message_id=dispatch.event.message.message_id,
+        source_thread_id=dispatch.event.thread.thread_id,
     )
     if transcript_message:
         await dispatch.service._send_channel_message_safe(
@@ -1280,7 +1286,10 @@ async def _execute_discord_thread_message(
     visible_seed = dispatch.turn_text.strip()
     if not visible_seed and transcript_message:
         visible_seed = transcript_message
-    if visible_seed:
+    envelope_user_text = visible_seed
+    if not envelope_user_text and transcript_attachments:
+        envelope_user_text = prompt_text.strip() or "(attachment)"
+    if envelope_user_text or transcript_attachments:
         turn_envelope = ChatTurnEnvelope(
             source=ChatTurnSource(
                 surface_kind="discord",
@@ -1289,9 +1298,9 @@ async def _execute_discord_thread_message(
                 thread_id=dispatch.event.thread.thread_id,
                 update_id=dispatch.event.update_id,
             ),
-            user_visible_text=visible_seed,
+            user_visible_text=envelope_user_text or "(attachment)",
             runtime_prompt=prompt_text,
-            title_seed=visible_seed,
+            title_seed=envelope_user_text or "(attachment)",
             input_items=turn_input_items,
             existing_session_runtime_prompt=existing_session_prompt_text,
             delivery_targets=(
@@ -1300,6 +1309,11 @@ async def _execute_discord_thread_message(
                     surface_key=resolved_managed_thread_surface_key
                     or dispatch.channel_id,
                 ),
+            ),
+            metadata=(
+                {"attachments": transcript_attachments}
+                if transcript_attachments
+                else {}
             ),
         )
         run_turn_kwargs["turn_envelope"] = turn_envelope

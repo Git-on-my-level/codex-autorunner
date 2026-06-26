@@ -178,7 +178,7 @@ def test_completed_timeline_separates_intermediate_and_final_output(
         item for item in payload["items"] if item["kind"] == "user_message"
     )
     assert user_item["payload"]["attachments"] == [
-        {"attachment_id": "att-1", "title": "notes.txt"}
+        {"attachment_id": "att-1", "title": "notes.txt", "kind": "file"}
     ]
     artifact_item = next(
         item for item in payload["items"] if item["kind"] == "artifact"
@@ -197,6 +197,53 @@ def test_completed_timeline_separates_intermediate_and_final_output(
         item["payload"].get("source_event_type") == "output_delta"
         for item in payload["items"]
     )
+
+
+def test_user_attachment_metadata_gets_web_download_url_and_transcript_artifact(
+    tmp_path: Path,
+) -> None:
+    hub_root = _hub_root(tmp_path)
+    workspace = hub_root / "repo"
+    workspace.mkdir(parents=True)
+    store = ManagedThreadStore(hub_root)
+    thread = store.create_thread("codex", workspace, repo_id="repo-1")
+    thread_id = str(thread["managed_thread_id"])
+    turn = create_test_turn(
+        store,
+        thread_id,
+        prompt="Review attachment",
+        metadata={
+            "attachments": [
+                {
+                    "name": "screen shot.png",
+                    "filename": "screen shot.png",
+                    "title": "Screenshot",
+                    "kind": "image",
+                    "box": "inbox",
+                    "size_bytes": 123,
+                }
+            ]
+        },
+    )
+    assert store.mark_turn_finished(
+        str(turn["managed_turn_id"]),
+        status="ok",
+        assistant_text="done",
+    )
+
+    payload = build_managed_thread_timeline(
+        hub_root,
+        thread_store=store,
+        managed_thread_id=thread_id,
+    )
+
+    user_item = next(
+        item for item in payload["items"] if item["kind"] == "user_message"
+    )
+    [attachment] = user_item["payload"]["attachments"]
+    assert attachment["url"] == "/hub/filebox/repo-1/inbox/screen%20shot.png"
+    assert attachment["title"] == "Screenshot"
+    assert attachment["kind"] == "image"
 
 
 def test_multi_chunk_agent_thought_stream_projects_single_clean_reasoning(

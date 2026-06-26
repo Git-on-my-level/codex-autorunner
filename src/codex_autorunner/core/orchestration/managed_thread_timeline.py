@@ -642,16 +642,21 @@ def _terminal_event_ids_from_timeline(entries: Iterable[dict[str, Any]]) -> list
 def _append_user_message(
     items: list[ManagedThreadTimelineItem],
     *,
+    hub_root: Any,
     managed_thread_id: str,
+    thread: dict[str, Any],
     turn: dict[str, Any],
     sequence: int,
 ) -> int:
     managed_turn_id = str(turn.get("managed_turn_id") or "")
     timestamp = _turn_timestamp(turn)
     metadata = _metadata(turn)
-    attachments = metadata.get("attachments")
-    if not isinstance(attachments, list):
-        attachments = []
+    attachments = _web_attachment_payloads(
+        metadata.get("attachments"),
+        hub_root=hub_root,
+        repo_id=_normalize_optional_text(thread.get("repo_id")),
+        workspace_root=_normalize_optional_text(thread.get("workspace_root")),
+    )
     raw_prompt = str(turn.get("prompt") or "")
     user_visible_text = _normalize_optional_text(metadata.get("user_visible_text"))
     if user_visible_text is None:
@@ -686,11 +691,71 @@ def _append_user_message(
                 "capsule_refs": capsule_refs,
                 "client_turn_id": turn.get("client_turn_id"),
                 "request_kind": turn.get("request_kind"),
-                "attachments": [a for a in attachments if isinstance(a, dict)],
+                "attachments": attachments,
             },
         )
     )
     return sequence + 1
+
+
+def _web_attachment_payloads(
+    raw_attachments: Any,
+    *,
+    hub_root: Any,
+    repo_id: Optional[str],
+    workspace_root: Optional[str],
+) -> list[dict[str, Any]]:
+    if not isinstance(raw_attachments, list):
+        return []
+    attachments: list[dict[str, Any]] = []
+    for raw in raw_attachments:
+        if not isinstance(raw, dict):
+            continue
+        payload = dict(raw)
+        name = _normalize_optional_text(
+            payload.get("name")
+            or payload.get("filename")
+            or payload.get("uploaded_name")
+        )
+        box = _normalize_optional_text(payload.get("box")) or "inbox"
+        if name and not _normalize_optional_text(payload.get("url")):
+            download_url = _web_filebox_download_url(
+                hub_root=hub_root,
+                repo_id=repo_id,
+                workspace_root=workspace_root,
+                box=box,
+                filename=name,
+            )
+            if download_url:
+                payload["url"] = download_url
+        if name:
+            payload.setdefault("filename", name)
+            payload.setdefault("name", name)
+        if not _normalize_optional_text(payload.get("title")) and name:
+            payload["title"] = name
+        payload.setdefault("kind", "file")
+        attachments.append(payload)
+    return attachments
+
+
+def _web_filebox_download_url(
+    *,
+    hub_root: Any,
+    repo_id: Optional[str],
+    workspace_root: Optional[str],
+    box: str,
+    filename: str,
+) -> Optional[str]:
+    encoded_box = quote(box, safe="")
+    encoded_filename = quote(filename, safe="")
+    if repo_id:
+        return (
+            f"/hub/filebox/{quote(repo_id, safe='')}/"
+            f"{encoded_box}/{encoded_filename}"
+        )
+    if workspace_root and Path(workspace_root) == Path(hub_root):
+        return f"/hub/pma/files/{encoded_box}/{encoded_filename}"
+    return None
 
 
 def _capsule_refs_from_metadata(metadata: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1649,6 +1714,7 @@ def _append_turn_timeline_items(
     *,
     hub_root: Any,
     managed_thread_id: str,
+    thread: dict[str, Any],
     turn: dict[str, Any],
     sequence: int,
     turn_timeline_entries: Optional[list[dict[str, Any]]] = None,
@@ -1663,7 +1729,9 @@ def _append_turn_timeline_items(
     )
     sequence = _append_user_message(
         items,
+        hub_root=hub_root,
         managed_thread_id=managed_thread_id,
+        thread=thread,
         turn=turn,
         sequence=sequence,
     )
@@ -1751,6 +1819,7 @@ def build_managed_thread_timeline(
                 items,
                 hub_root=hub_root,
                 managed_thread_id=normalized_thread_id,
+                thread=thread,
                 turn=turn,
                 sequence=sequence,
                 turn_timeline_entries=turn_timeline_entries.get(
@@ -1771,6 +1840,7 @@ def build_managed_thread_timeline(
             items,
             hub_root=hub_root,
             managed_thread_id=normalized_thread_id,
+            thread=thread,
             turn=turns[turn_index],
             sequence=sequence,
             turn_timeline_entries=turn_timeline_entries.get(

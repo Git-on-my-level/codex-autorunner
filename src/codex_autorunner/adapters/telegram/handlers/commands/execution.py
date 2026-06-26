@@ -1233,6 +1233,7 @@ async def _run_telegram_managed_thread_turn(
     chat_ux_snapshot: Optional[ChatUxTimingSnapshot] = None,
     user_visible_text: Optional[str] = None,
     title_seed: Optional[str] = None,
+    transcript_attachments: Optional[list[dict[str, Any]]] = None,
 ) -> _TurnRunResult | _TurnRunFailure:
     if chat_ux_snapshot is not None:
         chat_ux_snapshot.record(ChatUxMilestone.ACK_FINISHED)
@@ -1796,6 +1797,10 @@ async def _run_telegram_managed_thread_turn(
         and existing_session_prompt_text.strip()
     ):
         metadata["existing_session_runtime_prompt"] = existing_session_prompt_text
+    if transcript_attachments:
+        metadata["attachments"] = [
+            dict(item) for item in transcript_attachments if isinstance(item, dict)
+        ]
     client_request_id = f"telegram:{topic_key}:{secrets.token_hex(6)}"
     message_request = MessageRequest(
         target_id=thread.thread_target_id,
@@ -3639,6 +3644,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         placeholder_id: Optional[int] = None,
         surface_key_override: Optional[str] = None,
         pma_context_prefix: Optional[str] = None,
+        transcript_attachments: Optional[list[dict[str, Any]]] = None,
     ) -> _TurnRunResult | _TurnRunFailure:
         key = surface_key_override or await self._resolve_topic_key(
             message.chat_id, message.thread_id
@@ -3837,6 +3843,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 chat_ux_snapshot=_chat_ux_snapshot,
                 user_visible_text=user_visible_seed,
                 title_seed=user_visible_seed,
+                transcript_attachments=transcript_attachments,
             )
             _record_pending_planned_injections(result)
             return result
@@ -3869,6 +3876,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 chat_ux_snapshot=_chat_ux_snapshot,
                 user_visible_text=user_visible_seed,
                 title_seed=user_visible_seed,
+                transcript_attachments=transcript_attachments,
             )
             _record_pending_planned_injections(result)
             return result

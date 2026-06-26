@@ -377,6 +377,7 @@ class TelegramCommandHandlers(
         placeholder_id: Optional[int] = None,
         surface_key_override: Optional[str] = None,
         pma_context_prefix: Optional[str] = None,
+        transcript_attachments: Optional[list[dict[str, Any]]] = None,
     ) -> None:
         if placeholder_id is not None:
             send_placeholder = False
@@ -394,6 +395,7 @@ class TelegramCommandHandlers(
             placeholder_id=placeholder_id,
             surface_key_override=surface_key_override,
             pma_context_prefix=pma_context_prefix,
+            transcript_attachments=transcript_attachments,
         )
         if isinstance(outcome, _TurnRunFailure):
             return
