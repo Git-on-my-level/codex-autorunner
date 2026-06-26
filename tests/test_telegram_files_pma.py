@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,6 +10,7 @@ from codex_autorunner.adapters.telegram.client import (
     TelegramForwardOrigin,
     TelegramMessage,
 )
+from codex_autorunner.adapters.telegram.config import TelegramMediaCandidate
 from codex_autorunner.adapters.telegram.handlers.commands.files import (
     FilesCommands,
     MediaBatchContext,
@@ -43,6 +45,7 @@ class _FilesHandlerStub(FilesCommands):
         self._config = SimpleNamespace(media=media_cfg)
         self._hub_root = hub_root
         self._router = _RouterStub(record)
+        self._logger = logging.getLogger(__name__)
         self._sent: list[str] = []
 
     def _with_conversation_id(
@@ -144,3 +147,99 @@ def test_build_media_prompt_includes_forwarded_caption(tmp_path: Path) -> None:
     assert "Forwarded message from Ops [message 9]:" in prompt
     assert "caption here" in prompt
     assert input_items is None
+
+
+def test_repo_mode_inbox_file_saves_to_filebox(tmp_path: Path) -> None:
+    handler = FilesCommands.__new__(FilesCommands)
+    handler._hub_root = tmp_path / "hub"
+    candidate = TelegramMediaCandidate(
+        kind="document",
+        file_id="file-1",
+        file_name="notes.txt",
+        mime_type="text/plain",
+        file_size=5,
+    )
+
+    saved_path = handler._save_inbox_file(
+        str(tmp_path),
+        "10:20",
+        b"hello",
+        candidate=candidate,
+        file_path=None,
+        pma_enabled=False,
+    )
+
+    assert saved_path.parent == tmp_path / ".codex-autorunner" / "filebox" / "inbox"
+    assert saved_path.read_bytes() == b"hello"
+
+
+@pytest.mark.anyio
+async def test_media_batch_passes_transcript_attachments(tmp_path: Path) -> None:
+    handler = _FilesHandlerStub(
+        tmp_path / "hub",
+        TelegramTopicRecord(workspace_path=str(tmp_path), pma_enabled=False),
+    )
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=10,
+        thread_id=20,
+        from_user_id=2,
+        text=None,
+        date=None,
+        is_topic_message=True,
+    )
+    context = MediaBatchContext(
+        first_message=message,
+        sorted_messages=[message],
+        record=TelegramTopicRecord(workspace_path=str(tmp_path), pma_enabled=False),
+        runtime=None,
+        topic_key="10:20",
+        max_image_bytes=1024,
+        max_file_bytes=1024,
+    )
+    saved_path = tmp_path / ".codex-autorunner" / "filebox" / "inbox" / "notes.txt"
+    saved_path.parent.mkdir(parents=True)
+    saved_path.write_bytes(b"hello")
+    result = MediaBatchResult(
+        saved_image_paths=[],
+        saved_image_inbox_info=[],
+        saved_file_info=[("notes.txt", str(saved_path), 5)],
+        stats=MediaBatchStats(),
+    )
+    captured: dict[str, object] = {}
+
+    async def _prepare_media_batch_context(
+        _messages: list[TelegramMessage],
+    ) -> MediaBatchContext:
+        return context
+
+    async def _process_media_messages(_context: MediaBatchContext) -> MediaBatchResult:
+        return result
+
+    def _build_media_prompt(
+        _context: MediaBatchContext,
+        _result: MediaBatchResult,
+    ) -> tuple[str, None]:
+        return "File received.", None
+
+    async def _handle_normal_message(
+        _message: TelegramMessage,
+        _runtime: object,
+        **kwargs: object,
+    ) -> None:
+        captured.update(kwargs)
+
+    handler._prepare_media_batch_context = _prepare_media_batch_context
+    handler._process_media_messages = _process_media_messages
+    handler._build_media_prompt = _build_media_prompt
+    handler._handle_normal_message = _handle_normal_message
+
+    await handler._handle_media_batch([message])
+
+    [attachment] = captured["transcript_attachments"]
+    assert attachment["box"] == "inbox"
+    assert attachment["name"] == "notes.txt"
+    assert attachment["source_surface"] == "telegram"
+    assert attachment["source_message_id"] == "2"
+    assert attachment["source_thread_id"] == "20"

@@ -748,13 +748,13 @@ def _web_filebox_download_url(
 ) -> Optional[str]:
     encoded_box = quote(box, safe="")
     encoded_filename = quote(filename, safe="")
+    if workspace_root and Path(workspace_root) == Path(hub_root):
+        return f"/hub/pma/files/{encoded_box}/{encoded_filename}"
     if repo_id:
         return (
             f"/hub/filebox/{quote(repo_id, safe='')}/"
             f"{encoded_box}/{encoded_filename}"
         )
-    if workspace_root and Path(workspace_root) == Path(hub_root):
-        return f"/hub/pma/files/{encoded_box}/{encoded_filename}"
     return None
 
 
