@@ -1,6 +1,9 @@
 [Unit]
 Description=Codex Autorunner Telegram bot
-After=network.target
+After=network.target car-hub.service
+Wants=car-hub.service
+StartLimitIntervalSec=300
+StartLimitBurst=20
 
 [Service]
 Type=simple
@@ -8,8 +11,8 @@ WorkingDirectory=/home/you/car-workspace
 EnvironmentFile=%h/.config/codex-autorunner/codex-autorunner.env
 # Replace the ExecStart path with `which car` or the codex-autorunner binary.
 ExecStart=/home/you/.local/bin/car telegram start --path /home/you/car-workspace
-Restart=on-failure
-RestartSec=3
+Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=default.target

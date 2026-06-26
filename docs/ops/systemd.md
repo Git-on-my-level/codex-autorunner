@@ -1,7 +1,7 @@
-# systemd Runbook (Hub + Telegram)
+# systemd Runbook (Hub + Chat Surfaces)
 
 This runbook covers running CAR in hub mode with systemd on Linux. It includes
-user and system service guidance plus templates for hub and Telegram.
+user and system service guidance plus templates for hub, Telegram, and Discord.
 
 ## Prerequisites
 
@@ -25,6 +25,8 @@ CAR_AUTH_TOKEN=replace_me
 OPENAI_API_KEY=replace_me
 CAR_TELEGRAM_BOT_TOKEN=replace_me
 CAR_TELEGRAM_CHAT_ID=replace_me
+CAR_DISCORD_BOT_TOKEN=replace_me
+CAR_DISCORD_APP_ID=replace_me
 EOF
 chmod 600 ~/.config/codex-autorunner/codex-autorunner.env
 ```
@@ -57,6 +59,7 @@ update:
   linux_service_names:
     hub: car-hub
     telegram: car-telegram
+    discord: car-discord
 ```
 
 `update.backend` accepts `auto`, `launchd`, `systemd-user`, or `systemd-system`.
@@ -77,6 +80,12 @@ refresh now fails with a clear message instead of silently aborting.
 7) `journalctl --user -u car-hub -f`
 8) Health check: `curl -fsS http://127.0.0.1:4173/health`
 
+The hub unit should be the canonical owner of the hub process. Chat surfaces
+should attach to this supervised hub instead of starting an incidental hub owner
+from a bot/session process. If `car doctor` reports that the configured hub port
+is owned outside `car-hub.service`, stop the incidental process and start
+`car-hub.service` before starting chat services.
+
 ## Telegram service
 
 1) Copy `docs/ops/systemd-telegram.service` to
@@ -86,6 +95,21 @@ refresh now fails with a clear message instead of silently aborting.
 3) `systemctl --user daemon-reload`
 4) `systemctl --user enable --now car-telegram`
 5) `journalctl --user -u car-telegram -f`
+
+## Discord service
+
+1) Copy `docs/ops/systemd-discord.service` to
+   `~/.config/systemd/user/car-discord.service`.
+2) Ensure the env file includes `CAR_DISCORD_BOT_TOKEN` and
+   `CAR_DISCORD_APP_ID`.
+3) `systemctl --user daemon-reload`
+4) `systemctl --user enable --now car-discord`
+5) `journalctl --user -u car-discord -f`
+
+Both chat service templates declare `Wants=car-hub.service` and
+`After=car-hub.service`. They remain separate supervised units, but startup
+ordering points them at the canonical hub instead of making either bot the
+long-running owner of the hub process.
 
 ## System service (root-managed)
 
@@ -97,7 +121,7 @@ If you need a system service:
 - `sudo systemctl daemon-reload`
 - `sudo systemctl enable --now car-hub`
 
-The same pattern applies to `car-telegram.service`.
+The same pattern applies to `car-telegram.service` and `car-discord.service`.
 
 ### Self-update for a system service
 
@@ -155,4 +179,8 @@ script is a thin compatibility wrapper. The hub spawns
 
 - Hub logs: `journalctl --user -u car-hub -f`
 - Telegram logs: `journalctl --user -u car-telegram -f`
+- Discord logs: `journalctl --user -u car-discord -f`
 - Health: `curl -fsS http://<host>:<port>/health` (prefix base path if set)
+- Supervisor checks: `car doctor --repo <hub-root>` warns when an enabled chat
+  surface unit is inactive or when the configured hub port is owned outside the
+  expected `linux_service_names.hub` systemd cgroup.

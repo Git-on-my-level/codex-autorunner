@@ -14,6 +14,7 @@ from .hub import (
 )
 from .pma import pma_doctor_checks
 from .repository import doctor
+from .systemd import linux_systemd_doctor_checks
 from .types import DoctorCheck, DoctorReport
 
 
@@ -49,6 +50,10 @@ def runtime_doctor_providers(
         DoctorProvider(
             name="hub_destination",
             collect=lambda: hub_destination_doctor_checks(hub_config),
+        ),
+        DoctorProvider(
+            name="systemd",
+            collect=lambda: linux_systemd_doctor_checks(hub_config),
         ),
         DoctorProvider(
             name="hermes",
