@@ -1039,6 +1039,47 @@ def test_enqueue_managed_turn_executor_queues_on_running_scm_thread(
     )
 
 
+def test_enqueue_managed_turn_executor_starts_worker_for_queued_scm_turn(
+    tmp_path: Path,
+) -> None:
+    hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
+    thread_store = ManagedThreadStore(hub_root)
+    thread = thread_store.create_thread(
+        "codex",
+        workspace_root,
+        repo_id=repo_id,
+        metadata={"head_branch": "feature/scm-rebind"},
+    )
+    thread_store.create_turn(thread["managed_thread_id"], prompt="already running")
+    binding = PrBindingStore(hub_root).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        repo_id=repo_id,
+        pr_number=42,
+        pr_state="open",
+        head_branch="feature/scm-rebind",
+        base_branch="main",
+        thread_target_id=thread["managed_thread_id"],
+    )
+    operation = _create_scm_enqueue_operation(
+        journal=PublishJournalStore(hub_root),
+        thread_target_id=thread["managed_thread_id"],
+        binding_id=binding.binding_id,
+        repo_id=repo_id,
+        operation_key="enqueue:scm:worker-start",
+    )
+    started_threads: list[str] = []
+
+    result = build_enqueue_managed_turn_executor(
+        hub_root=hub_root,
+        thread_store=thread_store,
+        queue_worker_starter_fn=started_threads.append,
+    )(operation)
+
+    assert result["queued"] is True
+    assert started_threads == [thread["managed_thread_id"]]
+
+
 def test_enqueue_managed_turn_executor_merges_into_existing_queued_scm_turn(
     tmp_path: Path,
 ) -> None:

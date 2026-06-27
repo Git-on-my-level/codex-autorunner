@@ -1,11 +1,12 @@
 import asyncio
+import inspect
 import logging
 import sqlite3
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, cast
 
 from ..discovery import discover_and_init
 from ..manifest import Manifest
@@ -857,6 +858,15 @@ class HubSupervisor:
                 "rate_limited_skipped": 0,
             }
         try:
+            if "queue_worker_starter_fn" in inspect.signature(processor).parameters:
+                processor_with_starter: Any = processor
+                return cast(
+                    dict[str, int],
+                    processor_with_starter(
+                        limit,
+                        queue_worker_starter_fn=self._request_managed_thread_queue_worker_start,
+                    ),
+                )
             return processor(limit)
         except (RuntimeError, OSError, ValueError, TypeError, sqlite3.Error):
             logger.exception("Failed processing SCM automation polling watches")
