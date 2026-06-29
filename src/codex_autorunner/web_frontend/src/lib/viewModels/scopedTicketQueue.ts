@@ -48,7 +48,7 @@ export function ticketScopeUrn(scope: ScopeRef): string {
 export function ticketScopeHref(scope: ScopeRef): string | null {
   return scopeTicketRoute(scope);
 }
-export type ScopedTicketQueueCommand = 'start' | 'stop' | 'restart';
+export type ScopedTicketQueueCommand = 'start' | 'resume' | 'stop' | 'restart';
 export type ScopedTicketQueueOwner = { repo: string } | { worktree: string };
 
 export type ScopedTicketQueueConfig = {
@@ -157,6 +157,8 @@ export function scopedTicketActionStatus(
       return `Reordering ${config.displayLabel} tickets...`;
     case 'start':
       return `Starting ${config.displayLabel} ticket flow...`;
+    case 'resume':
+      return `Continuing ${config.displayLabel} ticket flow...`;
     case 'stop':
       return `Stopping ${config.displayLabel} ticket flow...`;
     case 'restart':
@@ -173,7 +175,7 @@ export function buildScopedTicketQueueCommandPlan(
   config: Pick<ScopedTicketQueueConfig, 'apiBasePath'>,
   runId: string | null
 ): ScopedTicketQueueCommandPlan | null {
-  if ((command === 'stop' || command === 'restart') && !runId) return null;
+  if ((command === 'resume' || command === 'stop' || command === 'restart') && !runId) return null;
   if (command === 'start') {
     return {
       requests: [{ path: `${config.apiBasePath}/ticket_flow/bootstrap`, options: { method: 'POST', body: {} } }]
@@ -183,6 +185,16 @@ export function buildScopedTicketQueueCommandPlan(
     path: `${config.apiBasePath}/${encodeURIComponent(runId!)}/stop`,
     options: { method: 'POST' }
   };
+  if (command === 'resume') {
+    return {
+      requests: [
+        {
+          path: `${config.apiBasePath}/${encodeURIComponent(runId!)}/resume`,
+          options: { method: 'POST' }
+        }
+      ]
+    };
+  }
   if (command === 'stop') return { requests: [stopRequest] };
   return {
     requests: [
@@ -217,7 +229,7 @@ export async function runScopedTicketQueueCommand(
       shouldReload: true
     };
   }
-  if ((command === 'stop' || command === 'restart') && !runId) {
+  if ((command === 'resume' || command === 'stop' || command === 'restart') && !runId) {
     return { status: scopedTicketMissingRunStatus(config), shouldReload: false };
   }
   if (command === 'restart' && !(await confirmRestart())) {

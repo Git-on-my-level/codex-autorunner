@@ -31,6 +31,7 @@ import {
   resolveTicketRouteId,
   ticketDetailFromSummary,
   type SurfaceActionManifest,
+  type TicketHandoff,
   type TicketDetailViewModel,
   type TicketOwnerScope
 } from '$lib/viewModels/ticket';
@@ -65,6 +66,7 @@ export type ScopedTicketListSession =
       tickets: TicketSummary[];
       runs: ChatRunProgress[];
       actionManifest: SurfaceActionManifest | null;
+      handoff: TicketHandoff | null;
       sectionIssues: PartialPageIssue[];
       parentRepoId: string | null;
       redirectTo: string | null;
@@ -120,8 +122,11 @@ export async function loadScopedTicketListSession(
 
   const manifest = await loadScopedActionManifest(api, { ...config, parentRepoId: config.parentRepoId ?? parentRepoId });
   const actionManifest = dataOr(manifest, null);
+  const activeMessage = await api.requestJson<JsonRecord>(`${config.apiBasePath.replace(/\/api\/flows$/, '/api/messages')}/active`);
+  const handoff = activeMessage.ok ? handoffFromActiveMessage(activeMessage.data) : null;
   const sectionIssues = [
-    !manifest.ok ? partialPageIssue('action_manifest', 'Action manifest unavailable', manifest.error) : null
+    !manifest.ok ? partialPageIssue('action_manifest', 'Action manifest unavailable', manifest.error) : null,
+    !activeMessage.ok ? partialPageIssue('active_dispatch', 'Paused dispatch unavailable', activeMessage.error) : null
   ].filter((issue): issue is PartialPageIssue => Boolean(issue));
 
   return {
@@ -132,9 +137,25 @@ export async function loadScopedTicketListSession(
     tickets,
     runs,
     actionManifest,
+    handoff,
     sectionIssues,
     parentRepoId,
     redirectTo
+  };
+}
+
+function handoffFromActiveMessage(payload: JsonRecord): TicketHandoff | null {
+  if (payload.active !== true) return null;
+  const dispatch = recordValue(payload.dispatch);
+  if (!dispatch || dispatch.is_handoff !== true) return null;
+  const runId = stringValue(payload.run_id);
+  if (!runId) return null;
+  return {
+    runId,
+    seq: numberValue(payload.seq),
+    title: stringValue(dispatch.title) ?? 'Agent needs input',
+    body: stringValue(dispatch.body) ?? '',
+    isHandoff: true
   };
 }
 
@@ -311,4 +332,13 @@ function parentRepoIdFromSnapshot(snapshot: RepoWorktreeDetailSnapshot): string 
 
 function stringValue(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function numberValue(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function recordValue(value: unknown): JsonRecord | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as JsonRecord) : null;
 }

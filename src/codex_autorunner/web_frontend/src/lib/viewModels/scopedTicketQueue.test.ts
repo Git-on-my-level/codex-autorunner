@@ -102,7 +102,7 @@ describe('scoped ticket queue helpers', () => {
     expect(ticketScopeHref({ kind: 'hub' })).toBeNull();
   });
 
-  it('builds start, stop, and restart command requests', () => {
+  it('builds start, resume, stop, and restart command requests', () => {
     expect(buildScopedTicketQueueCommandPlan('start', repoConfig, null)).toEqual({
       requests: [
         {
@@ -115,6 +115,14 @@ describe('scoped ticket queue helpers', () => {
       requests: [
         {
           path: '/repos/repo%201/api/flows/run%2F1/stop',
+          options: { method: 'POST' }
+        }
+      ]
+    });
+    expect(buildScopedTicketQueueCommandPlan('resume', repoConfig, 'run/1')).toEqual({
+      requests: [
+        {
+          path: '/repos/repo%201/api/flows/run%2F1/resume',
           options: { method: 'POST' }
         }
       ]
@@ -133,7 +141,8 @@ describe('scoped ticket queue helpers', () => {
     });
   });
 
-  it('returns null command plans when stop or restart has no run id', () => {
+  it('returns null command plans when resume, stop, or restart has no run id', () => {
+    expect(buildScopedTicketQueueCommandPlan('resume', repoConfig, null)).toBeNull();
     expect(buildScopedTicketQueueCommandPlan('stop', repoConfig, null)).toBeNull();
     expect(buildScopedTicketQueueCommandPlan('restart', repoConfig, null)).toBeNull();
   });
@@ -142,6 +151,7 @@ describe('scoped ticket queue helpers', () => {
     expect(scopedTicketActionStatus('create', repoConfig)).toBe('Creating repo ticket...');
     expect(scopedTicketActionStatus('reorder', worktreeConfig)).toBe('Reordering worktree tickets...');
     expect(scopedTicketActionStatus('start', repoConfig)).toBe('Starting repo ticket flow...');
+    expect(scopedTicketActionStatus('resume', repoConfig)).toBe('Continuing repo ticket flow...');
     expect(scopedTicketActionStatus('stop', worktreeConfig)).toBe('Stopping worktree ticket flow...');
     expect(scopedTicketActionStatus('restart', worktreeConfig)).toBe('Restarting worktree ticket flow...');
     expect(scopedTicketMissingRunStatus(repoConfig)).toBe('No repo ticket flow run found.');

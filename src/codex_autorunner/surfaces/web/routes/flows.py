@@ -960,6 +960,20 @@ def build_flow_routes() -> APIRouter:
                 assert reuse.run is not None
                 if validate_tickets:
                     _ensure_ticket_flow_preflight(repo_root)
+                if reuse.run.status == FlowRunStatus.PAUSED:
+                    store = _require_flow_store(repo_root)
+                    try:
+                        response = _build_flow_status_response(
+                            reuse.run,
+                            repo_root,
+                            store=store,
+                        )
+                    finally:
+                        if store:
+                            store.close()
+                    response.state = response.state or {}
+                    response.state["hint"] = "paused_run_requires_resume"
+                    return response
                 _reap_dead_worker(reuse.run.id, state)
                 _start_flow_worker(repo_root, reuse.run.id, state)
                 store = _require_flow_store(repo_root)
@@ -1191,6 +1205,20 @@ def build_flow_routes() -> APIRouter:
         if reuse.action == "reuse_active":
             assert reuse.run is not None
             _ensure_ticket_flow_preflight(repo_root)
+            if reuse.run.status == FlowRunStatus.PAUSED:
+                store = _require_flow_store(repo_root)
+                try:
+                    resp = _build_flow_status_response(
+                        reuse.run,
+                        repo_root,
+                        store=store,
+                    )
+                finally:
+                    if store:
+                        store.close()
+                resp.state = resp.state or {}
+                resp.state["hint"] = "paused_run_requires_resume"
+                return resp
             _reap_dead_worker(reuse.run.id, state)
             _start_flow_worker(repo_root, reuse.run.id, state)
             store = _require_flow_store(repo_root)
@@ -1675,14 +1703,16 @@ def build_flow_routes() -> APIRouter:
             FlowRunStatus.PENDING,
             FlowRunStatus.RUNNING,
             FlowRunStatus.STOPPING,
-            FlowRunStatus.PAUSED,
         }:
             service = _build_flow_orchestration_service(repo_root, record.flow_type)
             _stop_worker(run_id, state)
             try:
                 await service.stop_flow_run(run_id)
             except ValueError as exc:
-                raise HTTPException(status_code=404, detail=str(exc)) from exc
+                status_code = 404 if "not found" in str(exc).lower() else 409
+                raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        elif record.status == FlowRunStatus.PAUSED:
+            _stop_worker(run_id, state)
 
         return await _start_flow(
             "ticket_flow",

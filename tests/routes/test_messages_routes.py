@@ -7,9 +7,18 @@ from tests.support.web_test_helpers import build_messages_app
 
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
+from codex_autorunner.surfaces.web.routes import messages as messages_routes
 
 
-def _write_dispatch_history(repo_root: Path, run_id: str, seq: int = 1) -> None:
+def _write_dispatch_history(
+    repo_root: Path,
+    run_id: str,
+    seq: int = 1,
+    *,
+    mode: str = "pause",
+    title: str = "Review",
+    body: str = "Please review this change.",
+) -> None:
     entry_dir = (
         repo_root
         / ".codex-autorunner"
@@ -20,7 +29,7 @@ def _write_dispatch_history(repo_root: Path, run_id: str, seq: int = 1) -> None:
     )
     entry_dir.mkdir(parents=True, exist_ok=True)
     (entry_dir / "DISPATCH.md").write_text(
-        "---\nmode: pause\ntitle: Review\n---\n\nPlease review this change.\n",
+        f"---\nmode: {mode}\ntitle: {title}\n---\n\n{body}\n",
         encoding="utf-8",
     )
     (entry_dir / "design.md").write_text("draft", encoding="utf-8")
@@ -85,6 +94,43 @@ def test_messages_active_and_reply_archive(tmp_path, monkeypatch):
         fetched = client.get(file_url)
         assert fetched.status_code == 200
         assert fetched.content == b"hello"
+
+
+def test_active_message_prefers_pause_handoff_over_newer_turn_summary(
+    tmp_path, monkeypatch
+):
+    repo_root = Path(tmp_path)
+    run_id = "55555555-5555-4555-8555-555555555555"
+
+    _seed_paused_run(repo_root, run_id)
+    _write_dispatch_history(
+        repo_root,
+        run_id,
+        seq=1,
+        mode="pause",
+        title="Choose direction",
+        body="Which path should the agent take?",
+    )
+    _write_dispatch_history(
+        repo_root,
+        run_id,
+        seq=2,
+        mode="turn_summary",
+        title="Turn summary",
+        body="The agent paused for input.",
+    )
+
+    app = build_messages_app(repo_root, monkeypatch)
+
+    with TestClient(app) as client:
+        active = client.get("/api/messages/active")
+
+    assert active.status_code == 200
+    payload = active.json()
+    assert payload["active"] is True
+    assert payload["seq"] == 1
+    assert payload["dispatch"]["is_handoff"] is True
+    assert payload["dispatch"]["title"] == "Choose direction"
 
 
 def test_reply_archive_rejects_relative_workspace_root(tmp_path, monkeypatch):
@@ -167,6 +213,76 @@ def test_reply_archive_preserves_file_url_within_workspace(tmp_path, monkeypatch
         fetched = client.get(f"/{file_entry['url']}")
         assert fetched.status_code == 200
         assert fetched.content == b"data"
+
+
+def test_reply_and_resume_writes_live_reply_before_resume(tmp_path, monkeypatch):
+    repo_root = Path(tmp_path)
+    run_id = "44444444-4444-4444-4444-444444444444"
+
+    _seed_paused_run(repo_root, run_id)
+    _write_dispatch_history(repo_root, run_id, seq=1)
+
+    observed = {}
+
+    async def fake_resume(root: Path, requested_run_id: str, *, force: bool = False):
+        observed["root"] = root
+        observed["run_id"] = requested_run_id
+        observed["force"] = force
+        live_reply = repo_root / ".codex-autorunner" / "runs" / run_id / "USER_REPLY.md"
+        observed["live_reply"] = live_reply.read_text(encoding="utf-8")
+        with FlowStore(repo_root / ".codex-autorunner" / "flows.db") as store:
+            store.update_flow_run_status(run_id, FlowRunStatus.RUNNING)
+            record = store.get_flow_run(run_id)
+            assert record is not None
+            return record
+
+    monkeypatch.setattr(messages_routes, "resume_ticket_flow_run", fake_resume)
+
+    app = build_messages_app(repo_root, monkeypatch)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            f"/api/messages/{run_id}/reply-and-resume",
+            data={"body": "Proceed with option B"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["run_status"] == "running"
+    assert observed["run_id"] == run_id
+    assert observed["force"] is False
+    assert "Proceed with option B" in observed["live_reply"]
+
+
+def test_reply_and_resume_validates_tickets_before_writing_reply(tmp_path, monkeypatch):
+    repo_root = Path(tmp_path)
+    run_id = "66666666-6666-4666-8666-666666666666"
+
+    _seed_paused_run(repo_root, run_id)
+    _write_dispatch_history(repo_root, run_id, seq=1)
+    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    (ticket_dir / "TICKET-001.md").write_text(
+        "---\nticket_id: [broken\n---\n\nBody\n",
+        encoding="utf-8",
+    )
+
+    async def fail_resume(*_args, **_kwargs):
+        raise AssertionError("reply-and-resume should validate before resume")
+
+    monkeypatch.setattr(messages_routes, "resume_ticket_flow_run", fail_resume)
+
+    app = build_messages_app(repo_root, monkeypatch)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            f"/api/messages/{run_id}/reply-and-resume",
+            data={"body": "Proceed anyway"},
+        )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["message"] == "Ticket validation failed"
+    live_reply = repo_root / ".codex-autorunner" / "runs" / run_id / "USER_REPLY.md"
+    assert not live_reply.exists()
 
 
 def test_reply_archive_rejects_reply_to_unknown_run(tmp_path, monkeypatch):

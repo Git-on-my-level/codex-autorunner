@@ -109,7 +109,7 @@ def build_flow_action_policy(
             tone="success",
             style="success",
             disabled_reason=None if resume_enabled else "Run is not paused",
-            surface_visibility={"queue": False, "flow_status": True},
+            surface_visibility={"queue": True, "flow_status": True},
         )
     )
 

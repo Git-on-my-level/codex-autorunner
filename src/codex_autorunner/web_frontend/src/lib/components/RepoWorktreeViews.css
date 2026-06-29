@@ -502,6 +502,24 @@
     text-transform: uppercase;
   }
 
+  .response-needed-pill {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    min-height: 18px;
+    padding: 0 6px;
+    border-radius: 4px;
+    border: 1px solid color-mix(in srgb, var(--color-warning) 42%, transparent);
+    background: var(--color-warning-soft);
+    color: var(--color-warning-ink, var(--color-warning));
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    text-transform: uppercase;
+  }
+
   .archive-pill {
     display: inline-flex;
     align-items: center;

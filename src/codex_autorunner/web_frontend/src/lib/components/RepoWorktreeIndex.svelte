@@ -358,6 +358,11 @@
                     {#if row.status !== 'idle' && row.status !== 'done'}
                       <span class={`repo-status status-pill ${row.status}`}>{statusLabel(row.status)}</span>
                     {/if}
+                    {#if row.signalWaiting > 0}
+                      <span class="response-needed-pill" title="A paused dispatch needs your response">
+                        Respond
+                      </span>
+                    {/if}
                     {#if row.chatBound}
                       <span class="chat-binding-pill" title={chatBindingLabel(row)}>
                         Chat-bound
@@ -554,6 +559,11 @@
                           <a class="worktree-name" href={href(worktree.href)}>{worktree.label}</a>
                           {#if worktree.status !== 'idle' && worktree.status !== 'done'}
                             <span class={`status-pill ${worktree.status}`}>{statusLabel(worktree.status)}</span>
+                          {/if}
+                          {#if worktree.signalWaiting > 0}
+                            <span class="response-needed-pill" title="A paused dispatch needs your response">
+                              Respond
+                            </span>
                           {/if}
                           {#if worktree.chatBound}
                             <span class="chat-binding-pill" title={chatBindingLabel(worktree)}>

@@ -47,6 +47,7 @@
     onRetry = undefined,
     onCommand = undefined,
     onQueueCommand = undefined,
+    onReplyAndResume = undefined,
     onReorderTicket = undefined,
     onRepairWithPma = undefined,
     onSave = undefined
@@ -71,7 +72,8 @@
     onFilter?: ((filter: TicketFilter) => void) | undefined;
     onRetry?: (() => void) | undefined;
     onCommand?: ((command: 'resume' | 'bootstrap') => void) | undefined;
-    onQueueCommand?: ((command: 'start' | 'stop' | 'restart') => void) | undefined;
+    onQueueCommand?: ((command: 'start' | 'resume' | 'stop' | 'restart') => void) | undefined;
+    onReplyAndResume?: ((body: string) => void | Promise<void>) | undefined;
     onReorderTicket?: ((sourceRouteId: string, destinationRouteId: string, placeAfter: boolean) => boolean | Promise<boolean>) | undefined;
     onRepairWithPma?: ((detail: TicketDetailViewModel) => void | Promise<void>) | undefined;
     onSave?: ((payload: TicketEditPayload) => boolean | Promise<boolean>) | undefined;
@@ -138,6 +140,7 @@
   let lastSettingsSignature = $state<string | null>(null);
   let settingsSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let queueOpen = $state(false);
+  let handoffReply = $state('');
   let repairOpen = $state(initialDetail?.needsRepair ?? false);
   let lastRepairTicketId = $state<string | null>(initialDetail?.id ?? null);
   $effect(() => {
@@ -308,16 +311,23 @@
     await onReorderTicket?.(sourceRouteId, destinationRouteId, placeAfter);
   }
 
-  function queueActionLabel(action: 'start' | 'stop' | 'restart'): string {
-    return queueActions.find((candidate) => candidate.action === action)?.label ?? (action === 'start' ? 'Start queue' : action === 'stop' ? 'Stop queue' : 'Restart queue');
+  function queueActionLabel(action: 'start' | 'resume' | 'stop' | 'restart'): string {
+    return queueActions.find((candidate) => candidate.action === action)?.label ?? (action === 'start' ? 'Start queue' : action === 'resume' ? 'Resume' : action === 'stop' ? 'Stop queue' : 'Restart queue');
   }
 
-  function queueActionEnabled(action: 'start' | 'stop' | 'restart'): boolean {
+  function queueActionEnabled(action: 'start' | 'resume' | 'stop' | 'restart'): boolean {
     return queueActions.find((candidate) => candidate.action === action)?.enabled === true;
   }
 
-  function queueActionReason(action: 'start' | 'stop' | 'restart'): string | null {
+  function queueActionReason(action: 'start' | 'resume' | 'stop' | 'restart'): string | null {
     return queueActions.find((candidate) => candidate.action === action)?.disabledReason ?? null;
+  }
+
+  async function submitHandoffReply(): Promise<void> {
+    const body = handoffReply.trim();
+    if (!body || !onReplyAndResume) return;
+    await onReplyAndResume(body);
+    handoffReply = '';
   }
 
   function ticketTranscriptStartsOpen(status: string): boolean {
@@ -344,11 +354,11 @@
       {#snippet actions()}
         {#if list.scopedOwner}
           <div class="ticket-queue-actions" role="group" aria-label="Ticket flow controls">
-            {#each (['start', 'stop', 'restart'] as const) as action}
+            {#each (['start', 'resume', 'stop', 'restart'] as const) as action}
               {#if queueActionEnabled(action)}
                 <button
                   type="button"
-                  class={action === 'start' ? 'primary-button' : 'ghost-button'}
+                  class={action === 'start' || action === 'resume' ? 'primary-button' : 'ghost-button'}
                   title={queueActionReason(action)}
                   onclick={() => onQueueCommand?.(action)}
                 >
@@ -396,6 +406,34 @@
     </header>
 
     <AutoDismissNotice message={actionStatus} tone={noticeTone(actionStatus)} />
+
+    {#if list.handoff && onReplyAndResume}
+      <section class="ticket-handoff-panel" aria-label="Paused ticket flow handoff">
+        <div class="ticket-handoff-copy">
+          <span class="ticket-handoff-kicker">Response needed</span>
+          <strong>{list.handoff.title}</strong>
+          {#if list.handoff.body}
+            <div class="ticket-handoff-body markdown-body">
+              {@html renderMarkdownToHtml(list.handoff.body)}
+            </div>
+          {/if}
+        </div>
+        <label class="ticket-handoff-reply">
+          <span class="sr-only">Reply to paused ticket flow</span>
+          <textarea bind:value={handoffReply} rows="3" placeholder="Reply to the agent..."></textarea>
+        </label>
+        <div class="ticket-handoff-actions">
+          <button
+            class="primary-button"
+            type="button"
+            disabled={!handoffReply.trim()}
+            onclick={() => void submitHandoffReply()}
+          >
+            Reply and continue
+          </button>
+        </div>
+      </section>
+    {/if}
 
     <section class="ticket-list-section">
       {#if list.scopedOwner}
@@ -871,6 +909,76 @@
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
+  }
+
+  .ticket-handoff-panel {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(260px, 0.9fr) auto;
+    align-items: end;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid color-mix(in srgb, var(--color-warning) 45%, var(--color-border-subtle));
+    border-left: 3px solid var(--color-warning);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--color-warning) 9%, var(--color-surface));
+  }
+
+  .ticket-handoff-copy {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .ticket-handoff-kicker {
+    color: var(--color-warning-ink, var(--color-warning));
+    font-size: var(--font-size-0);
+    font-weight: 650;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .ticket-handoff-body {
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-1);
+    max-height: 8rem;
+    overflow: auto;
+  }
+
+  .ticket-handoff-body :global(p) {
+    margin: 0;
+  }
+
+  .ticket-handoff-reply {
+    min-width: 0;
+  }
+
+  .ticket-handoff-reply textarea {
+    width: 100%;
+    min-height: 76px;
+    resize: vertical;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    background: var(--color-surface);
+    color: var(--color-ink);
+    padding: var(--space-2);
+    font: inherit;
+    line-height: 1.4;
+  }
+
+  .ticket-handoff-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+  }
+
+  @media (max-width: 860px) {
+    .ticket-handoff-panel {
+      grid-template-columns: minmax(0, 1fr);
+      align-items: stretch;
+    }
+    .ticket-handoff-actions {
+      justify-content: flex-start;
+    }
   }
 
   .ticket-card {
