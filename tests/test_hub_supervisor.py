@@ -3582,6 +3582,52 @@ def test_process_automation_timers_processes_due_unified_schedules(
         supervisor.shutdown()
 
 
+def test_process_scm_polls_passes_registered_queue_worker_starter(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _write_default_hub_config(hub_root)
+    captured: dict[str, object] = {}
+
+    def _processor(limit: int = 20, *, queue_worker_starter_fn=None):
+        captured["limit"] = limit
+        captured["queue_worker_starter_fn"] = queue_worker_starter_fn
+        if queue_worker_starter_fn is not None:
+            queue_worker_starter_fn("thread-scm")
+        return {
+            "due": 1,
+            "polled": 1,
+            "events_emitted": 1,
+            "expired": 0,
+            "closed": 0,
+            "errors": 0,
+            "candidate_workspaces": 0,
+            "candidate_workspaces_scanned": 0,
+            "bindings_discovered": 0,
+            "watches_armed": 0,
+            "discovery_errors": 0,
+            "invalid_bindings_skipped": 0,
+            "rate_limited_skipped": 0,
+        }
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        scm_poll_processor=_processor,
+    )
+    started_threads: list[str] = []
+    try:
+        supervisor.set_managed_thread_queue_worker_starter(started_threads.append)
+
+        result = supervisor.process_scm_automation_polls(limit=3)
+
+        assert result["events_emitted"] == 1
+        assert captured["limit"] == 3
+        assert callable(captured["queue_worker_starter_fn"])
+        assert started_threads == ["thread-scm"]
+    finally:
+        supervisor.shutdown()
+
+
 def _seed_due_managed_thread_schedule(hub_root: Path) -> str:
     store = AutomationStore(hub_root)
     thread = ManagedThreadStore(hub_root).create_thread("codex", hub_root)

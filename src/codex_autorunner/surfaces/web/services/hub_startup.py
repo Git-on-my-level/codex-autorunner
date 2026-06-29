@@ -791,10 +791,26 @@ class HubStartupService:
         )
         if not callable(register_starter):
             return None
+        loop = asyncio.get_running_loop()
 
         def _start_queue_worker(thread_id: str) -> None:
+            def _on_loop() -> None:
+                try:
+                    ensure_managed_thread_queue_worker(app, thread_id)
+                except (
+                    RuntimeError,
+                    TypeError,
+                    AttributeError,
+                ) as exc:  # intentional: external callback must not crash
+                    safe_log(
+                        app.state.logger,
+                        logging.WARNING,
+                        "Managed-thread queue worker startup failed",
+                        exc,
+                    )
+
             try:
-                ensure_managed_thread_queue_worker(app, thread_id)
+                loop.call_soon_threadsafe(_on_loop)
             except (
                 RuntimeError,
                 TypeError,
@@ -803,7 +819,7 @@ class HubStartupService:
                 safe_log(
                     app.state.logger,
                     logging.WARNING,
-                    "Managed-thread queue worker startup failed",
+                    "Managed-thread queue worker startup dispatch failed",
                     exc,
                 )
 

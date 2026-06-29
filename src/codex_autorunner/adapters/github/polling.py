@@ -239,9 +239,11 @@ class GitHubScmPollingService:
         github_service_factory: Optional[GitHubServiceFactory] = None,
         watch_store: Optional[ScmPollingWatchStore] = None,
         event_store: Optional[ScmEventStore] = None,
+        queue_worker_starter_fn: Optional[Callable[[str], None]] = None,
     ) -> None:
         self._hub_root = Path(hub_root)
         self._raw_config = raw_config or {}
+        self._queue_worker_starter_fn = queue_worker_starter_fn
         if github_service_factory is None:
             from .service import GitHubService
 
@@ -274,6 +276,7 @@ class GitHubScmPollingService:
             checkout_root=checkout_root,
             reaction_config=reaction_config or self._raw_config,
             publish_executor_factory=build_github_publish_executors,
+            queue_worker_starter_fn=self._queue_worker_starter_fn,
             schedule_deferred_publish_drain=True,
         )
 
@@ -1122,10 +1125,15 @@ def build_hub_scm_poll_processor(
     hub_root: Path,
     raw_config: Optional[dict[str, Any]] = None,
 ):
-    def processor(limit: int = 20) -> dict[str, int]:
+    def processor(
+        limit: int = 20,
+        *,
+        queue_worker_starter_fn: Optional[Callable[[str], None]] = None,
+    ) -> dict[str, int]:
         return GitHubScmPollingService(
             hub_root,
             raw_config=raw_config,
+            queue_worker_starter_fn=queue_worker_starter_fn,
         ).process(limit=limit)
 
     return processor

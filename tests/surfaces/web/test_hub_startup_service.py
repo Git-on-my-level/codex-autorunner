@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+import threading
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
@@ -133,6 +135,59 @@ async def test_deferred_startup_continues_after_managed_thread_restore_failure(
 
     assert app.state.hub_deferred_startup_complete is True
     assert "Managed-thread queue worker restore failed at hub startup" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_managed_thread_queue_starter_marshals_to_event_loop_from_background_thread(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context = _make_context(tmp_path)
+    app = _make_app(context)
+
+    captured_starters: list[Callable[[str], None]] = []
+    loop_thread_id = threading.get_ident()
+    observed: dict[str, int | str] = {}
+    started = asyncio.Event()
+
+    app.state.hub_supervisor = SimpleNamespace(
+        set_managed_thread_queue_worker_starter=lambda starter: captured_starters.append(
+            starter
+        ),
+    )
+
+    def _fake_ensure(_app: object, thread_id: str) -> None:
+        observed["thread_id"] = thread_id
+        observed["caller_thread"] = threading.get_ident()
+        started.set()
+
+    monkeypatch.setattr(hub_startup, "ensure_managed_thread_queue_worker", _fake_ensure)
+
+    service = hub_startup.HubStartupService(
+        context=context,
+        mount_manager=_FakeMountManager(),
+        endpoint_host=None,
+        endpoint_port=None,
+        base_path=None,
+    )
+
+    service._register_managed_thread_queue_starter(app)
+    assert len(captured_starters) == 1
+    starter = captured_starters[0]
+
+    background_thread_id: list[int] = []
+
+    def _invoke_from_background() -> None:
+        background_thread_id.append(threading.get_ident())
+        starter("thread-scm")
+
+    bg = threading.Thread(target=_invoke_from_background)
+    bg.start()
+    bg.join(timeout=5.0)
+
+    await asyncio.wait_for(started.wait(), timeout=5.0)
+    assert observed["thread_id"] == "thread-scm"
+    assert observed["caller_thread"] == loop_thread_id
+    assert observed["caller_thread"] != background_thread_id[0]
 
 
 @pytest.mark.asyncio

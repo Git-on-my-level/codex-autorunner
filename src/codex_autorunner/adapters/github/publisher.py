@@ -356,8 +356,12 @@ def build_github_enqueue_managed_turn_executor(
     *,
     hub_root: Path,
     raw_config: Optional[dict[str, Any]] = None,
+    queue_worker_starter_fn: Optional[Callable[[str], None]] = None,
 ) -> PublishActionExecutor:
-    base_executor = build_enqueue_managed_turn_executor(hub_root=hub_root)
+    base_executor = build_enqueue_managed_turn_executor(
+        hub_root=hub_root,
+        queue_worker_starter_fn=queue_worker_starter_fn,
+    )
 
     def executor(operation: PublishOperation) -> Optional[dict[str, Any]]:
         from ..chat.bound_live_progress import bound_chat_live_progress_targets
@@ -429,11 +433,13 @@ def build_github_publish_executors(
     checkout_root: Path,
     raw_config: Optional[dict[str, Any]] = None,
     github_service_factory: Optional[GitHubServiceFactory] = None,
+    queue_worker_starter_fn: Optional[Callable[[str], None]] = None,
 ) -> dict[str, PublishActionExecutor]:
     return {
         "enqueue_managed_turn": build_github_enqueue_managed_turn_executor(
             hub_root=hub_root,
             raw_config=raw_config,
+            queue_worker_starter_fn=queue_worker_starter_fn,
         ),
         "react_pr_review_comment": build_react_pr_review_comment_executor(
             checkout_root=checkout_root,

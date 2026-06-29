@@ -1004,8 +1004,17 @@ def build_enqueue_managed_turn_executor(
     *,
     hub_root: Path,
     thread_store: Optional[ManagedThreadStore] = None,
+    queue_worker_starter_fn: Optional[Callable[[str], None]] = None,
 ) -> PublishActionExecutor:
     store = thread_store or ManagedThreadStore(hub_root)
+
+    def _request_queue_worker_start(result: Mapping[str, Any]) -> None:
+        if not result.get("queued") or queue_worker_starter_fn is None:
+            return
+        thread_target_id = _normalize_optional_text(result.get("thread_target_id"))
+        if thread_target_id is None:
+            return
+        queue_worker_starter_fn(thread_target_id)
 
     def executor(operation: PublishOperation) -> dict[str, Any]:
         payload = _normalize_mapping(operation.payload)
@@ -1030,13 +1039,15 @@ def build_enqueue_managed_turn_executor(
         client_request_id = _operation_digest(operation, prefix="publish-turn")
         existing = store.get_turn_by_client_turn_id_any_thread(client_request_id)
         if existing is not None:
-            return _managed_turn_result(
+            result = _managed_turn_result(
                 thread_target_id=existing["managed_thread_id"],
                 client_request_id=client_request_id,
                 turn=existing,
                 existed=True,
                 correlation_id=correlation_id,
             )
+            _request_queue_worker_start(result)
+            return result
         runtime_status = _thread_runtime_status(_active_thread)
         log_context = (
             correlation_id,
@@ -1078,7 +1089,7 @@ def build_enqueue_managed_turn_executor(
                     payload=queue_payload,
                 )
                 if merged_turn is not None:
-                    return _managed_turn_result(
+                    result = _managed_turn_result(
                         thread_target_id=thread_target_id,
                         client_request_id=(
                             _normalize_optional_text(merged_turn.get("client_turn_id"))
@@ -1089,6 +1100,8 @@ def build_enqueue_managed_turn_executor(
                         correlation_id=correlation_id,
                         turn_request=request,
                     )
+                    _request_queue_worker_start(result)
+                    return result
             created = store.create_turn(
                 thread_target_id,
                 prompt=request.prompt_text or "",
@@ -1149,6 +1162,7 @@ def build_enqueue_managed_turn_executor(
                     turn_request=request,
                 )
                 result["rebound_from_thread_target_id"] = rebound_from_thread_target_id
+                _request_queue_worker_start(result)
                 return result
             created = store.create_turn(
                 thread_target_id,
@@ -1187,6 +1201,7 @@ def build_enqueue_managed_turn_executor(
         )
         if rebound_from_thread_target_id is not None:
             result["rebound_from_thread_target_id"] = rebound_from_thread_target_id
+        _request_queue_worker_start(result)
         return result
 
     return executor

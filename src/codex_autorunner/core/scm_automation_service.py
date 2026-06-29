@@ -11,7 +11,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional, Protocol
+from typing import Any, Callable, Optional, Protocol
 
 from .automation import (
     AutomationEvent,
@@ -167,6 +167,7 @@ class PublishExecutorFactory(Protocol):
         hub_root: Path,
         checkout_root: Path,
         raw_config: Optional[dict[str, Any]] = None,
+        queue_worker_starter_fn: Optional[Callable[[str], None]] = None,
     ) -> Mapping[str, PublishActionExecutor]: ...
 
 
@@ -1305,10 +1306,14 @@ def _default_publish_processor(
     journal: PublishJournalStore,
     publish_executor_factory: Optional[PublishExecutorFactory] = None,
     checkout_root: Optional[Path] = None,
+    queue_worker_starter_fn: Optional[Callable[[str], None]] = None,
 ) -> PublishOperationProcessor:
     raw_config = load_hub_config(hub_root).raw
     executors: dict[str, PublishActionExecutor] = {
-        "enqueue_managed_turn": build_enqueue_managed_turn_executor(hub_root=hub_root),
+        "enqueue_managed_turn": build_enqueue_managed_turn_executor(
+            hub_root=hub_root,
+            queue_worker_starter_fn=queue_worker_starter_fn,
+        ),
         "notify_chat": build_notify_chat_executor(hub_root=hub_root),
     }
     if publish_executor_factory is not None:
@@ -1319,6 +1324,7 @@ def _default_publish_processor(
                     hub_root=hub_root,
                     checkout_root=checkout_root or hub_root,
                     raw_config=raw_config,
+                    queue_worker_starter_fn=queue_worker_starter_fn,
                 ).items()
             }
         )
@@ -1363,6 +1369,7 @@ class ScmAutomationService:
         checkout_root: Optional[Path] = None,
         automation_store: Optional[AutomationStore] = None,
         automation_rule_engine: Optional[ScmAutomationRuleEvaluator] = None,
+        queue_worker_starter_fn: Optional[Callable[[str], None]] = None,
         schedule_deferred_publish_drain: bool = False,
     ) -> None:
         self._hub_root = Path(hub_root)
@@ -1395,6 +1402,7 @@ class ScmAutomationService:
                 journal=resolved_journal,
                 publish_executor_factory=publish_executor_factory,
                 checkout_root=self._checkout_root,
+                queue_worker_starter_fn=queue_worker_starter_fn,
             )
         else:
             raise TypeError(
