@@ -25,7 +25,7 @@
     "vitest": "^4.1.9"
   },
   "dependencies": {
-    "isomorphic-dompurify": "^3.17.0",
+    "isomorphic-dompurify": "^3.18.0",
     "marked": "^18.0.5"
   }
 }
