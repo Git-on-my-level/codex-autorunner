@@ -3,7 +3,7 @@
 
 **Plan once, then let your favorite coding agents grind through tickets while you sleep — and ping you on Telegram or Discord when they're stuck.**
 
-CAR is a meta-harness for coding agents (Codex, Hermes, OpenCode, anything ACP). It is _not_ a coding agent itself. You bring the plan and the agents; CAR coordinates the long-running execution.
+CAR is a meta-harness for coding agents (Codex, Hermes, OpenCode, OMP, anything ACP). It is _not_ a coding agent itself. You bring the plan and the agents; CAR coordinates the long-running execution.
 
 > 🧪 Built for developers comfortable running long-horizon agent workflows on their own machine. If you babysit every agent turn, this isn't the tool for you.
 
@@ -43,6 +43,7 @@ Then open the web UI and add a repo. Full walkthrough: [AGENT_SETUP_GUIDE.md](do
 
 - 💬 [Telegram setup](docs/AGENT_SETUP_TELEGRAM_GUIDE.md) · [Discord setup](docs/AGENT_SETUP_DISCORD_GUIDE.md) - Pick one
 - 🤖 [Hermes setup](docs/ops/hermes-acp.md) - Recommended PMA, keeps memory across all your CAR projects
+- 🤖 [OMP setup](docs/ops/omp-acp.md) - ACP-backed, native durable sessions under `~/.omp/agent`
 - 🐳 [Docker runtime per repo/worktree](docs/configuration/destinations.md) - For running agents in a containerized environment
 
 ---
@@ -76,6 +77,7 @@ When an agent wakes up it gets: knowledge of CAR, a pre-defined `contextspace`, 
 
 - **Codex**
 - **Hermes**
+- **OMP** (Oh My Pi)
 - **OpenCode**
 
 CAR integrates any reasonable [ACP](https://github.com/zed-industries/agent-client-protocol) agent. Want yours added? Open an issue or PR.

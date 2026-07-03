@@ -53,7 +53,7 @@ Mapping the conceptual layers to the codebase:
 ## Execution Loop
 1. **Select Ticket**: Active ticket target under `.codex-autorunner/tickets/`.
 2. **Build Prompt**: From ticket content, contextspace docs, and bounded prior run output.
-3. **Run**: Execute the configured backend (for example Codex app-server with OpenCode runtime, or Hermes and other ACP-backed runtimes; see `docs/ops/hermes-acp.md`).
+3. **Run**: Execute the configured backend (for example Codex app-server with OpenCode runtime, or Hermes, OMP, and other ACP-backed runtimes; see `docs/ops/hermes-acp.md` and `docs/ops/omp-acp.md`).
 4. **Update State**: Handle stop rules (exit code, stop_after_runs, limits).
 
 ## Ticket Flow Lifecycle Ownership

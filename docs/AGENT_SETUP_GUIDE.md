@@ -60,6 +60,7 @@ Verify the user has:
 2. **At least one supported agent** installed and working:
    - [Codex CLI](https://github.com/openai/codex) — `codex --version`
    - Hermes (ACP-backed) — `hermes --version` and `hermes acp --help`
+   - [OMP](https://github.com/oh-my-pi) (ACP-backed) — `omp --version` and `omp acp --help`
    - [Opencode](https://github.com/opencode-ai/opencode) — `opencode --version`
 3. **A directory for the hub** — This can be a new empty directory; repositories can be created or cloned through the hub later
 
@@ -185,6 +186,7 @@ Both you and the agents can read and write these. They're accessible from the we
 CAR currently supports:
 - **Codex** — OpenAI's coding agent
 - **Hermes** — ACP-backed repo/worktree agent
+- **OMP** — ACP-backed repo/worktree agent (native durable sessions)
 - **Opencode** — Open-source alternative
 
 CAR passes tickets to agents along with relevant context, and agents execute the work.
@@ -205,9 +207,10 @@ dirty, CAR preserves that ticket behind the commit barrier instead of advancing.
 
 ### "Agent not found"
 Make sure the agent is installed and available in your PATH. Run
-`codex --version`, `hermes --version`, or `opencode --version` to verify.
-For Hermes specifically, also verify `hermes acp --help` works and review
-`docs/ops/hermes-acp.md`.
+`codex --version`, `hermes --version`, `omp --version`, or `opencode --version`
+to verify. For ACP-backed agents (Hermes, OMP), also verify `hermes acp --help`
+/ `omp acp --help` works and review `docs/ops/hermes-acp.md` /
+`docs/ops/omp-acp.md`.
 
 Inside app-server-backed CAR sessions (web terminal/PMA and Telegram), `car` is
 resolved from each workspace shim path (`<workspace>/.codex-autorunner/bin`, plus
