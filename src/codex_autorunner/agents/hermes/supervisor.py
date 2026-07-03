@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
 from os.path import basename
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
@@ -16,6 +15,7 @@ from ..acp.runtime_supervisor import (
     ACPRuntimeSupervisorError,
     ACPSessionHandle,
     ApprovalHandler,
+    RuntimePreflightResult,
 )
 
 _logger = logging.getLogger(__name__)
@@ -23,16 +23,6 @@ _logger = logging.getLogger(__name__)
 HERMES_RUNTIME_ID = "hermes"
 HERMES_ACP_COMMAND = "acp"
 HERMES_APPROVAL_TIMEOUT_SECONDS = DEFAULT_APPROVAL_TIMEOUT_SECONDS
-
-
-@dataclass(frozen=True)
-class RuntimePreflightResult:
-    runtime_id: str
-    status: str
-    version: Optional[str]
-    launch_mode: Optional[str]
-    message: str
-    fix: str
 
 
 def _prepend_path_entries(entries: Sequence[str], path: str) -> str:

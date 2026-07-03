@@ -365,6 +365,16 @@ class ACPRuntimeLifecycleSnapshot:
     state_dir: Optional[str]
 
 
+@dataclass(frozen=True)
+class RuntimePreflightResult:
+    runtime_id: str
+    status: str
+    version: Optional[str]
+    launch_mode: Optional[str]
+    message: str
+    fix: str
+
+
 # --------------------------------------------------------------------------- #
 # ACPRuntimeSupervisor
 # --------------------------------------------------------------------------- #
@@ -401,7 +411,9 @@ class ACPRuntimeSupervisor:
         if not command:
             raise ValueError("ACP runtime command must not be empty")
         self._runtime_id = str(runtime_id or "").strip() or "acp"
-        self._runtime_label = _normalize_optional_text(runtime_label) or self._runtime_id
+        self._runtime_label = (
+            _normalize_optional_text(runtime_label) or self._runtime_id
+        )
         self._error_cls = error_cls or ACPRuntimeSupervisorError
         self._logger = logger or logging.getLogger(__name__)
         self._command = tuple(str(part) for part in command)
@@ -988,9 +1000,7 @@ class ACPRuntimeSupervisor:
         async with self._lock:
             state = self._turn_states.get((workspace, turn_id))
         if state is None:
-            raise self._error_cls(
-                f"Unknown {self._runtime_label} turn '{turn_id}'"
-            )
+            raise self._error_cls(f"Unknown {self._runtime_label} turn '{turn_id}'")
         return state
 
     async def _wait_for_turn_state(
@@ -1252,4 +1262,5 @@ __all__ = [
     "ACPSetModelResult",
     "ApprovalHandler",
     "DEFAULT_APPROVAL_TIMEOUT_SECONDS",
+    "RuntimePreflightResult",
 ]
