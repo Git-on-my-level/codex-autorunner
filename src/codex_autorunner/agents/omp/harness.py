@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Mapping
 from pathlib import Path
@@ -156,15 +157,27 @@ class OMPHarness(AgentHarness):
         for cached in self._model_catalog_cache.values():
             if cached is not None:
                 return cached
-        # No session observed yet: create one to read configOptions (ACP defines
-        # no model-listing RPC). The descriptor populates the cache.
-        session = await self._supervisor.create_session(workspace_root, title=None)
-        catalog = self._model_catalog_cache.get(session.session_id)
+        # ACP defines no model-listing RPC; configOptions travel on session
+        # descriptors. OMP loads its model registry asynchronously, so a session
+        # created immediately after spawn may omit the model select — retry
+        # briefly until the registry is populated.
+        catalog: Optional[ModelCatalog] = None
+        session_id = ""
+        for _attempt in range(3):
+            session = await self._supervisor.create_session(workspace_root, title=None)
+            session_id = session.session_id
+            catalog = extract_model_catalog(
+                _config_options_from_raw(getattr(session, "raw", {}) or {})
+            )
+            if catalog is not None:
+                break
+            await asyncio.sleep(0.5)
         if catalog is None:
             raise UnsupportedAgentCapabilityError(
                 "model_listing",
                 agent_id=str(self.agent_id),
             )
+        self._model_catalog_cache[session_id] = catalog
         return catalog
 
     async def new_conversation(
