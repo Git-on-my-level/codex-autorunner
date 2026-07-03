@@ -161,17 +161,20 @@ class OMPHarness(AgentHarness):
         # descriptors. OMP loads its model registry asynchronously, so a session
         # created immediately after spawn may omit the model select — retry
         # briefly until the registry is populated.
+        session = await self._supervisor.create_session(workspace_root, title=None)
+        session_id = session.session_id
         catalog: Optional[ModelCatalog] = None
-        session_id = ""
-        for _attempt in range(3):
-            session = await self._supervisor.create_session(workspace_root, title=None)
-            session_id = session.session_id
+        for attempt in range(3):
+            if attempt > 0:
+                await asyncio.sleep(0.5)
+                session = await self._supervisor.resume_session(
+                    workspace_root, session_id
+                )
             catalog = extract_model_catalog(
                 _config_options_from_raw(getattr(session, "raw", {}) or {})
             )
             if catalog is not None:
                 break
-            await asyncio.sleep(0.5)
         if catalog is None:
             raise UnsupportedAgentCapabilityError(
                 "model_listing",
@@ -280,11 +283,6 @@ class OMPHarness(AgentHarness):
                     },
                 )
         return result
-
-    async def interrupt(
-        self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-    ) -> None:
-        await self._supervisor.interrupt_turn(workspace_root, conversation_id, turn_id)
 
     async def stream_events(
         self, workspace_root: Path, conversation_id: str, turn_id: str
