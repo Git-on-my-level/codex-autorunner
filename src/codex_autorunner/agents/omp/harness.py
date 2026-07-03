@@ -75,15 +75,6 @@ def _runtime_model_from_session_raw(
     return _runtime_model_payload(current_model_id, display_name=display_name)
 
 
-def _runtime_model_from_model_id(
-    model_id: Optional[str],
-) -> Optional[dict[str, Any]]:
-    current_model_id = _normalize_optional_text(model_id)
-    if current_model_id is None:
-        return None
-    return _runtime_model_payload(current_model_id, display_name=None)
-
-
 def _runtime_model_payload(
     current_model_id: str, *, display_name: Optional[str]
 ) -> dict[str, Any]:
@@ -121,7 +112,6 @@ class OMPHarness(AgentHarness):
     def __init__(self, supervisor: OMPSupervisor) -> None:
         self._supervisor = supervisor
         self._session_runtime_models: dict[str, dict[str, Any]] = {}
-        self._turn_runtime_models: dict[tuple[str, str], dict[str, Any]] = {}
         self._model_catalog_cache: dict[str, Optional[ModelCatalog]] = {}
 
     def _conversation_ref_from_session(self, session: Any) -> ConversationRef:
@@ -225,6 +215,7 @@ class OMPHarness(AgentHarness):
         input_items: Optional[list[dict[str, Any]]] = None,
     ) -> TurnRef:
         _ = reasoning, sandbox_policy, input_items
+        _ = model
         turn_id = await self._supervisor.start_turn(
             workspace_root,
             conversation_id,
@@ -232,9 +223,6 @@ class OMPHarness(AgentHarness):
             model=model,
             approval_mode=approval_mode,
         )
-        runtime_model = _runtime_model_from_model_id(model)
-        if runtime_model is not None:
-            self._turn_runtime_models[(conversation_id, turn_id)] = runtime_model
         return TurnRef(conversation_id=conversation_id, turn_id=turn_id)
 
     async def wait_for_turn(
@@ -255,21 +243,16 @@ class OMPHarness(AgentHarness):
             timeout=timeout,
         )
         if result.effective_runtime is None:
-            runtime_source = "omp_turn_model_override"
-            runtime_model = self._turn_runtime_models.get(
-                (conversation_id, resolved_turn_id)
-            )
-            if runtime_model is None:
-                runtime_source = "omp_session_models"
-                try:
-                    session = await self._supervisor.resume_session(
-                        workspace_root, conversation_id
-                    )
-                except ACPMissingSessionError:
-                    runtime_model = None
-                else:
-                    self._conversation_ref_from_session(session)
-                    runtime_model = self._session_runtime_models.get(conversation_id)
+            runtime_model: Optional[dict[str, Any]] = None
+            try:
+                session = await self._supervisor.resume_session(
+                    workspace_root, conversation_id
+                )
+            except ACPMissingSessionError:
+                runtime_model = None
+            else:
+                self._conversation_ref_from_session(session)
+                runtime_model = self._session_runtime_models.get(conversation_id)
             if runtime_model is not None:
                 return TerminalTurnResult(
                     status=result.status,
@@ -279,7 +262,7 @@ class OMPHarness(AgentHarness):
                     effective_runtime={
                         **runtime_model,
                         "stage": "effective",
-                        "source": runtime_source,
+                        "source": "omp_session_models",
                     },
                 )
         return result

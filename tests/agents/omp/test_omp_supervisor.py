@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from codex_autorunner.agents.acp import ACPMissingSessionError
+from codex_autorunner.agents.base import UnsupportedAgentCapabilityError
 from codex_autorunner.agents.omp import OMPHarness, OMPSupervisor
 from codex_autorunner.core.orchestration.interfaces import (
     FreshConversationRequiredError,
@@ -92,5 +93,52 @@ async def test_omp_active_thread_discovery(tmp_path: Path) -> None:
         await supervisor.create_session(tmp_path, title="thread-a")
         sessions = await supervisor.list_sessions(tmp_path)
         assert any(s.session_id for s in sessions)
+    finally:
+        await supervisor.close_all()
+
+
+@pytest.mark.asyncio
+async def test_omp_harness_interrupt_raises_capability_error(tmp_path: Path) -> None:
+    supervisor = OMPSupervisor(fixture_command("omp"), request_timeout=10.0)
+    harness = OMPHarness(supervisor)
+    try:
+        await harness.ensure_ready(tmp_path)
+        with pytest.raises(UnsupportedAgentCapabilityError) as exc_info:
+            await harness.interrupt(tmp_path, "session-1", "turn-1")
+        assert exc_info.value.capability == "interrupt"
+    finally:
+        await supervisor.close_all()
+
+
+@pytest.mark.asyncio
+async def test_omp_wait_for_turn_ignores_requested_model_override(
+    tmp_path: Path,
+) -> None:
+    supervisor = OMPSupervisor(fixture_command("omp"), request_timeout=10.0)
+    harness = OMPHarness(supervisor)
+    try:
+        await harness.ensure_ready(tmp_path)
+        conversation = await harness.new_conversation(tmp_path)
+        turn = await harness.start_turn(
+            tmp_path,
+            conversation.id,
+            "ping",
+            model="other/provider-model",
+            reasoning=None,
+            approval_mode=None,
+            sandbox_policy=None,
+        )
+        result = await harness.wait_for_turn(
+            tmp_path,
+            conversation.id,
+            turn.turn_id,
+            timeout=10.0,
+        )
+        assert result.effective_runtime is not None
+        assert result.effective_runtime["source"] == "omp_session_models"
+        assert result.effective_runtime["provider_payload"]["modelID"] == "zai/glm-5.2"
+        assert result.effective_runtime["provider_payload"]["modelID"] != (
+            "other/provider-model"
+        )
     finally:
         await supervisor.close_all()

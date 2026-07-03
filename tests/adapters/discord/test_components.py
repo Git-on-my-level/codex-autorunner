@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from codex_autorunner.adapters.chat.agents import CHAT_AGENT_DEFINITIONS
+from codex_autorunner.adapters.chat.agents import chat_agent_definitions
 from codex_autorunner.adapters.chat.model_selection import REASONING_EFFORT_VALUES
 from codex_autorunner.adapters.discord.components import (
     DISCORD_BUTTON_STYLE_DANGER,
@@ -194,7 +194,7 @@ class TestBuildAgentPicker:
         menu = picker["components"][0]
         assert menu["custom_id"] == "agent_select"
         assert [opt["value"] for opt in menu["options"]] == [
-            definition.value for definition in CHAT_AGENT_DEFINITIONS
+            definition.value for definition in chat_agent_definitions()
         ]
         codex = menu["options"][0]
         opencode = menu["options"][1]

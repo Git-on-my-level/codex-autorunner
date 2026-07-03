@@ -299,10 +299,23 @@ def _run_omp_preflight(config: Any, *, agent_id: str = "omp") -> Any:
 
 
 def _make_omp_harness(ctx: Any) -> AgentHarness:
+    target = resolve_agent_execution_target(
+        _resolve_requested_agent_id(ctx, default="omp"),
+        _resolve_requested_agent_profile(ctx),
+        context=ctx,
+    )
+    direct_alias_request = (
+        target.requested_profile is None
+        and target.requested_agent_id != target.logical_agent_id
+    )
+    if direct_alias_request:
+        supervisor_agent_id = target.runtime_agent_id
+    else:
+        supervisor_agent_id = target.logical_agent_id or target.runtime_agent_id
     cache = _runtime_supervisor_cache(ctx)
-    cache_key = ("omp", "omp", "")
+    cache_key = ("omp", supervisor_agent_id, "")
     supervisor = cache.get(cache_key)
-    if supervisor is None:
+    if supervisor is None and supervisor_agent_id == "omp":
         supervisor = getattr(ctx, "omp_supervisor", None)
     if supervisor is None:
         config = _resolve_runtime_agent_config(ctx)
@@ -311,6 +324,7 @@ def _make_omp_harness(ctx: Any) -> AgentHarness:
             raise RuntimeError("OMP harness unavailable: config missing")
         supervisor = build_omp_supervisor_from_config(
             config,
+            agent_id=supervisor_agent_id,
             logger=logger,
             approval_handler=_resolve_surface_approval_handler(ctx),
             default_approval_decision=_resolve_default_approval_decision(ctx),
@@ -318,23 +332,37 @@ def _make_omp_harness(ctx: Any) -> AgentHarness:
         if supervisor is None:
             raise RuntimeError("OMP harness unavailable: binary not configured")
         cache[cache_key] = supervisor
-        try:
-            ctx.omp_supervisor = supervisor
-        except AttributeError:
-            _logger.debug("omp_supervisor cache write skipped", exc_info=True)
+        if supervisor_agent_id == "omp":
+            try:
+                ctx.omp_supervisor = supervisor
+            except AttributeError:
+                _logger.debug("omp_supervisor cache write skipped", exc_info=True)
     return OMPHarness(supervisor)
 
 
 def _check_omp_health(ctx: Any) -> bool:
+    target = resolve_agent_execution_target(
+        _resolve_requested_agent_id(ctx, default="omp"),
+        _resolve_requested_agent_profile(ctx),
+        context=ctx,
+    )
+    direct_alias_request = (
+        target.requested_profile is None
+        and target.requested_agent_id != target.logical_agent_id
+    )
+    if direct_alias_request:
+        supervisor_agent_id = target.runtime_agent_id
+    else:
+        supervisor_agent_id = target.logical_agent_id or target.runtime_agent_id
     cache = _runtime_supervisor_cache(ctx)
-    supervisor = cache.get(("omp", "omp", ""))
-    if supervisor is None:
+    supervisor = cache.get(("omp", supervisor_agent_id, ""))
+    if supervisor is None and supervisor_agent_id == "omp":
         supervisor = getattr(ctx, "omp_supervisor", None)
     if supervisor is not None:
         return True
     config = _resolve_runtime_agent_config(ctx)
     if config is not None:
-        result = _run_omp_preflight(config)
+        result = _run_omp_preflight(config, agent_id=supervisor_agent_id)
         return bool(getattr(result, "status", None) == "ready")
     binary = getattr(ctx, "omp_binary", None)
     if isinstance(binary, str) and binary.strip():

@@ -6,6 +6,9 @@
     "hermes": {
       "binary": "hermes"
     },
+    "omp": {
+      "binary": "omp"
+    },
     "opencode": {
       "binary": "opencode",
       "subagent_models": {
