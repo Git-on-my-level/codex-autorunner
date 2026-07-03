@@ -71,6 +71,9 @@ def _default_agents_section() -> Dict[str, Any]:
         "hermes": {
             "binary": "hermes",
         },
+        "omp": {
+            "binary": "omp",
+        },
     }
 
 

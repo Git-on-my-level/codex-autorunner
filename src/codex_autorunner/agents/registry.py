@@ -12,15 +12,21 @@ from ..core.config import load_hub_config, load_repo_config
 from ..core.config_contract import ConfigError
 from ..core.orchestration.catalog import KNOWN_CAPABILITIES
 from ..plugin_api import CAR_AGENT_ENTRYPOINT_GROUP, CAR_PLUGIN_API_VERSION
+from .acp.runtime_supervisor import ApprovalHandler
 from .aliased_harness import AliasedAgentHarness
 from .base import AgentHarness
 from .codex.harness import CodexHarness
 from .hermes.harness import HERMES_CAPABILITIES, HermesHarness
 from .hermes.supervisor import (
-    HermesApprovalHandler,
     build_hermes_supervisor_from_config,
     hermes_binary_available,
     hermes_runtime_preflight,
+)
+from .omp.harness import OMP_CAPABILITIES, OMPHarness
+from .omp.supervisor import (
+    build_omp_supervisor_from_config,
+    omp_binary_available,
+    omp_runtime_preflight,
 )
 from .opencode.harness import OpenCodeHarness
 from .types import RuntimeCapability, normalize_runtime_capabilities
@@ -288,11 +294,96 @@ def _check_hermes_health(ctx: Any) -> bool:
     return False
 
 
-def _resolve_surface_approval_handler(ctx: Any) -> Optional[HermesApprovalHandler]:
+def _run_omp_preflight(config: Any, *, agent_id: str = "omp") -> Any:
+    return omp_runtime_preflight(config, agent_id=agent_id)
+
+
+def _make_omp_harness(ctx: Any) -> AgentHarness:
+    target = resolve_agent_execution_target(
+        _resolve_requested_agent_id(ctx, default="omp"),
+        _resolve_requested_agent_profile(ctx),
+        context=ctx,
+    )
+    direct_alias_request = (
+        target.requested_profile is None
+        and target.requested_agent_id != target.logical_agent_id
+    )
+    if direct_alias_request:
+        supervisor_agent_id = target.runtime_agent_id
+    else:
+        supervisor_agent_id = target.logical_agent_id or target.runtime_agent_id
+    cache = _runtime_supervisor_cache(ctx)
+    cache_key = ("omp", supervisor_agent_id, "")
+    supervisor = cache.get(cache_key)
+    if supervisor is None and supervisor_agent_id == "omp":
+        supervisor = getattr(ctx, "omp_supervisor", None)
+    if supervisor is None:
+        config = _resolve_runtime_agent_config(ctx)
+        logger = getattr(ctx, "logger", None)
+        if config is None:
+            raise RuntimeError("OMP harness unavailable: config missing")
+        supervisor = build_omp_supervisor_from_config(
+            config,
+            agent_id=supervisor_agent_id,
+            logger=logger,
+            approval_handler=_resolve_surface_approval_handler(ctx),
+            default_approval_decision=_resolve_default_approval_decision(ctx),
+        )
+        if supervisor is None:
+            raise RuntimeError("OMP harness unavailable: binary not configured")
+        cache[cache_key] = supervisor
+        if supervisor_agent_id == "omp":
+            try:
+                ctx.omp_supervisor = supervisor
+            except AttributeError:
+                _logger.debug("omp_supervisor cache write skipped", exc_info=True)
+    return OMPHarness(supervisor)
+
+
+def _check_omp_health(ctx: Any) -> bool:
+    target = resolve_agent_execution_target(
+        _resolve_requested_agent_id(ctx, default="omp"),
+        _resolve_requested_agent_profile(ctx),
+        context=ctx,
+    )
+    direct_alias_request = (
+        target.requested_profile is None
+        and target.requested_agent_id != target.logical_agent_id
+    )
+    if direct_alias_request:
+        supervisor_agent_id = target.runtime_agent_id
+    else:
+        supervisor_agent_id = target.logical_agent_id or target.runtime_agent_id
+    cache = _runtime_supervisor_cache(ctx)
+    supervisor = cache.get(("omp", supervisor_agent_id, ""))
+    if supervisor is None and supervisor_agent_id == "omp":
+        supervisor = getattr(ctx, "omp_supervisor", None)
+    if supervisor is not None:
+        return True
+    config = _resolve_runtime_agent_config(ctx)
+    if config is not None:
+        result = _run_omp_preflight(config, agent_id=supervisor_agent_id)
+        return bool(getattr(result, "status", None) == "ready")
+    binary = getattr(ctx, "omp_binary", None)
+    if isinstance(binary, str) and binary.strip():
+        return omp_binary_available(
+            type(
+                "_InlineConfig",
+                (),
+                {
+                    "agent_binary": staticmethod(lambda _agent_id: binary.strip()),
+                    "agent_backend": staticmethod(lambda _agent_id: "omp"),
+                },
+            )()
+        )
+    return False
+
+
+def _resolve_surface_approval_handler(ctx: Any) -> Optional[ApprovalHandler]:
     for attr in ("_handle_backend_approval_request", "_handle_approval_request"):
         handler = getattr(ctx, attr, None)
         if callable(handler):
-            return cast(HermesApprovalHandler, handler)
+            return cast(ApprovalHandler, handler)
     return None
 
 
@@ -495,6 +586,10 @@ def _preflight_hermes_runtime(config: Any, target: AgentExecutionTarget) -> Any:
         agent_id=target.runtime_agent_id,
         profile=target.runtime_profile,
     )
+
+
+def _preflight_omp_runtime(config: Any, target: AgentExecutionTarget) -> Any:
+    return _run_omp_preflight(config, agent_id=target.runtime_agent_id)
 
 
 def wrap_requested_agent_context(
@@ -725,6 +820,15 @@ _BUILTIN_AGENTS: dict[str, AgentDescriptor] = {
         healthcheck=_check_hermes_health,
         runtime_preflight=_preflight_hermes_runtime,
         runtime_kind="hermes",
+    ),
+    "omp": AgentDescriptor(
+        id="omp",
+        name="OMP",
+        capabilities=OMP_CAPABILITIES,
+        make_harness=_make_omp_harness,
+        healthcheck=_check_omp_health,
+        runtime_preflight=_preflight_omp_runtime,
+        runtime_kind="omp",
     ),
 }
 

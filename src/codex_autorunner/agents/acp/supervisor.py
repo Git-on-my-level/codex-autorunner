@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional, Sequence
 
 from ...workspace import canonical_workspace_root
-from .client import ACPClient, ACPPromptHandle
+from .client import ACPClient, ACPPromptHandle, MissingSessionMatcher
 from .events import ACPEvent, ACPPermissionRequestEvent
 from .protocol import (
     ACPAdvertisedCommand,
@@ -48,6 +48,7 @@ class ACPSubprocessSupervisor:
         request_timeout: Optional[float] = None,
         notification_handler: Optional[NotificationHandler] = None,
         permission_handler: Optional[PermissionHandler] = None,
+        missing_session_matcher: Optional[MissingSessionMatcher] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self._command = [str(part) for part in command]
@@ -56,6 +57,7 @@ class ACPSubprocessSupervisor:
         self._request_timeout = request_timeout
         self._notification_handler = notification_handler
         self._permission_handler = permission_handler
+        self._missing_session_matcher = missing_session_matcher
         self._logger = logger or logging.getLogger(__name__)
         self._clients: dict[str, ACPClient] = {}
         self._last_used_at: dict[str, float] = {}
@@ -87,6 +89,7 @@ class ACPSubprocessSupervisor:
                             canonical_root, self._permission_handler
                         )
                     ),
+                    missing_session_matcher=self._missing_session_matcher,
                     logger=self._logger,
                 )
                 self._clients[key] = client

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from ...core.text_utils import _normalize_optional_text
+from ..types import ModelCatalog, ModelSpec
 
 
 def _coerce_mapping(value: Any) -> dict[str, Any]:
@@ -260,6 +261,72 @@ def extract_advertised_commands(
     return commands
 
 
+def extract_model_catalog(config_options: Any) -> Optional[ModelCatalog]:
+    """Build a :class:`ModelCatalog` from ACP ``configOptions``.
+
+    ACP defines no dedicated model-listing RPC; runtimes surface selectable
+    models as a ``configOptions`` entry whose ``id``/``category`` is ``"model"``
+    with a ``currentValue`` default and ``options`` of ``{value, name}``. Optional
+    reasoning levels are read from a ``thought_level`` select when present.
+    Returns ``None`` when no model select is present, so callers can degrade to a
+    capability-driven error rather than guessing.
+    """
+    if not isinstance(config_options, list):
+        return None
+
+    model_select: Optional[dict[str, Any]] = None
+    thought_select: Optional[dict[str, Any]] = None
+    for option in config_options:
+        if not isinstance(option, dict):
+            continue
+        identifier = _normalize_optional_text(option.get("id"))
+        category = _normalize_optional_text(option.get("category"))
+        if model_select is None and (identifier == "model" or category == "model"):
+            model_select = option
+        elif thought_select is None and (
+            identifier in {"thinking", "thought_level"}
+            or category in {"thought_level", "thought", "reasoning"}
+        ):
+            thought_select = option
+
+    if model_select is None:
+        return None
+
+    reasoning_options: list[str] = []
+    if thought_select is not None:
+        for raw_level in thought_select.get("options") or []:
+            if not isinstance(raw_level, dict):
+                continue
+            level = _normalize_optional_text(raw_level.get("value"))
+            if level and level.lower() not in {"off", "auto"}:
+                reasoning_options.append(level)
+    supports_reasoning = bool(reasoning_options)
+
+    models: list[ModelSpec] = []
+    for raw_model in model_select.get("options") or []:
+        if not isinstance(raw_model, dict):
+            continue
+        model_id = _normalize_optional_text(raw_model.get("value"))
+        if not model_id:
+            continue
+        display_name = _normalize_optional_text(raw_model.get("name")) or model_id
+        models.append(
+            ModelSpec(
+                id=model_id,
+                display_name=display_name,
+                supports_reasoning=supports_reasoning,
+                reasoning_options=list(reasoning_options),
+            )
+        )
+    if not models:
+        return None
+
+    default_model = (
+        _normalize_optional_text(model_select.get("currentValue")) or models[0].id
+    )
+    return ModelCatalog(default_model=default_model, models=models)
+
+
 __all__ = [
     "ACPAdvertisedCommand",
     "ACPInitializeResult",
@@ -272,5 +339,6 @@ __all__ = [
     "ACPSetModelResult",
     "coerce_session_list",
     "extract_advertised_commands",
+    "extract_model_catalog",
     "extract_session_capabilities",
 ]

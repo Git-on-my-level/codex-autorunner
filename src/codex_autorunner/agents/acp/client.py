@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from collections import Counter, defaultdict, deque
@@ -81,6 +82,47 @@ from .protocol import (
 
 NotificationHandler = Callable[[ACPEvent], Awaitable[None]]
 PermissionHandler = Callable[[ACPPermissionRequestEvent], Awaitable[Any]]
+MissingSessionMatcher = Callable[
+    [Optional[str], Optional[int], str, Optional[dict[str, Any]]], bool
+]
+
+
+def build_missing_session_matcher(
+    *,
+    codes: tuple[int, ...] = (),
+    data_contains: str = "",
+) -> MissingSessionMatcher:
+    """Build a missing-session error matcher for an ACP client.
+
+    The official ACP contract uses error code -32004 for a missing session, but
+    some runtimes surface the same condition through a generic internal-error
+    code with a descriptive message (e.g. ``-32603`` plus ``"session not
+    found"``). The matcher treats an error as missing-session when its code is
+    in ``codes`` OR when ``data_contains`` appears (case-insensitively) in the
+    error message or any of its ``data`` values.
+    """
+    code_set = set(codes)
+    needle = (data_contains or "").lower()
+
+    def _match(
+        method: Optional[str],
+        code: Optional[int],
+        message: str,
+        data: Optional[dict[str, Any]],
+    ) -> bool:
+        if code in code_set:
+            return True
+        if not needle:
+            return False
+        haystack = str(message or "").lower()
+        if isinstance(data, dict):
+            for value in data.values():
+                haystack += " " + str(value).lower()
+        return needle in haystack
+
+    return _match
+
+
 _QUEUE_SENTINEL = object()
 
 _APPROVAL_ALLOW_DECISIONS = frozenset(
@@ -431,6 +473,7 @@ class ACPClient:
         request_timeout: Optional[float] = None,
         notification_handler: Optional[NotificationHandler] = None,
         permission_handler: Optional[PermissionHandler] = None,
+        missing_session_matcher: Optional[MissingSessionMatcher] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         if not command:
@@ -443,6 +486,7 @@ class ACPClient:
         self._request_timeout = request_timeout
         self._notification_handler = notification_handler
         self._permission_handler = permission_handler
+        self._missing_session_matcher = missing_session_matcher
         self._logger = logger or logging.getLogger(__name__)
 
         self._process: Optional[asyncio.subprocess.Process] = None
@@ -994,7 +1038,7 @@ class ACPClient:
         ):
             await self._write_message(
                 {
-                    "id": request_id,
+                    "id": message.get("id"),
                     "error": {
                         "code": -32601,
                         "message": f"Unsupported ACP server request: {method or 'unknown'}",
@@ -1015,7 +1059,7 @@ class ACPClient:
                 decision = "cancel"
         await self._write_message(
             {
-                "id": request_id,
+                "id": message.get("id"),
                 "result": _permission_outcome_payload(event, decision),
             }
         )
@@ -1586,6 +1630,8 @@ class ACPClient:
         task.add_done_callback(_discard)
 
     def _should_trace_acp_runtime(self, result: ACPInitializeResult) -> bool:
+        if os.environ.get("CAR_ACP_TRACE"):
+            return True
         server_name = str(result.server_name or "").strip().lower()
         return "hermes" in server_name
 
@@ -1703,13 +1749,17 @@ class ACPClient:
                 message=message,
                 data=data,
             )
-        if method == "session/load" and code_int == -32004:
-            return ACPMissingSessionError(
-                method=method,
-                code=code_int,
-                message=message,
-                data=data,
-            )
+        if method == "session/load":
+            matcher = self._missing_session_matcher
+            if code_int == -32004 or (
+                matcher is not None and matcher(method, code_int, message, data)
+            ):
+                return ACPMissingSessionError(
+                    method=method,
+                    code=code_int,
+                    message=message,
+                    data=data,
+                )
         return ACPResponseError(
             method=method,
             code=code_int,
@@ -1760,6 +1810,8 @@ __all__ = [
     "ACPClient",
     "ACPPromptHandle",
     "ACPPromptResult",
+    "MissingSessionMatcher",
     "NotificationHandler",
     "PermissionHandler",
+    "build_missing_session_matcher",
 ]

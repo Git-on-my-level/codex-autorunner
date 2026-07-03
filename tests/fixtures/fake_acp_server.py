@@ -791,6 +791,24 @@ class FakeACPServer:
                 return
             self._initialized = True
             if is_official:
+                if self._scenario == "omp":
+                    self._send_result(
+                        request_id,
+                        {
+                            "protocolVersion": 1,
+                            "agentInfo": {"name": "fake-omp", "version": "16.0.0"},
+                            "agentCapabilities": {
+                                "loadSession": True,
+                                "sessionCapabilities": {
+                                    "list": {},
+                                    "fork": {},
+                                    "resume": {},
+                                    "close": {},
+                                },
+                            },
+                        },
+                    )
+                    return
                 self._send_result(
                     request_id,
                     {
@@ -840,6 +858,23 @@ class FakeACPServer:
         if method == "session/load":
             session_id = str(params.get("sessionId") or "")
             session = self._sessions.get(session_id)
+            if self._scenario == "omp":
+                if session is None:
+                    self.send(
+                        {
+                            "id": request_id,
+                            "error": {
+                                "code": -32603,
+                                "message": "Internal error",
+                                "data": {
+                                    "details": f"ACP session not found: {session_id}"
+                                },
+                            },
+                        }
+                    )
+                    return
+                self._send_result(request_id, {})
+                return
             if self._scenario == "official_missing_load_result" and session is None:
                 self._send_result(request_id, None)
                 return
@@ -902,6 +937,27 @@ class FakeACPServer:
             self._sessions[session_id] = session
             self._session_cancel_events[session_id] = threading.Event()
             self._write_session_store(session_id, messages=[])
+            if self._scenario == "omp":
+                session = dict(session)
+                session["configOptions"] = [
+                    {
+                        "id": "model",
+                        "category": "model",
+                        "type": "select",
+                        "currentValue": "zai/glm-5.2",
+                        "options": [
+                            {"value": "zai/glm-5.2", "name": "GLM-5.2"},
+                            {"value": "zai/glm-4.5", "name": "GLM-4.5"},
+                        ],
+                    },
+                    {
+                        "id": "thinking",
+                        "category": "thought_level",
+                        "type": "select",
+                        "currentValue": "high",
+                        "options": [{"value": "off"}, {"value": "high"}],
+                    },
+                ]
             self._send_result(request_id, session)
             return
         if method == "session/prompt":

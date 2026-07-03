@@ -1,4 +1,10 @@
-from .client import ACPClient, ACPPromptHandle, ACPPromptResult
+from .client import (
+    ACPClient,
+    ACPPromptHandle,
+    ACPPromptResult,
+    MissingSessionMatcher,
+    build_missing_session_matcher,
+)
 from .errors import (
     ACPError,
     ACPInitializationError,
@@ -35,6 +41,7 @@ from .protocol import (
     ACPSetModeResult,
     coerce_session_list,
     extract_advertised_commands,
+    extract_model_catalog,
     extract_session_capabilities,
 )
 from .supervisor import ACPSubprocessSupervisor, ACPSupervisorHandleSnapshot
@@ -73,8 +80,11 @@ __all__ = [
     "ACPTurnStartedEvent",
     "ACPTurnTerminalEvent",
     "ACPUnknownEvent",
+    "MissingSessionMatcher",
+    "build_missing_session_matcher",
     "coerce_session_list",
     "extract_advertised_commands",
+    "extract_model_catalog",
     "extract_session_capabilities",
     "normalize_notification",
 ]
