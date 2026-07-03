@@ -14,11 +14,13 @@ from codex_autorunner.agents.acp.errors import (
     ACPProcessCrashedError,
 )
 from codex_autorunner.agents.acp.events import normalize_notification
+from codex_autorunner.agents.acp.runtime_supervisor import (
+    _formatted_current_turn_output,
+    _should_close_turn_buffer,
+)
 from codex_autorunner.agents.hermes.supervisor import (
     HermesSupervisor,
     HermesSupervisorError,
-    _formatted_current_turn_output,
-    _should_close_turn_buffer,
     build_hermes_supervisor_from_config,
     hermes_runtime_preflight,
 )

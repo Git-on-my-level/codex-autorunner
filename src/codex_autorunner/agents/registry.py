@@ -12,12 +12,12 @@ from ..core.config import load_hub_config, load_repo_config
 from ..core.config_contract import ConfigError
 from ..core.orchestration.catalog import KNOWN_CAPABILITIES
 from ..plugin_api import CAR_AGENT_ENTRYPOINT_GROUP, CAR_PLUGIN_API_VERSION
+from .acp.runtime_supervisor import ApprovalHandler
 from .aliased_harness import AliasedAgentHarness
 from .base import AgentHarness
 from .codex.harness import CodexHarness
 from .hermes.harness import HERMES_CAPABILITIES, HermesHarness
 from .hermes.supervisor import (
-    HermesApprovalHandler,
     build_hermes_supervisor_from_config,
     hermes_binary_available,
     hermes_runtime_preflight,
@@ -288,11 +288,11 @@ def _check_hermes_health(ctx: Any) -> bool:
     return False
 
 
-def _resolve_surface_approval_handler(ctx: Any) -> Optional[HermesApprovalHandler]:
+def _resolve_surface_approval_handler(ctx: Any) -> Optional[ApprovalHandler]:
     for attr in ("_handle_backend_approval_request", "_handle_approval_request"):
         handler = getattr(ctx, attr, None)
         if callable(handler):
-            return cast(HermesApprovalHandler, handler)
+            return cast(ApprovalHandler, handler)
     return None
 
 
