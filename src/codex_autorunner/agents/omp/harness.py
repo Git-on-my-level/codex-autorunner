@@ -23,9 +23,14 @@ from .supervisor import OMP_RUNTIME_ID, OMPSupervisor
 
 _logger = logging.getLogger(__name__)
 
-# Capabilities proven against `omp acp` (protocol v1) during preflight. The
-# remaining surface (interrupt, approvals, review, transcript_history) is wired
-# through inherited methods but added only after live verification.
+# Capabilities proven against `omp acp` (protocol v1). Verified live:
+# durable threads, message turns, active-thread discovery (session/list), event
+# streaming (agent_message_chunk), model listing (configOptions), and approvals
+# (omp emits session/request_permission for tool calls). Not supported by OMP's
+# ACP surface and therefore left off: interrupt (session/cancel is rejected),
+# review (no session/setMode), and transcript_history (no transcript method).
+# OMP ACP also has no session/setModel, so per-turn model selection is not
+# honored (the runtime uses OMP's configured default); see OMPSupervisor.
 OMP_CAPABILITIES = frozenset(
     [
         RuntimeCapability("durable_threads"),
@@ -33,6 +38,7 @@ OMP_CAPABILITIES = frozenset(
         RuntimeCapability("active_thread_discovery"),
         RuntimeCapability("event_streaming"),
         RuntimeCapability("model_listing"),
+        RuntimeCapability("approvals"),
     ]
 )
 

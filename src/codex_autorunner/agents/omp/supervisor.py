@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
 from ...core.config import HubConfig, RepoConfig
@@ -72,6 +73,27 @@ class OMPSupervisor(ACPRuntimeSupervisor):
             default_approval_decision=default_approval_decision,
             approval_timeout_seconds=approval_timeout_seconds,
             logger=logger,
+        )
+
+    async def start_turn(
+        self,
+        workspace_root: Path,
+        session_id: str,
+        prompt: str,
+        *,
+        model: Optional[str] = None,
+        approval_mode: Optional[str] = None,
+    ) -> str:
+        # OMP ACP exposes no session/setModel: the runtime model is OMP's
+        # configured default (~/.omp settings or --model at launch). Drop the
+        # per-turn model so the shared client does not issue an unsupported
+        # session/setModel call (which would fail the turn).
+        return await super().start_turn(
+            workspace_root,
+            session_id,
+            prompt,
+            model=None,
+            approval_mode=approval_mode,
         )
 
 

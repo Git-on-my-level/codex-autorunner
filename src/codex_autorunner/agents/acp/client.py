@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from collections import Counter, defaultdict, deque
@@ -1037,7 +1038,7 @@ class ACPClient:
         ):
             await self._write_message(
                 {
-                    "id": request_id,
+                    "id": message.get("id"),
                     "error": {
                         "code": -32601,
                         "message": f"Unsupported ACP server request: {method or 'unknown'}",
@@ -1058,7 +1059,7 @@ class ACPClient:
                 decision = "cancel"
         await self._write_message(
             {
-                "id": request_id,
+                "id": message.get("id"),
                 "result": _permission_outcome_payload(event, decision),
             }
         )
@@ -1629,6 +1630,8 @@ class ACPClient:
         task.add_done_callback(_discard)
 
     def _should_trace_acp_runtime(self, result: ACPInitializeResult) -> bool:
+        if os.environ.get("CAR_ACP_TRACE"):
+            return True
         server_name = str(result.server_name or "").strip().lower()
         return "hermes" in server_name
 
