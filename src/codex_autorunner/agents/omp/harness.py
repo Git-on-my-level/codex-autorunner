@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Mapping
 from pathlib import Path
@@ -9,12 +8,10 @@ from typing import Any, AsyncIterator, Optional
 from ...core.orchestration.interfaces import FreshConversationRequiredError
 from ...core.text_utils import _normalize_optional_text
 from ..acp import ACPMissingSessionError
-from ..acp.protocol import extract_model_catalog
-from ..base import AgentHarness, UnsupportedAgentCapabilityError
+from ..base import AgentHarness
 from ..types import (
     AgentId,
     ConversationRef,
-    ModelCatalog,
     RuntimeCapability,
     RuntimeCapabilityReport,
     TerminalTurnResult,
@@ -26,19 +23,18 @@ _logger = logging.getLogger(__name__)
 
 # Capabilities proven against `omp acp` (protocol v1). Verified live:
 # durable threads, message turns, active-thread discovery (session/list), event
-# streaming (agent_message_chunk), model listing (configOptions), and approvals
-# (omp emits session/request_permission for tool calls). Not supported by OMP's
-# ACP surface and therefore left off: interrupt (session/cancel is rejected),
-# review (no session/setMode), and transcript_history (no transcript method).
-# OMP ACP also has no session/setModel, so per-turn model selection is not
-# honored (the runtime uses OMP's configured default); see OMPSupervisor.
+# streaming (agent_message_chunk), and approvals (omp emits
+# session/request_permission for tool calls). Not supported by OMP's ACP surface
+# and therefore left off: interrupt (session/cancel is rejected), review (no
+# session/setMode), transcript_history (no transcript method), and model_listing
+# (configOptions expose OMP's configured model for telemetry only; OMP has no
+# session/setModel, so CAR must not advertise selectable models).
 OMP_CAPABILITIES = frozenset(
     [
         RuntimeCapability("durable_threads"),
         RuntimeCapability("message_turns"),
         RuntimeCapability("active_thread_discovery"),
         RuntimeCapability("event_streaming"),
-        RuntimeCapability("model_listing"),
         RuntimeCapability("approvals"),
     ]
 )
@@ -112,7 +108,6 @@ class OMPHarness(AgentHarness):
     def __init__(self, supervisor: OMPSupervisor) -> None:
         self._supervisor = supervisor
         self._session_runtime_models: dict[str, dict[str, Any]] = {}
-        self._model_catalog_cache: dict[str, Optional[ModelCatalog]] = {}
 
     def _conversation_ref_from_session(self, session: Any) -> ConversationRef:
         raw = getattr(session, "raw", None)
@@ -121,12 +116,6 @@ class OMPHarness(AgentHarness):
         runtime_model = _runtime_model_from_session_raw(raw_mapping)
         if session_id and runtime_model is not None:
             self._session_runtime_models[session_id] = runtime_model
-        # configOptions travel with every session descriptor; cache the catalog
-        # so model_listing does not need a throwaway session on the hot path.
-        if session_id:
-            self._model_catalog_cache.setdefault(
-                session_id, extract_model_catalog(_config_options_from_raw(raw_mapping))
-            )
         return ConversationRef(
             agent=self.agent_id,
             id=session_id,
@@ -142,36 +131,6 @@ class OMPHarness(AgentHarness):
     ) -> RuntimeCapabilityReport:
         _ = workspace_root
         return RuntimeCapabilityReport(capabilities=self.capabilities)
-
-    async def model_catalog(self, workspace_root: Path) -> ModelCatalog:
-        for cached in self._model_catalog_cache.values():
-            if cached is not None:
-                return cached
-        # ACP defines no model-listing RPC; configOptions travel on session
-        # descriptors. OMP loads its model registry asynchronously, so a session
-        # created immediately after spawn may omit the model select — retry
-        # briefly until the registry is populated.
-        session = await self._supervisor.create_session(workspace_root, title=None)
-        session_id = session.session_id
-        catalog: Optional[ModelCatalog] = None
-        for attempt in range(3):
-            if attempt > 0:
-                await asyncio.sleep(0.5)
-                session = await self._supervisor.resume_session(
-                    workspace_root, session_id
-                )
-            catalog = extract_model_catalog(
-                _config_options_from_raw(getattr(session, "raw", {}) or {})
-            )
-            if catalog is not None:
-                break
-        if catalog is None:
-            raise UnsupportedAgentCapabilityError(
-                "model_listing",
-                agent_id=str(self.agent_id),
-            )
-        self._model_catalog_cache[session_id] = catalog
-        return catalog
 
     async def new_conversation(
         self, workspace_root: Path, title: Optional[str] = None

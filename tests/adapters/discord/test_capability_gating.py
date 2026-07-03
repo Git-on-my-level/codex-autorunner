@@ -72,6 +72,12 @@ class TestAgentPickerIncludesHermes:
         caps = descriptor.capabilities
         assert "model_listing" not in caps
 
+    def test_omp_lacks_model_listing(self) -> None:
+        descriptor = get_agent_descriptor("omp")
+        assert descriptor is not None
+        caps = descriptor.capabilities
+        assert "model_listing" not in caps
+
     def test_hermes_lacks_review(self) -> None:
         descriptor = get_agent_descriptor("hermes")
         assert descriptor is not None
@@ -120,6 +126,7 @@ class TestCapabilityHelpers:
         assert service._agent_supports_capability("hermes", "durable_threads") is True
         assert service._agent_supports_capability("hermes", "interrupt") is True
         assert service._agent_supports_capability("hermes", "model_listing") is False
+        assert service._agent_supports_capability("omp", "model_listing") is False
         assert service._agent_supports_capability("hermes", "review") is False
         assert service._agent_supports_capability("codex", "model_listing") is True
         assert service._agent_supports_capability("codex", "review") is True
@@ -144,6 +151,7 @@ class TestCapabilityHelpers:
         assert "codex" in model_listing_agents
         assert "opencode" in model_listing_agents
         assert "hermes" not in model_listing_agents
+        assert "omp" not in model_listing_agents
 
         review_agents = service._agents_supporting_capability("review")
         assert "codex" in review_agents

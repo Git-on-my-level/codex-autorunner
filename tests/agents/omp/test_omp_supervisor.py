@@ -7,7 +7,7 @@ import pytest
 
 from codex_autorunner.agents.acp import ACPMissingSessionError
 from codex_autorunner.agents.base import UnsupportedAgentCapabilityError
-from codex_autorunner.agents.omp import OMPHarness, OMPSupervisor
+from codex_autorunner.agents.omp import OMP_CAPABILITIES, OMPHarness, OMPSupervisor
 from codex_autorunner.core.orchestration.interfaces import (
     FreshConversationRequiredError,
 )
@@ -32,19 +32,14 @@ async def test_omp_create_session_carries_config_options(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
-async def test_omp_model_catalog_from_config_options_before_any_conversation(
-    tmp_path: Path,
-) -> None:
-    """model_listing must work when called before any conversation is created."""
+async def test_omp_does_not_advertise_model_listing(tmp_path: Path) -> None:
     supervisor = OMPSupervisor(fixture_command("omp"), request_timeout=10.0)
     harness = OMPHarness(supervisor)
     try:
-        await harness.ensure_ready(tmp_path)
-        catalog = await harness.model_catalog(tmp_path)
-        assert catalog.default_model == "zai/glm-5.2"
-        assert [m.id for m in catalog.models] == ["zai/glm-5.2", "zai/glm-4.5"]
-        assert catalog.models[0].supports_reasoning is True
-        assert catalog.models[0].reasoning_options == ["high"]
+        assert "model_listing" not in OMP_CAPABILITIES
+        with pytest.raises(UnsupportedAgentCapabilityError) as exc_info:
+            await harness.model_catalog(tmp_path)
+        assert exc_info.value.capability == "model_listing"
     finally:
         await supervisor.close_all()
 

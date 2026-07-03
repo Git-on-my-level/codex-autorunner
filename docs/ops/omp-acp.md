@@ -92,10 +92,13 @@ OMP (verified against `omp acp`, protocol v1) currently supports:
 - Message turns (`session/prompt`, terminal via the RPC response)
 - Event streaming (`session/update` with `agent_message_chunk`, plus OMP's
   `usage_update` / `session_info_update` / `available_commands_update` kinds)
-- Model catalog listing (parsed from `configOptions`)
 - Approval requests (OMP emits `session/request_permission` for tool calls; CAR
   bridges them into CAR approval handling)
 - File-chat execution (via the generic harness path)
+
+OMP surfaces its configured model through `configOptions` on session descriptors.
+CAR uses that metadata for `effective_runtime` telemetry only; it is not exposed
+as a caller-selectable model catalog.
 
 OMP currently does **not** support (via its ACP surface) and returns a
 capability-driven error for:
@@ -103,24 +106,21 @@ capability-driven error for:
 - Interrupt — OMP rejects `session/cancel`
 - Review mode — OMP has no `session/setMode`
 - Transcript history — OMP exposes no transcript method
-- Per-turn model selection — OMP has no `session/setModel` and ignores model at
-  `session/new`; turns use OMP's configured default model
+- Model listing / per-turn model selection — OMP has no `session/setModel` and
+  ignores model at `session/new`; turns use OMP's configured default model
 
 On unsupported actions, CAR returns a capability-driven error rather than
 silently falling back to a Codex/OpenCode path.
 
 ## Model selection
 
-ACP defines no model-listing RPC; OMP surfaces selectable models through
-`configOptions` on session descriptors. CAR parses these into a model catalog
-(`model_listing` capability) for display.
-
 OMP's ACP surface has no `session/setModel`: the runtime uses OMP's configured
-default model (`~/.omp` settings or `--model` at launch). A per-turn `--model`
-override passed through CAR is **not honored** by OMP — `model_listing` is
-informational. OMP also loads its model registry asynchronously, so a model
-catalog requested immediately after a cold spawn may briefly appear empty; CAR
-retries briefly, and the catalog is reliable once OMP's registry has loaded.
+default model (`~/.omp` settings or `--model` at launch). CAR does not advertise
+OMP as model-selectable (`model_listing` capability is off), so PMA/Discord/
+Telegram/Web model pickers and foreign-model validation behave like Hermes.
+
+`configOptions` on OMP session descriptors still report the active OMP model for
+`effective_runtime` telemetry after a turn completes.
 
 ## Approval Behavior
 
@@ -156,8 +156,7 @@ car pma thread status --id <thread-id>
 ```
 
 `car pma thread interrupt` against an OMP thread is not supported (capability
-error). `car pma models omp` returns the OMP model catalog once the registry has
-loaded.
+error).
 
 ## Ticket-Flow Usage
 
@@ -204,6 +203,5 @@ requests; `review` waits for a CAR decision.
 
 ### Model catalog is empty immediately after startup
 
-- OMP loads its model registry asynchronously. Wait a moment and re-request; the
-  catalog populates once the registry loads. This is a cold-start race, not a
-  configuration error.
+- OMP loads its model registry asynchronously. This only affects direct OMP CLI
+  usage; CAR does not expose an OMP model catalog API.
