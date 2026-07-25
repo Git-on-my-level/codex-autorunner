@@ -2968,19 +2968,22 @@ class ExecutionCommands(TelegramCommandSupportMixin):
 
             active_thread_id = thread_id
             assert active_thread_id is not None  # narrowed by `if thread_id`
-            user_preview = _preview_from_text(prompt_text, RESUME_PREVIEW_USER_LIMIT)
-            await self._router.update_topic(
-                message.chat_id,
-                message.thread_id,
-                lambda record: _set_thread_summary(
-                    record,
-                    active_thread_id,
-                    user_preview=user_preview,
-                    last_used_at=now_iso(),
-                    workspace_path=record.workspace_path,
-                    rollout_path=record.rollout_path,
-                ),
-            )
+            if not pma_mode:
+                user_preview = _preview_from_text(
+                    prompt_text, RESUME_PREVIEW_USER_LIMIT
+                )
+                await self._router.update_topic(
+                    message.chat_id,
+                    message.thread_id,
+                    lambda record: _set_thread_summary(
+                        record,
+                        active_thread_id,
+                        user_preview=user_preview,
+                        last_used_at=now_iso(),
+                        workspace_path=record.workspace_path,
+                        rollout_path=record.rollout_path,
+                    ),
+                )
 
             pending_seed = None
             if not pma_mode:
