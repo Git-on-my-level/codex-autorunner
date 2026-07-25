@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
 if TYPE_CHECKING:
     from ....core.flows import FlowController, FlowDefinition, FlowRunRecord
+    from ....flows.controller_provider import FlowControllerProvider
     from . import FlowRoutesState
 
 _logger = logging.getLogger(__name__)
@@ -85,34 +86,43 @@ def build_flow_definition(
     return definition
 
 
+def controller_provider_for(state: "FlowRoutesState") -> "FlowControllerProvider":
+    """Return this app's controller provider, bound to the shared state cache.
+
+    Built on first use because the definition/path factories live here rather
+    than on FlowRoutesState. Racing constructions are harmless: every provider
+    shares the same cache mapping and lock.
+    """
+    from ....flows.controller_provider import FlowControllerProvider
+    from ...services import flow_store as flow_store_service
+
+    existing = state.controller_provider
+    if isinstance(existing, FlowControllerProvider):
+        return existing
+
+    built = FlowControllerProvider(
+        definition_factory=lambda root, ft: build_flow_definition(root, ft, state),
+        paths_factory=flow_store_service.flow_paths,
+        cache=state.controller_cache,
+        lock=state.lock,
+    )
+    with state.lock:
+        current = state.controller_provider
+        if isinstance(current, FlowControllerProvider):
+            return current
+        state.controller_provider = built
+    return built
+
+
 def get_flow_controller(
     repo_root: Path, flow_type: str, state: "FlowRoutesState"
 ) -> FlowController:
-    from ....core.flows import FlowController
-    from ...services import flow_store as flow_store_service
+    """Resolve an initialized controller through the shared provider.
 
-    repo_root = repo_root.resolve()
-    key = (repo_root, flow_type)
-    with state.lock:
-        controller = cast(Optional[FlowController], state.controller_cache.get(key))
-        if controller is not None:
-            try:
-                controller.initialize()
-            except Exception:  # intentional: cached controller re-init is best-effort
-                _logger.debug("Cached flow controller initialize failed", exc_info=True)
-            return controller
-
-    definition = build_flow_definition(repo_root, flow_type, state)
-    db_path, artifacts_root = flow_store_service.flow_paths(repo_root)
-    controller = FlowController(
-        definition=definition,
-        db_path=db_path,
-        artifacts_root=artifacts_root,
-    )
-    controller.initialize()
-    with state.lock:
-        state.controller_cache[key] = controller
-    return controller
+    Construction, caching, and corrupt-store recovery live in
+    ``flows.controller_provider``; this is a lookup, not an owner.
+    """
+    return controller_provider_for(state).get(repo_root, flow_type)
 
 
 def get_flow_record(
