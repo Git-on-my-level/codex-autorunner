@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal, cast
 
 from ...chat.turn_policy import PlainTextTurnContext, should_trigger_plain_text_turn
 from ..trigger_mode import should_trigger_run
@@ -72,7 +72,7 @@ def activated_record_allows_plain_text_turn(
     if default_trigger not in {"always", "mentions"}:
         return False
     return should_trigger_plain_text_turn(
-        mode=default_trigger,
+        mode=cast("Literal['always', 'mentions']", default_trigger),
         context=PlainTextTurnContext(
             text=text,
             chat_type=message.chat_type,
@@ -91,6 +91,6 @@ def activated_record_allows_plain_text_turn(
 
 def event_logger(handlers: Any) -> logging.Logger:
     candidate = getattr(handlers, "_logger", None)
-    if hasattr(candidate, "log"):
+    if isinstance(candidate, logging.Logger):
         return candidate
     return logging.getLogger(__name__)

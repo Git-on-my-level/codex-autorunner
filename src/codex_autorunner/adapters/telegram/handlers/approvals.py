@@ -13,6 +13,7 @@ from ...chat.handlers.approvals import (
 )
 from ...chat.handlers.models import ChatContext
 from ...chat.models import ChatInteractionEvent, ChatInteractionRef, ChatMessageRef
+from .._service_attrs import _TelegramServiceAttrs
 from ..adapter import ApprovalCallback, TelegramCallbackQuery, build_approval_keyboard
 from ..config import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from ..helpers import (
@@ -26,9 +27,8 @@ from ..types import PendingApproval
 _logger = logging.getLogger(__name__)
 
 
-class TelegramApprovalHandlers(ChatApprovalHandlers):
+class TelegramApprovalHandlers(_TelegramServiceAttrs, ChatApprovalHandlers):
     _platform = "telegram"
-    _router: TopicRouter
 
     @property
     def _router(self) -> TopicRouter:
@@ -301,28 +301,50 @@ class TelegramApprovalHandlers(ChatApprovalHandlers):
     async def _chat_edit_message(
         self,
         *,
-        chat_id: int,
-        thread_id: int | None,
-        message_id: int,
+        chat_id: str,
+        thread_id: str | None,
+        message_id: str,
         text: str,
-        clear_actions: bool,
+        reply_markup: Any = None,
+        clear_actions: bool = False,
     ) -> None:
-        reply_markup = {"inline_keyboard": []} if clear_actions else None
+        # ChatApprovalHandlers (adapters/chat, out of scope) uses platform-agnostic
+        # str ids; Telegram ids are int. Accept str and convert, like the sibling
+        # _chat_delete_message override. reply_markup is accepted for base-contract
+        # parity; the effective keyboard is derived from clear_actions (unchanged).
+        if not message_id.lstrip("-").isdigit():
+            return
+        try:
+            parsed_chat = int(chat_id)
+        except ValueError:
+            return
+        effective_markup: dict[str, Any] | None = (
+            {"inline_keyboard": []} if clear_actions else None
+        )
         await self._edit_message_text(
-            chat_id,
-            message_id,
+            parsed_chat,
+            int(message_id),
             text,
-            reply_markup=reply_markup,
+            reply_markup=effective_markup,
         )
 
     async def _chat_delete_message(
         self,
         *,
-        chat_id: int,
-        thread_id: int | None,
-        message_id: int,
+        chat_id: str,
+        thread_id: str | None,
+        message_id: str,
     ) -> bool:
-        return await self._delete_message(chat_id, message_id, thread_id)
+        if not message_id.lstrip("-").isdigit():
+            return False
+        try:
+            parsed_chat = int(chat_id)
+        except ValueError:
+            return False
+        parsed_thread = (
+            int(thread_id) if thread_id and thread_id.lstrip("-").isdigit() else None
+        )
+        return await self._delete_message(parsed_chat, int(message_id), parsed_thread)
 
     @staticmethod
     def _chat_thread_ref(chat_id: int, thread_id: int | None):

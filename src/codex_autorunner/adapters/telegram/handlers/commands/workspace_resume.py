@@ -17,6 +17,7 @@ from ....chat.constants import (
     TOPIC_NOT_BOUND_RESUME_MESSAGE,
 )
 from ....chat.thread_summaries import _format_resume_timestamp
+from ..._service_attrs import _TelegramServiceAttrs
 from ...adapter import TelegramCallbackQuery, TelegramMessage
 from ...config import AppServerUnavailableError
 from ...constants import (
@@ -74,7 +75,7 @@ class ResumeThreadData:
     saw_path: bool
 
 
-class WorkspaceResumeMixin:
+class WorkspaceResumeMixin(_TelegramServiceAttrs):
     async def _handle_opencode_resume(
         self,
         message: TelegramMessage,
@@ -452,7 +453,7 @@ class WorkspaceResumeMixin:
         unscoped_entries: list[dict[str, Any]] = []
         saw_path = False
         if show_unscoped:
-            if threads:
+            if threads and record.workspace_path:
                 filtered, unscoped_entries, saw_path = _partition_threads(
                     threads, record.workspace_path
                 )
@@ -823,6 +824,8 @@ class WorkspaceResumeMixin:
             )
             return
         record = self._record_with_workspace_path(record, workspace_path)
+        if record is None:
+            return
         try:
             await _answer_once("Resuming...")
             client = await self._client_for_workspace(record.workspace_path)
@@ -1110,6 +1113,8 @@ class WorkspaceResumeMixin:
             )
             return
         record = self._record_with_workspace_path(record, workspace_path)
+        if record is None:
+            return
         supervisor = getattr(self, "_opencode_supervisor", None)
         if supervisor is None:
             await _answer_once("Resume aborted")
@@ -1190,7 +1195,7 @@ class WorkspaceResumeMixin:
             )
             return
         resumed_path = _extract_opencode_session_path(session)
-        if resumed_path:
+        if resumed_path and record.workspace_path:
             try:
                 workspace_root = Path(record.workspace_path).expanduser().resolve()
                 resumed_root = Path(resumed_path).expanduser().resolve()

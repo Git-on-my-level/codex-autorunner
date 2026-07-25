@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional, cast
 
 from ...core.logging_utils import log_event
 from ...core.orchestration import ChatOperationState
@@ -65,7 +65,7 @@ def _with_chat_operation(
     wrapper = getattr(handlers, "_with_chat_operation", None)
     if not callable(wrapper):
         return work
-    return wrapper(operation_id, work)
+    return cast("Callable[[], Awaitable[None]]", wrapper(operation_id, work))
 
 
 async def _run_with_typing_indicator(

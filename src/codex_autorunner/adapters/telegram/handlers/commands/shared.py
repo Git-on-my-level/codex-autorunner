@@ -13,13 +13,14 @@ from typing import Any, Optional
 
 import httpx
 
-from .....agents.registry import get_registered_agents
+from .....agents.registry import AgentDescriptor, get_registered_agents
 from .....agents.types import normalize_runtime_capabilities
 from .....core.logging_utils import log_event
 from .....core.utils import canonicalize_path
 from ....app_server.client import _normalize_sandbox_policy
 from ....chat.agents import DEFAULT_CHAT_AGENT, normalize_chat_agent
 from ....chat.constants import APP_SERVER_UNAVAILABLE_MESSAGE, TOPIC_NOT_BOUND_MESSAGE
+from ..._service_attrs import _TelegramServiceAttrs
 from ...adapter import (
     InlineButton,
     TelegramMessage,
@@ -61,7 +62,7 @@ class _RuntimeStub:
     interrupt_turn_id: Optional[str] = None
 
 
-class TelegramCommandSupportMixin:
+class TelegramCommandSupportMixin(_TelegramServiceAttrs):
     """Shared helper methods for Telegram command handlers.
 
     This mixin provides common utilities for error formatting, argument parsing,
@@ -69,7 +70,7 @@ class TelegramCommandSupportMixin:
     All methods use `self` to access instance attributes.
     """
 
-    def _agent_descriptor(self, agent: object) -> Any:
+    def _agent_descriptor(self, agent: object) -> Optional[AgentDescriptor]:
         normalized = normalize_chat_agent(
             agent,
             default=DEFAULT_CHAT_AGENT,

@@ -44,7 +44,10 @@ if TYPE_CHECKING:
     from ...state import TelegramTopicRecord
 
 
-class WorkspaceSessionCommandsMixin:
+from ..._service_attrs import _TelegramServiceAttrs
+
+
+class WorkspaceSessionCommandsMixin(_TelegramServiceAttrs):
     async def _handle_reset(self, message: TelegramMessage) -> None:
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         record = await self._router.get_topic(key)
@@ -288,8 +291,8 @@ class WorkspaceSessionCommandsMixin:
                 message, record.workspace_path, thread, action="thread_start"
             ):
                 return
-            thread_id = _extract_thread_id(thread)
-            if not thread_id:
+            extracted_thread_id = _extract_thread_id(thread)
+            if not extracted_thread_id:
                 await self._send_message(
                     message.chat_id,
                     "Failed to reset thread.",
@@ -297,6 +300,7 @@ class WorkspaceSessionCommandsMixin:
                     reply_to=message.message_id,
                 )
                 return
+            thread_id = extracted_thread_id
             await self._apply_thread_result(
                 message.chat_id, message.thread_id, thread, active_thread_id=thread_id
             )
@@ -595,8 +599,8 @@ class WorkspaceSessionCommandsMixin:
                 message, record.workspace_path, thread, action="thread_start"
             ):
                 return
-            thread_id = _extract_thread_id(thread)
-            if not thread_id:
+            extracted_thread_id = _extract_thread_id(thread)
+            if not extracted_thread_id:
                 await self._send_message(
                     message.chat_id,
                     "Failed to start a new thread.",
@@ -604,6 +608,7 @@ class WorkspaceSessionCommandsMixin:
                     reply_to=message.message_id,
                 )
                 return
+            thread_id = extracted_thread_id
             await self._apply_thread_result(
                 message.chat_id, message.thread_id, thread, active_thread_id=thread_id
             )
@@ -914,8 +919,8 @@ class WorkspaceSessionCommandsMixin:
                     reply_to=message.message_id,
                 )
                 return
-            thread_id = _extract_thread_id(thread)
-            if not thread_id:
+            extracted_thread_id = _extract_thread_id(thread)
+            if not extracted_thread_id:
                 await self._send_message(
                     message.chat_id,
                     "Reset branch but failed to start thread.",
@@ -923,6 +928,7 @@ class WorkspaceSessionCommandsMixin:
                     reply_to=message.message_id,
                 )
                 return
+            thread_id = extracted_thread_id
             await self._apply_thread_result(
                 message.chat_id, message.thread_id, thread, active_thread_id=thread_id
             )

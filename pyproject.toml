@@ -166,9 +166,4 @@ module = [
 ]
 ignore_errors = false
 
-[[tool.mypy.overrides]]
-module = [
-  "codex_autorunner.adapters.telegram",
-  "codex_autorunner.adapters.telegram.*",
-]
-ignore_errors = true
+

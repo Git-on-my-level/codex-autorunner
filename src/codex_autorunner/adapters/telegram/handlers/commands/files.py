@@ -70,6 +70,7 @@ class MediaBatchContext:
     record: "TelegramTopicRecord"
     runtime: Any
     topic_key: str
+    workspace_path: str
     max_image_bytes: int
     max_file_bytes: int
 
@@ -359,7 +360,8 @@ class FilesCommands(FileBoxCommandsMixin, TelegramCommandSupportMixin):
             has_caption=bool(caption_text),
         )
         if (
-            not self._voice_service
+            not self._voice_manager
+            or not self._voice_service
             or not self._voice_config
             or not self._voice_config.enabled
         ):
@@ -665,6 +667,7 @@ class FilesCommands(FileBoxCommandsMixin, TelegramCommandSupportMixin):
             record=record,
             runtime=runtime,
             topic_key=topic_key,
+            workspace_path=record.workspace_path,
             max_image_bytes=self._config.media.max_image_bytes,
             max_file_bytes=self._config.media.max_file_bytes,
         )
@@ -775,7 +778,7 @@ class FilesCommands(FileBoxCommandsMixin, TelegramCommandSupportMixin):
             return True
         try:
             image_path = self._save_image_file(
-                context.record.workspace_path,
+                context.workspace_path,
                 data,
                 file_path,
                 candidate,
@@ -799,7 +802,7 @@ class FilesCommands(FileBoxCommandsMixin, TelegramCommandSupportMixin):
         saved_image_paths.append(image_path)
         try:
             image_inbox_path = self._save_inbox_file(
-                context.record.workspace_path,
+                context.workspace_path,
                 context.topic_key,
                 data,
                 candidate=candidate,
@@ -898,7 +901,7 @@ class FilesCommands(FileBoxCommandsMixin, TelegramCommandSupportMixin):
             return
         try:
             file_path_local = self._save_inbox_file(
-                context.record.workspace_path,
+                context.workspace_path,
                 context.topic_key,
                 data,
                 candidate=candidate,
@@ -966,7 +969,7 @@ class FilesCommands(FileBoxCommandsMixin, TelegramCommandSupportMixin):
                 f"\nFailed to process {result.stats.failed_count} item(s)."
             )
         hint = self._build_files_hint(
-            workspace_path=context.record.workspace_path,
+            workspace_path=context.workspace_path,
             topic_key=context.topic_key,
             pma_enabled=bool(getattr(context.record, "pma_enabled", False)),
         )

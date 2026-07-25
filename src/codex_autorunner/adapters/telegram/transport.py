@@ -7,6 +7,7 @@ from typing import Any, Optional
 from ...core.logging_utils import log_event
 from ...core.orchestration import ChatOperationState
 from ...core.state import now_iso
+from ._service_attrs import _TelegramServiceAttrs
 from .client import TelegramAPIError, TelegramCallbackQuery
 from .constants import PLACEHOLDER_TEXT, TELEGRAM_MAX_MESSAGE_LENGTH
 from .helpers import (
@@ -19,7 +20,7 @@ from .outbox import (
     OUTBOX_OPERATION_SEND_DELETE_PLACEHOLDER,
     OUTBOX_OPERATION_SEND_KEEP_PLACEHOLDER,
 )
-from .overflow import split_markdown_message, trim_markdown_message
+from .overflow import RenderFn, split_markdown_message, trim_markdown_message
 from .rendering import (
     _format_telegram_html,
     _format_telegram_markdown,
@@ -28,7 +29,7 @@ from .rendering import (
 from .state import OutboxRecord
 
 
-class TelegramMessageTransport:
+class TelegramMessageTransport(_TelegramServiceAttrs):
     @staticmethod
     def _looks_like_progress_summary(text: str) -> bool:
         normalized = text.strip()
@@ -428,7 +429,7 @@ class TelegramMessageTransport:
                 )
             except TypeError:
                 # Back-compat for subclasses/tests that don't accept parse_mode kwarg
-                rendered, used_mode = self._render_message(text)  # type: ignore[misc]
+                rendered, used_mode = self._render_message(text)
             if used_mode and len(rendered) > TELEGRAM_MAX_MESSAGE_LENGTH:
                 overflow_mode = overflow_mode_override or getattr(
                     self._config, "message_overflow", "document"
@@ -439,7 +440,7 @@ class TelegramMessageTransport:
                     "MarkdownV2",
                 ):
                     if used_mode == "HTML":
-                        split_renderer = _format_telegram_html
+                        split_renderer: RenderFn = _format_telegram_html
                     else:
 
                         def _render_markdown(value: str, mode: str = used_mode) -> str:
@@ -473,7 +474,7 @@ class TelegramMessageTransport:
                     return first_message_id
                 if overflow_mode == "trim":
                     if used_mode == "HTML":
-                        renderer = _format_telegram_html
+                        renderer: RenderFn = _format_telegram_html
                     elif used_mode in ("Markdown", "MarkdownV2"):
 
                         def _render_markdown(value: str, mode: str = used_mode) -> str:

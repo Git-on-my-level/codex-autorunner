@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Optional, cast
+from typing import Any, Callable, Optional, Union, cast
 
 from ....core.update import _normalize_update_target, _update_target_restarts_surface
 from ...chat.constants import TOPIC_NOT_BOUND_MESSAGE
 from ...chat.handlers.models import ChatContext
 from ...chat.handlers.selections import ChatSelectionHandlers
 from ...chat.models import ChatThreadRef
+from .._service_attrs import _TelegramServiceAttrs
 from ..adapter import (
     AgentCallback,
     AgentProfileCallback,
@@ -65,8 +66,8 @@ from ..types import (
 )
 
 
-class TelegramSelectionHandlers(ChatSelectionHandlers):
-    async def _bind_topic_by_repo_id(
+class TelegramSelectionHandlers(_TelegramServiceAttrs, ChatSelectionHandlers):
+    async def _bind_topic_by_repo_id(  # type: ignore[override]  # ChatSelectionHandlers (out of scope) declares this sync -> None; Telegram needs async + a callback param to drive the inline keyboard.
         self,
         topic_key: str,
         repo_id: str,
@@ -74,7 +75,7 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
     ) -> None:
         await self._selection_bind_topic_by_repo_id(topic_key, repo_id, callback)
 
-    async def _resume_thread_by_id(
+    async def _resume_thread_by_id(  # type: ignore[override]  # see _bind_topic_by_repo_id: base is sync -> None, override is async.
         self,
         topic_key: str,
         thread_id: str,
@@ -141,6 +142,8 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
             await self._answer_callback(callback, "Selection expired")
             return
         self._agent_options.pop(key, None)
+        if callback.chat_id is None:
+            return
         record = await self._router.ensure_topic(callback.chat_id, callback.thread_id)
         current = self._effective_agent(record)
         desired = parsed.agent
@@ -784,10 +787,12 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
             self._agent_profile_options.pop(key, None)
             text = "Hermes profile selection cancelled."
         elif parsed.kind == "model":
-            state = self._model_pending.get(key)
-            if state is None:
-                state = self._model_options.get(key)
-            if not self._selection_belongs_to_user(state, actor_id):
+            model_state: Optional[Union[ModelPendingState, ModelPickerState]] = (
+                self._model_pending.get(key)
+            )
+            if model_state is None:
+                model_state = self._model_options.get(key)
+            if not self._selection_belongs_to_user(model_state, actor_id):
                 await self._answer_callback(callback, "Selection expired")
                 return
             self._model_options.pop(key, None)
@@ -801,8 +806,8 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
             self._update_options.pop(key, None)
             text = "Update cancelled."
         elif parsed.kind == "update-confirm":
-            state = self._update_confirm_options.get(key)
-            if not self._selection_belongs_to_user(state, actor_id):
+            confirm_state = self._update_confirm_options.get(key)
+            if not self._selection_belongs_to_user(confirm_state, actor_id):
                 await self._answer_callback(callback, "Selection expired")
                 return
             self._update_confirm_options.pop(key, None)
