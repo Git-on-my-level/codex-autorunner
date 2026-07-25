@@ -173,6 +173,21 @@ class ACPPromptResult:
     events: tuple[ACPEvent, ...] = ()
 
 
+@dataclass(frozen=True)
+class ACPClientDiagnostics:
+    """A point-in-time snapshot of an ``ACPClient``'s process/prompt state.
+
+    This is the sanctioned way to observe an `ACPClient`'s internals (process
+    identity and in-flight prompt count) without reaching into its private
+    attributes.
+    """
+
+    pid: Optional[int]
+    pgid: Optional[int]
+    returncode: Optional[int]
+    active_prompts: int
+
+
 @dataclass
 class _PromptState:
     session_id: str
@@ -530,6 +545,32 @@ class ACPClient:
         if self._initialize_result is None:
             return ACPSessionCapabilities()
         return extract_session_capabilities(self._initialize_result.capabilities)
+
+    def diagnostics(self) -> ACPClientDiagnostics:
+        """Return a snapshot of process identity and in-flight prompt state.
+
+        This is the supported accessor for supervisor-level lifecycle
+        reporting; it replaces direct reads of ``_process``/``_prompts``.
+        """
+        process = self._process
+        pid = getattr(process, "pid", None)
+        pid = pid if isinstance(pid, int) else None
+        pgid: Optional[int] = None
+        if pid is not None and os.name != "nt":
+            try:
+                pgid = os.getpgid(pid)
+            except OSError:
+                pgid = None
+        returncode = getattr(process, "returncode", None)
+        returncode = returncode if isinstance(returncode, int) else None
+        prompts = self._prompts
+        active_prompts = len(prompts) if isinstance(prompts, dict) else 0
+        return ACPClientDiagnostics(
+            pid=pid,
+            pgid=pgid,
+            returncode=returncode,
+            active_prompts=active_prompts,
+        )
 
     async def start(self) -> ACPInitializeResult:
         async with self._start_lock:
@@ -1808,6 +1849,7 @@ class ACPClient:
 
 __all__ = [
     "ACPClient",
+    "ACPClientDiagnostics",
     "ACPPromptHandle",
     "ACPPromptResult",
     "MissingSessionMatcher",
