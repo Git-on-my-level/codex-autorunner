@@ -536,8 +536,9 @@ class TelegramBotConfig:
         if coalesce_window_seconds <= 0:
             coalesce_window_seconds = DEFAULT_COALESCE_WINDOW_SECONDS
 
-        ticket_flow_raw = (
-            cfg.get("ticket_flow") if isinstance(cfg.get("ticket_flow"), dict) else {}
+        ticket_flow_raw_value = cfg.get("ticket_flow")
+        ticket_flow_raw: dict[str, Any] = (
+            ticket_flow_raw_value if isinstance(ticket_flow_raw_value, dict) else {}
         )
         ticket_flow_auto_resume = bool(ticket_flow_raw.get("auto_resume", False))
 
@@ -623,33 +624,36 @@ class TelegramBotConfig:
         app_server_raw: dict[str, Any] = (
             app_server_raw_value if isinstance(app_server_raw_value, dict) else {}
         )
-        app_server_max_handles = int(
+        app_server_max_handles: Optional[int] = int(
             app_server_raw.get("max_handles", DEFAULT_APP_SERVER_MAX_HANDLES)
         )
-        if app_server_max_handles <= 0:
+        if app_server_max_handles is not None and app_server_max_handles <= 0:
             app_server_max_handles = None
-        app_server_idle_ttl_seconds = int(
+        app_server_idle_ttl_seconds: Optional[int] = int(
             app_server_raw.get("idle_ttl_seconds", DEFAULT_APP_SERVER_IDLE_TTL_SECONDS)
         )
-        if app_server_idle_ttl_seconds <= 0:
+        if app_server_idle_ttl_seconds is not None and app_server_idle_ttl_seconds <= 0:
             app_server_idle_ttl_seconds = None
 
-        opencode_section_raw = opencode_raw
-        if not isinstance(opencode_section_raw, dict):
-            opencode_section_raw = (
-                cfg.get("opencode") if isinstance(cfg.get("opencode"), dict) else {}
-            )
-        opencode_max_handles = int(
+        opencode_section_raw_value = (
+            opencode_raw if isinstance(opencode_raw, dict) else cfg.get("opencode")
+        )
+        opencode_section_raw: dict[str, Any] = (
+            opencode_section_raw_value
+            if isinstance(opencode_section_raw_value, dict)
+            else {}
+        )
+        opencode_max_handles: Optional[int] = int(
             opencode_section_raw.get("max_handles", DEFAULT_OPENCODE_MAX_HANDLES)
         )
-        if opencode_max_handles <= 0:
+        if opencode_max_handles is not None and opencode_max_handles <= 0:
             opencode_max_handles = None
-        opencode_idle_ttl_seconds = int(
+        opencode_idle_ttl_seconds: Optional[int] = int(
             opencode_section_raw.get(
                 "idle_ttl_seconds", DEFAULT_OPENCODE_IDLE_TTL_SECONDS
             )
         )
-        if opencode_idle_ttl_seconds <= 0:
+        if opencode_idle_ttl_seconds is not None and opencode_idle_ttl_seconds <= 0:
             opencode_idle_ttl_seconds = None
         app_server_start_timeout_seconds = float(
             app_server_raw.get(
@@ -660,8 +664,13 @@ class TelegramBotConfig:
             app_server_start_timeout_seconds = DEFAULT_APP_SERVER_START_TIMEOUT_SECONDS
         app_server_start_max_attempts_raw = app_server_raw.get("max_attempts")
         if app_server_start_max_attempts_raw is not None:
-            app_server_start_max_attempts = int(app_server_start_max_attempts_raw)
-            if app_server_start_max_attempts <= 0:
+            app_server_start_max_attempts: Optional[int] = int(
+                app_server_start_max_attempts_raw
+            )
+            if (
+                app_server_start_max_attempts is not None
+                and app_server_start_max_attempts <= 0
+            ):
                 app_server_start_max_attempts = None
         else:
             app_server_start_max_attempts = None

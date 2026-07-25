@@ -34,7 +34,7 @@ def _selection_contains(items: Sequence[tuple[str, str]], value: str) -> bool:
 
 
 def _selection_belongs_to_user(state: Any, user_id: int | None) -> bool:
-    expected = getattr(state, "requester_user_id", None)
+    expected: object = getattr(state, "requester_user_id", None)
     if expected is None:
         return True
     if user_id is None:

@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from .....core.chat_bindings import emit_adapter_binding_chat_surface_event
 from .....manifest import load_manifest
+from ..._service_attrs import _TelegramServiceAttrs
 from ...adapter import TelegramCallbackQuery, TelegramMessage
 from ...constants import BIND_PICKER_PROMPT
 from ...helpers import _split_topic_key
@@ -14,7 +15,11 @@ if TYPE_CHECKING:
     from ...state import TelegramTopicRecord
 
 
-class WorkspaceBindingMixin:
+class WorkspaceBindingMixin(_TelegramServiceAttrs):
+    # Provided by ``TelegramSelectionHandlers``; declared here for static analysis.
+    def _selection_prompt(self, base: str, state: SelectionState) -> str:
+        raise NotImplementedError
+
     def _emit_telegram_topic_binding_event(
         self,
         *,

@@ -29,7 +29,7 @@ from .helpers import _format_future_time, _parse_iso_timestamp
 from .retry import _extract_retry_after_seconds
 from .state import PendingVoiceRecord, TelegramStateStore
 
-SendMessageFn = Callable[..., Awaitable[None]]
+SendMessageFn = Callable[..., Awaitable[object]]
 EditMessageFn = Callable[..., Awaitable[bool]]
 SendProgressMessageFn = Callable[[PendingVoiceRecord, str], Awaitable[Optional[int]]]
 DeliverTranscriptFn = Callable[[PendingVoiceRecord, str], Awaitable[None]]

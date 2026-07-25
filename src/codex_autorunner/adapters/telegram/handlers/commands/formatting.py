@@ -3,12 +3,13 @@ from typing import Any, Optional
 
 from .....adapters.chat.compaction import build_compact_seed_prompt
 from .....core.logging_utils import log_event
+from ..._service_attrs import _TelegramServiceAttrs
 from ...adapter import TelegramAPIError, TelegramMessage
 from ...constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from ...helpers import _compact_preview
 
 
-class FormattingHelpers:
+class FormattingHelpers(_TelegramServiceAttrs):
     def _prepare_compact_summary_delivery(
         self, summary_text: str
     ) -> tuple[str, Optional[bytes]]:

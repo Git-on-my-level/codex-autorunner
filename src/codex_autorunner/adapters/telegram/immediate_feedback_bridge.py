@@ -188,6 +188,23 @@ class _TelegramFeedbackTransport:
             kwargs["reply_markup"] = reply_markup
         await edit_fn(**kwargs)
 
+    # ponytail: ChatTransport protocol members never exercised by the
+    # immediate-feedback primitives; kept explicit so mypy sees a complete
+    # protocol implementation. If a future caller invokes them, wire to the
+    # underlying bot like send_text/edit_text above.
+    async def delete_message(self, message: ChatMessageRef) -> None:
+        raise NotImplementedError
+
+    async def send_attachment(
+        self,
+        thread: ChatThreadRef,
+        file_path: str,
+        *,
+        caption: Optional[str] = None,
+        reply_to: Optional[ChatMessageRef] = None,
+    ) -> ChatMessageRef:
+        raise NotImplementedError
+
 
 class _CallbackStub:
     def __init__(

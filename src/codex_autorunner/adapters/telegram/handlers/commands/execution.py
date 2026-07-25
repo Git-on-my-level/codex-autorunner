@@ -9,7 +9,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Mapping, Optional, cast
 
 import httpx
 
@@ -126,6 +126,7 @@ from .....core.managed_thread_identity import (
 )
 from .....core.orchestration import (
     MessageRequest,
+    TurnExecutionRequest,
     build_harness_backed_orchestration_service,
 )
 from .....core.orchestration.runtime_thread_events import (
@@ -184,6 +185,8 @@ from ...state import parse_topic_key
 from ...state import topic_key as build_topic_key
 
 if TYPE_CHECKING:
+    from .....core.orchestration.bindings import OrchestrationBindingStore
+    from .....core.orchestration.catalog import RuntimeAgentDescriptor
     from ...state import TelegramTopicRecord
 
 from .command_utils import _format_opencode_exception
@@ -552,13 +555,14 @@ def _build_telegram_thread_orchestration_service(handlers: Any) -> Any:
             message="Hub control-plane client not available; orchestration disabled",
         )
         return None
+    assert hub_client is not None  # handshake_ok guarantees non-None above
     thread_store = RemoteThreadExecutionStore(hub_client)
     binding_store = RemoteSurfaceBindingStore(hub_client)
     created = build_harness_backed_orchestration_service(
-        descriptors=descriptors,
+        descriptors=cast("Mapping[str, RuntimeAgentDescriptor]", descriptors),
         harness_factory=_make_harness,
         thread_store=thread_store,
-        binding_store=binding_store,
+        binding_store=cast("OrchestrationBindingStore | None", binding_store),
     )
     handlers._telegram_managed_thread_orchestration_service = created
     handlers._telegram_thread_orchestration_service = created
@@ -712,7 +716,8 @@ def _build_telegram_managed_thread_coordinator(
         preview_builder=lambda message_text: _preview_from_text(
             message_text,
             RESUME_PREVIEW_USER_LIMIT,
-        ),
+        )
+        or "",
     )
 
 
@@ -1022,7 +1027,7 @@ def _build_telegram_failure_delivery(
 
 
 async def _send_telegram_terminal_message_with_outbox(
-    send_with_outbox: Any,
+    send_with_outbox: Callable[..., Coroutine[Any, Any, bool]],
     chat_id: int,
     text: str,
     *,
@@ -1334,14 +1339,14 @@ async def _run_telegram_managed_thread_turn(
     )
 
     async def _begin_execution(
-        queued_orchestration_service: Any,
-        request: MessageRequest,
+        orchestration_service: Any,
+        request: MessageRequest | TurnExecutionRequest,
         *,
         client_request_id: Optional[str],
         sandbox_policy: Optional[Any],
     ) -> RuntimeThreadExecution:
         return await begin_runtime_thread_execution(
-            queued_orchestration_service,
+            orchestration_service,
             request,
             client_request_id=client_request_id,
             sandbox_policy=sandbox_policy,
@@ -1360,12 +1365,12 @@ async def _run_telegram_managed_thread_turn(
     _ = runner_hooks.durable_delivery
 
     async def _begin_next_execution(
-        queued_orchestration_service: Any,
-        queued_managed_thread_id: str,
+        orchestration_service: Any,
+        managed_thread_id: str,
     ) -> Optional[RuntimeThreadExecution]:
         return await begin_next_queued_runtime_thread_execution(
-            queued_orchestration_service,
-            queued_managed_thread_id,
+            orchestration_service,
+            managed_thread_id,
         )
 
     registered_turn_key: Optional[tuple[str, str]] = None
@@ -1785,7 +1790,7 @@ async def _run_telegram_managed_thread_turn(
             _first_progress_recorded = True
             chat_ux_snapshot.record(ChatUxMilestone.FIRST_SEMANTIC_PROGRESS)
 
-    metadata = {
+    metadata: dict[str, Any] = {
         "runtime_prompt": execution_prompt,
         "execution_error_message": public_execution_error,
     }
@@ -1935,8 +1940,14 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 prompt_text,
                 trigger_text=trigger_text,
             )
-        hub_root = getattr(getattr(self, "_config", None), "root", None)
-        hub_root = hub_root or record.workspace_path
+        # ponytail: cast — runtime invariant guarantees config.root or
+        # record.workspace_path is set; if both were None the planner would
+        # crash downstream regardless.
+        hub_root = cast(
+            "str | Path",
+            getattr(getattr(self, "_config", None), "root", None)
+            or record.workspace_path,
+        )
         planned = plan_prompt_writing_hint_injection(
             prompt_text,
             hub_root=hub_root,
@@ -1960,8 +1971,14 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 prompt_text,
                 declared_profile="car_ambient",
             )
-        hub_root = getattr(getattr(self, "_config", None), "root", None)
-        hub_root = hub_root or record.workspace_path
+        # ponytail: cast — runtime invariant guarantees config.root or
+        # record.workspace_path is set; if both were None the planner would
+        # crash downstream regardless.
+        hub_root = cast(
+            "str | Path",
+            getattr(getattr(self, "_config", None), "root", None)
+            or record.workspace_path,
+        )
         planned = plan_car_awareness_injection(
             prompt_text,
             hub_root=hub_root,
@@ -2379,6 +2396,11 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                     )
 
                 if pma_mode:
+                    # pma_mode is derived from both being truthy (see above);
+                    # thread_id was just assigned and validated above.
+                    assert managed_thread_registry is not None
+                    assert managed_thread_key is not None
+                    assert thread_id is not None
                     managed_thread_registry.set_thread_id(managed_thread_key, thread_id)
                 else:
                     record = await self._router.update_topic(
@@ -2549,7 +2571,10 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                                 },
                             }
                         )
-                        return decision
+                        # ApprovalDecision is `str | dict[str, Any]`; the
+                        # opencode permission protocol only consumes the str
+                        # form. Cast documents that invariant.
+                        return cast(str, decision)
 
                     async def _question_handler(
                         request_id: str, props: dict[str, Any]
@@ -2586,7 +2611,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                         if runtime.interrupt_requested and not abort_requested:
                             abort_requested = True
                             asyncio.create_task(_abort_opencode())
-                        return runtime.interrupt_requested
+                        return bool(runtime.interrupt_requested)
 
                     part_handler = OpenCodeStreamPartHandler(
                         self,
@@ -2941,22 +2966,21 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                         message.chat_id, message.thread_id, thread_id
                     )
 
-            if thread_id and not pma_mode:
-                user_preview = _preview_from_text(
-                    prompt_text, RESUME_PREVIEW_USER_LIMIT
-                )
-                await self._router.update_topic(
-                    message.chat_id,
-                    message.thread_id,
-                    lambda record: _set_thread_summary(
-                        record,
-                        thread_id,
-                        user_preview=user_preview,
-                        last_used_at=now_iso(),
-                        workspace_path=record.workspace_path,
-                        rollout_path=record.rollout_path,
-                    ),
-                )
+            active_thread_id = thread_id
+            assert active_thread_id is not None  # narrowed by `if thread_id`
+            user_preview = _preview_from_text(prompt_text, RESUME_PREVIEW_USER_LIMIT)
+            await self._router.update_topic(
+                message.chat_id,
+                message.thread_id,
+                lambda record: _set_thread_summary(
+                    record,
+                    active_thread_id,
+                    user_preview=user_preview,
+                    last_used_at=now_iso(),
+                    workspace_path=record.workspace_path,
+                    rollout_path=record.rollout_path,
+                ),
+            )
 
             pending_seed = None
             if not pma_mode:
@@ -3073,8 +3097,8 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                     transcript_text,
                 )
 
-            turn_key: Optional[TurnKey] = None
-            turn_started_at: Optional[float] = None
+            turn_key = None
+            turn_started_at = None
             try:
                 placeholder_id = await self._log_queue_wait_and_update_placeholder(
                     message,
@@ -3476,7 +3500,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         raw_user_input = (
             user_input_text if user_input_text is not None else message.text
         )
-        planned_injections = []
+        planned_injections: list[PlannedPromptInjection] = []
 
         try:
             prompt_text, injected = await self._maybe_inject_github_context(
@@ -3502,8 +3526,14 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 reply_to=message.message_id,
             )
 
-        hub_root = getattr(getattr(self, "_config", None), "root", None)
-        hub_root = hub_root or record.workspace_path
+        # ponytail: cast — runtime invariant guarantees config.root or
+        # record.workspace_path is set; if both were None the planner would
+        # crash downstream regardless.
+        hub_root = cast(
+            "str | Path",
+            getattr(getattr(self, "_config", None), "root", None)
+            or record.workspace_path,
+        )
         planned_car = plan_car_awareness_injection(
             prompt_text,
             hub_root=hub_root,

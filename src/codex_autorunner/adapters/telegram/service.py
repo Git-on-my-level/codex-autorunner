@@ -11,12 +11,12 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, Sequence, cast
 
 if TYPE_CHECKING:
+    from ...core.runtime_services import _FlowRuntimeResources
+    from .chat_transport import _TelegramTransportOwner
     from .progress_stream import TurnProgressTracker
-    from .state import TelegramTopicRecord
 
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...core.chat_queue_control import ChatQueueControlPlane, ChatQueueControlStore
@@ -137,6 +137,7 @@ from .constants import (
 )
 from .dispatch import dispatch_update
 from .handlers import callbacks as callback_handlers
+from .handlers import media_ingress
 from .handlers import messages as message_handlers
 from .handlers.approvals import TelegramApprovalHandlers
 from .handlers.commands import build_command_specs
@@ -163,6 +164,7 @@ from .runtime import TelegramWorkspaceAndTurnMixin
 from .state import (
     OutboxRecord,
     TelegramStateStore,
+    TelegramTopicRecord,
     parse_topic_key,
     topic_key,
 )
@@ -212,7 +214,7 @@ def _build_opencode_supervisor(
     opencode_command = config.opencode_command or None
     opencode_binary = config.agent_binaries.get("opencode")
 
-    supervisor = build_opencode_supervisor(
+    supervisor: Optional[OpenCodeSupervisor] = build_opencode_supervisor(
         opencode_command=opencode_command,
         opencode_binary=opencode_binary,
         workspace_root=config.root,
@@ -268,7 +270,7 @@ class TelegramServiceDependencies:
     log_event: Callable[..., None] = log_event
 
 
-class TelegramBotService(
+class TelegramBotService(  # type: ignore[misc]  # _chat_delete_message return type differs between out-of-scope ChatApprovalHandlers (bool) and ChatQuestionHandlers (None); the telegram handlers faithfully match their own bases.
     TelegramWorkspaceAndTurnMixin,
     TelegramMessageTransport,
     TelegramNotificationHandlers,
@@ -390,9 +392,12 @@ class TelegramBotService(
         self._runtime_services = RuntimeServices(
             app_server_supervisor=self._app_server_supervisor,
             opencode_supervisor=self._opencode_supervisor,
-            flow_runtime_builder=lambda repo_root: build_ticket_flow_runtime_resources(
-                repo_root,
-                runtime_services=self._runtime_services,
+            flow_runtime_builder=lambda repo_root: cast(
+                "_FlowRuntimeResources",
+                build_ticket_flow_runtime_resources(
+                    repo_root,
+                    runtime_services=self._runtime_services,
+                ),
             ),
         )
         poll_timeout = float(config.poll_timeout_seconds)
@@ -412,7 +417,9 @@ class TelegramBotService(
             self._bot,
             poller=self._poller,
         )
-        self._chat_transport = TelegramChatTransport(self)
+        self._chat_transport = TelegramChatTransport(
+            cast("_TelegramTransportOwner", self)
+        )
         self._chat_state_store = TelegramChatStateStore(self._store)
         channel_directory_root = self._hub_root or self._config.root
         self._channel_directory_store = ChannelDirectoryStore(channel_directory_root)
@@ -529,7 +536,10 @@ class TelegramBotService(
             logger=self._logger,
             read_status=self._read_update_status,
             send_notice=self._send_update_status_notice,
-            spawn_task=self._spawn_task,
+            # _SpawnTask (adapters/chat/update_notifier, out of scope) expects
+            # Callable[[Awaitable[None]], Any]; self._spawn_task accepts any
+            # Coroutine and is runtime-compatible -- the manager type is too narrow.
+            spawn_task=self._spawn_task,  # type: ignore[arg-type]
             mark_notified=self._mark_update_notified,
             format_status=self._format_update_status_message,
             running_message="Update still running. Use /update status for the latest state.",
@@ -701,7 +711,7 @@ class TelegramBotService(
                     context: ManagedThreadDeliveryCleanupContext,
                 ) -> None:
                     await service._flush_outbox_files(
-                        SimpleNamespace(
+                        TelegramTopicRecord(
                             workspace_path=context.transport_target.get(
                                 "workspace_path"
                             ),
@@ -753,16 +763,19 @@ class TelegramBotService(
                     terminal_outcome="failed",
                 )
             else:
-                state_changes: dict[str, object] = {
-                    "delivery_state": "delivered",
-                }
                 if delivered_id_str is not None:
-                    state_changes["anchor_ref"] = delivered_id_str
-                await self._mark_chat_operation_state(
-                    record.operation_id,
-                    state=ChatOperationState.COMPLETED,
-                    **state_changes,
-                )
+                    await self._mark_chat_operation_state(
+                        record.operation_id,
+                        state=ChatOperationState.COMPLETED,
+                        delivery_state="delivered",
+                        anchor_ref=delivered_id_str,
+                    )
+                else:
+                    await self._mark_chat_operation_state(
+                        record.operation_id,
+                        state=ChatOperationState.COMPLETED,
+                        delivery_state="delivered",
+                    )
         if delivered_id_str is None:
             if (
                 operation == "send"
@@ -789,7 +802,7 @@ class TelegramBotService(
                 )
                 if raw_progress_message_id:
                     try:
-                        progress_message_id = int(raw_progress_message_id)
+                        progress_failure_message_id = int(raw_progress_message_id)
                         await self._store.enqueue_outbox(
                             OutboxRecord(
                                 record_id=(
@@ -807,7 +820,7 @@ class TelegramBotService(
                                 ),
                                 created_at=now_iso(),
                                 operation="edit",
-                                message_id=progress_message_id,
+                                message_id=progress_failure_message_id,
                                 outbox_key=(
                                     "managed-thread-progress-failure:"
                                     f"{progress_send_record_id}"
@@ -1537,7 +1550,10 @@ class TelegramBotService(
     def _select_ticket_flow_topic(
         self, entries: list[tuple[str, "TelegramTopicRecord"]]
     ) -> Optional[tuple[str, "TelegramTopicRecord"]]:
-        return self._ticket_flow_bridge._select_ticket_flow_topic(entries)
+        return cast(
+            "Optional[tuple[str, TelegramTopicRecord]]",
+            self._ticket_flow_bridge._select_ticket_flow_topic(entries),
+        )
 
     @staticmethod
     def _set_ticket_dispatch_marker(
@@ -1567,7 +1583,7 @@ class TelegramBotService(
 
     def _load_ticket_flow_pause(
         self, workspace_root: Path
-    ) -> Optional[tuple[str, str, str, Optional[Path]]]:
+    ) -> Optional[tuple[str, str, str, Optional[Path], bool]]:
         return self._ticket_flow_bridge._load_ticket_flow_pause(workspace_root)
 
     def _latest_dispatch_seq(self, history_dir: Path) -> Optional[str]:
@@ -1636,8 +1652,10 @@ class TelegramBotService(
                 f"Reply archived (seq {dispatch.seq}).",
             )
         except (OSError, ValueError, TypeError, RuntimeError) as exc:
-            self._logger.warning(
-                "Failed to write USER_REPLY.md from Telegram",
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.user_reply.write_failed",
                 exc=exc,
                 workspace_root=str(workspace_root),
                 run_id=run_id,
@@ -1707,10 +1725,10 @@ class TelegramBotService(
                     runtime.interrupt_turn_id = None
                 return
             try:
-                client = await self._opencode_supervisor.get_client(
+                opencode_client = await self._opencode_supervisor.get_client(
                     Path(workspace_path)
                 )
-                await client.abort(session_id)
+                await opencode_client.abort(session_id)
             except (RuntimeError, OSError, BrokenPipeError, ProcessLookupError) as exc:
                 log_event(
                     self._logger,
@@ -1951,20 +1969,20 @@ class TelegramBotService(
     def _select_photo(
         self, photos: Sequence[TelegramPhotoSize]
     ) -> Optional[TelegramPhotoSize]:
-        return message_handlers.select_photo(photos)
+        return media_ingress.select_photo(photos)
 
     def _document_is_image(self, document: TelegramDocument) -> bool:
-        return message_handlers.document_is_image(document)
+        return media_ingress.document_is_image(document)
 
     def _select_image_candidate(
         self, message: TelegramMessage
     ) -> Optional[TelegramMediaCandidate]:
-        return message_handlers.select_image_candidate(message)
+        return media_ingress.select_image_candidate(message)
 
     def _select_voice_candidate(
         self, message: TelegramMessage
     ) -> Optional[TelegramMediaCandidate]:
-        return message_handlers.select_voice_candidate(message)
+        return media_ingress.select_voice_candidate(message)
 
     async def _handle_media_message(
         self,
@@ -2180,17 +2198,19 @@ class TelegramBotService(
         force_queue: bool = False,
         item_id: Optional[str] = None,
         item_label: Optional[str] = None,
-    ) -> Optional[str]:
+    ) -> None:
         runtime = self._router.runtime_for(key)
         wrapped = self._wrap_topic_work(key, work)
         if force_queue or self._config.concurrency.per_topic_queue:
-            return runtime.queue.enqueue_detached(
+            # The detached-queue handle is unused by all callers; discard it so the
+            # signature matches the ChatSelectionHandlers base contract (-> None).
+            runtime.queue.enqueue_detached(
                 wrapped,
                 item_id=item_id,
                 item_label=item_label,
             )
+            return
         self._spawn_task(wrapped())
-        return None
 
     def _get_queue_status_message_id(
         self, chat_id: int, thread_id: Optional[int]

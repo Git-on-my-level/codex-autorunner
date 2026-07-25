@@ -11,7 +11,7 @@ Telegram message routing, etc.).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from ...constants import TurnKey
 from ...helpers import _compose_interrupt_response, is_interrupt_status
@@ -106,4 +106,4 @@ async def try_register_turn_and_start_progress(
         model=model,
         label=label,
     )
-    return turn_key
+    return cast("Optional[TurnKey]", turn_key)

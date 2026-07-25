@@ -4,7 +4,7 @@ import asyncio
 import logging
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Callable, Optional, TypeVar, Union, cast
 
 from .....core.coercion import coerce_int
 from .....core.config import ConfigError, load_repo_config
@@ -21,10 +21,11 @@ from .....core.flows import (
     normalize_flow_action,
 )
 from .....core.flows.hub_overview import build_hub_flow_overview_entries
-from .....core.flows.models import FlowRunStatus
+from .....core.flows.models import FlowRunRecord, FlowRunStatus
 from .....core.flows.reconciler import reconcile_flow_run
 from .....core.flows.surface_defaults import should_route_flow_read_to_hub_overview
 from .....core.flows.ux_helpers import (
+    GitHubServiceProtocol,
     bootstrap_check,
     build_flow_status_snapshot,
     format_ticket_flow_status_lines,
@@ -44,6 +45,7 @@ from .....core.logging_utils import log_event
 from .....core.orchestration import build_ticket_flow_orchestration_service
 from .....core.state import now_iso
 from .....core.state_roots import resolve_repo_flows_db_path, resolve_repo_state_root
+from .....core.ticket_flow_operator import TicketFlowRunSelection
 from .....core.ticket_flow_summary import (
     build_ticket_flow_display,
     format_ticket_flow_summary_lines,
@@ -66,6 +68,7 @@ from ...adapter import (
 )
 from ...config import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from ...helpers import _truncate_text
+from ...state_types import TelegramTopicRecord
 from ...types import PendingQuestion, SelectionState
 from .shared import TelegramCommandSupportMixin
 
@@ -135,6 +138,14 @@ def _worktree_suffix(repo_id: str) -> Optional[str]:
     return parts[-1]
 
 
+def _github_service_factory(repo_root: Path) -> GitHubServiceProtocol:
+    # GitHubService implements every GitHubServiceProtocol method; the only
+    # structural mismatch is `issue_view`'s keyword-only `number=`, which the
+    # ux_helpers call sites never invoke. Fixing that upstream in
+    # adapters/github/service.py is out of scope for this typing-only pass.
+    return cast(GitHubServiceProtocol, GitHubService(repo_root))
+
+
 class FlowCommands(TelegramCommandSupportMixin):
     async def _run_blocking_flow_call(
         self, func: Callable[..., _T], /, *args: Any, **kwargs: Any
@@ -197,7 +208,7 @@ class FlowCommands(TelegramCommandSupportMixin):
         self,
         store: FlowStore,
         run_id_raw: Optional[str],
-    ) -> tuple[Optional[object], Optional[str]]:
+    ) -> tuple[Optional[FlowRunRecord], Optional[str]]:
         run_id, error = self._resolve_run_id_input(store, run_id_raw)
         record = store.get_flow_run(run_id) if run_id else None
         if run_id_raw and error:
@@ -377,7 +388,9 @@ class FlowCommands(TelegramCommandSupportMixin):
         return None, None, 0
 
     def _github_bootstrap_status(self, repo_root: Path) -> tuple[bool, Optional[str]]:
-        result = bootstrap_check(repo_root, github_service_factory=GitHubService)
+        result = bootstrap_check(
+            repo_root, github_service_factory=_github_service_factory
+        )
         return bool(result.github_available), result.repo_slug
 
     async def _prompt_flow_text_input(
@@ -407,7 +420,7 @@ class FlowCommands(TelegramCommandSupportMixin):
         )
         message_id = response.get("message_id") if isinstance(response, dict) else None
         loop = asyncio.get_running_loop()
-        future: asyncio.Future[Optional[str]] = loop.create_future()
+        future: asyncio.Future[Union[list[int], str, None]] = loop.create_future()
         pending = PendingQuestion(
             request_id=request_id,
             turn_id=f"flow-bootstrap:{request_id}",
@@ -445,7 +458,7 @@ class FlowCommands(TelegramCommandSupportMixin):
                     reply_markup={"inline_keyboard": []},
                 )
             return None
-        if not result:
+        if not isinstance(result, str):
             return None
         return result.strip() or None
 
@@ -453,7 +466,7 @@ class FlowCommands(TelegramCommandSupportMixin):
         self, repo_root: Path, issue_ref: str
     ) -> tuple[int, str]:
         seed = seed_issue_from_github(
-            repo_root, issue_ref, github_service_factory=GitHubService
+            repo_root, issue_ref, github_service_factory=_github_service_factory
         )
         atomic_write(issue_md_path(repo_root), seed.content)
         return seed.issue_number, seed.repo_slug
@@ -642,7 +655,7 @@ class FlowCommands(TelegramCommandSupportMixin):
         run_id_raw: Optional[str],
         *,
         repo_id: Optional[str] = None,
-    ) -> tuple[str, dict[str, Any]]:
+    ) -> tuple[str, Optional[dict[str, object]]]:
         store = _load_flow_store(repo_root)
         try:
             store.initialize()
@@ -719,7 +732,7 @@ class FlowCommands(TelegramCommandSupportMixin):
         notice = None
         flow_service = self._ticket_flow_orchestration_service(repo_root)
         if action == "resume":
-            record, error = self._resolve_lifecycle_run(
+            run, error = self._resolve_lifecycle_run(
                 repo_root,
                 run_id_raw,
                 selection="paused",
@@ -730,16 +743,16 @@ class FlowCommands(TelegramCommandSupportMixin):
                     else None
                 ),
             )
-            if error is None:
+            if error is None and run is not None:
                 try:
                     await _answer_once("Working...")
-                    updated = await flow_service.resume_flow_run(record.id)
+                    updated = await flow_service.resume_flow_run(run.id)
                 except (KeyError, ValueError) as exc:
                     error = str(exc)
                 else:
                     notice = "Resumed."
         elif action == "stop":
-            record, error = self._resolve_lifecycle_run(
+            run, error = self._resolve_lifecycle_run(
                 repo_root,
                 run_id_raw,
                 selection="active",
@@ -750,25 +763,25 @@ class FlowCommands(TelegramCommandSupportMixin):
                     else None
                 ),
             )
-            if error is None:
+            if error is None and run is not None:
                 await _answer_once("Working...")
-                await flow_service.stop_flow_run(record.id)
+                await flow_service.stop_flow_run(run.id)
                 notice = "Stopped."
         elif action == "recover":
-            record, error = self._resolve_lifecycle_run(
+            run, error = self._resolve_lifecycle_run(
                 repo_root,
                 run_id_raw,
                 selection="active",
                 not_found_error="No active ticket flow run found.",
             )
-            if error is None:
+            if error is None and run is not None:
                 await _answer_once("Working...")
-                record, updated, locked = await self._run_blocking_flow_call(
+                run, updated, locked = await self._run_blocking_flow_call(
                     flow_service.reconcile_flow_run,
-                    record.id,
+                    run.id,
                 )
                 if locked:
-                    error = f"Run {record.run_id} is locked for reconcile; try again."
+                    error = f"Run {run.run_id} is locked for reconcile; try again."
                 else:
                     notice = "Recovered." if updated else "No changes needed."
         elif action in {
@@ -799,24 +812,24 @@ class FlowCommands(TelegramCommandSupportMixin):
             store = _load_flow_store(repo_root)
             try:
                 store.initialize()
-                record, error = self._resolve_flow_archive_record(store, run_id_raw)
+                run, error = self._resolve_flow_archive_record(store, run_id_raw)
             finally:
                 store.close()
 
-            if error is None:
-                retire_mode = resolve_ticket_flow_retire_mode(record)
+            if error is None and run is not None:
+                retire_mode = resolve_ticket_flow_retire_mode(run)
                 if retire_mode == "blocked":
                     error = (
-                        f"Run {record.id} is {record.status.value}. "
+                        f"Run {run.id} is {run.status.value}. "
                         "Stop or pause it before retiring."
                     )
                 elif action == "retire" and retire_mode == "confirm":
                     await _answer_once("Confirm retire?")
                     await self._edit_callback_message(
                         callback,
-                        self._flow_retire_prompt_text(record),
+                        self._flow_retire_prompt_text(run),
                         reply_markup=self._build_flow_retire_confirmation_keyboard(
-                            record.id,
+                            run.id,
                             repo_id=effective_repo_id,
                             prompt_variant=False,
                         ),
@@ -827,13 +840,13 @@ class FlowCommands(TelegramCommandSupportMixin):
                         await _answer_once("Working...")
                         await self._edit_callback_message(
                             callback,
-                            self._flow_retire_in_progress_text(record.id),
+                            self._flow_retire_in_progress_text(run.id),
                             reply_markup={"inline_keyboard": []},
                         )
                         summary = await self._run_blocking_flow_call(
                             flow_service.retire_flow_run,
-                            record.id,
-                            force=ticket_flow_retire_requires_force(record),
+                            run.id,
+                            force=ticket_flow_retire_requires_force(run),
                             delete_run=True,
                         )
                         notice = (
@@ -878,10 +891,10 @@ class FlowCommands(TelegramCommandSupportMixin):
         repo_root: Path,
         run_id_raw: Optional[str],
         *,
-        selection: str,
+        selection: TicketFlowRunSelection,
         not_found_error: str = "No matching ticket flow run found.",
-        guard: Optional[Callable[[object], Optional[str]]] = None,
-    ) -> tuple[Optional[object], Optional[str]]:
+        guard: Optional[Callable[[FlowRunRecord], Optional[str]]] = None,
+    ) -> tuple[Optional[FlowRunRecord], Optional[str]]:
         store = _load_flow_store(repo_root)
         try:
             store.initialize()
@@ -893,7 +906,7 @@ class FlowCommands(TelegramCommandSupportMixin):
                 record = select_ticket_flow_run(store, selection=selection)
             if error is None and record is None:
                 return None, not_found_error
-            if guard is not None:
+            if guard is not None and record is not None:
                 guard_error = guard(record)
                 if guard_error is not None:
                     return None, guard_error
@@ -913,7 +926,7 @@ class FlowCommands(TelegramCommandSupportMixin):
 
     def _resolve_status_record(
         self, store: FlowStore, run_id_raw: Optional[str]
-    ) -> tuple[Optional[object], Optional[str]]:
+    ) -> tuple[Optional[FlowRunRecord], Optional[str]]:
         run_id, error = self._resolve_run_id_input(store, run_id_raw)
         if run_id_raw and error:
             return None, error
@@ -946,7 +959,7 @@ class FlowCommands(TelegramCommandSupportMixin):
     def _format_flow_status_lines(
         self,
         repo_root: Path,
-        record: Optional[object],
+        record: Optional[FlowRunRecord],
         store: Optional[FlowStore],
         *,
         health: Optional[FlowWorkerHealth] = None,
@@ -1015,7 +1028,7 @@ class FlowCommands(TelegramCommandSupportMixin):
 
     def _build_flow_status_keyboard(
         self,
-        record: Optional[object],
+        record: Optional[FlowRunRecord],
         *,
         health: Optional[FlowWorkerHealth],
         repo_id: Optional[str] = None,
@@ -1067,7 +1080,7 @@ class FlowCommands(TelegramCommandSupportMixin):
     def _build_flow_status_card(
         self,
         repo_root: Path,
-        record: Optional[object],
+        record: Optional[FlowRunRecord],
         store: Optional[FlowStore],
         *,
         repo_id: Optional[str] = None,
@@ -1090,7 +1103,7 @@ class FlowCommands(TelegramCommandSupportMixin):
     def _build_flow_start_card(
         self,
         repo_root: Path,
-        record: Optional[object],
+        record: Optional[FlowRunRecord],
         store: Optional[FlowStore],
         *,
         prefix: str,
@@ -1113,7 +1126,7 @@ class FlowCommands(TelegramCommandSupportMixin):
         )
 
     async def _send_flow_overview(
-        self, message: TelegramMessage, record: Optional[object]
+        self, message: TelegramMessage, record: Optional[TelegramTopicRecord]
     ) -> None:
         repo_root = (
             canonicalize_path(Path(record.workspace_path))
@@ -1428,9 +1441,9 @@ class FlowCommands(TelegramCommandSupportMixin):
         try:
             store.initialize()
             runs = store.list_flow_runs(flow_type="ticket_flow")
-            for record in runs:
-                if record.status in (FlowRunStatus.RUNNING, FlowRunStatus.PAUSED):
-                    active_run = record
+            for candidate in runs:
+                if candidate.status in (FlowRunStatus.RUNNING, FlowRunStatus.PAUSED):
+                    active_run = candidate
                     break
         finally:
             store.close()
@@ -1454,15 +1467,13 @@ class FlowCommands(TelegramCommandSupportMixin):
             store = _load_flow_store(repo_root)
             try:
                 store.initialize()
-                record = store.get_flow_run(active_run.id)
-                if record is not None:
-                    record, _updated, locked = reconcile_flow_run(
-                        repo_root, record, store
-                    )
+                run = store.get_flow_run(active_run.id)
+                if run is not None:
+                    run, _updated, locked = reconcile_flow_run(repo_root, run, store)
                     if locked:
                         await self._send_message(
                             message.chat_id,
-                            f"Run {_code(record.id)} is locked for reconcile; try again.",
+                            f"Run {_code(run.id)} is locked for reconcile; try again.",
                             thread_id=message.thread_id,
                             reply_to=message.message_id,
                             parse_mode="Markdown",
@@ -1470,7 +1481,7 @@ class FlowCommands(TelegramCommandSupportMixin):
                         return
                 outbound_text, keyboard = self._build_flow_start_card(
                     repo_root,
-                    record,
+                    run,
                     store,
                     prefix=(
                         f"Reusing ticket flow run {_code(active_run.id)} "
@@ -1621,13 +1632,13 @@ You are the first ticket in a new ticket_flow run.
         store = _load_flow_store(repo_root)
         try:
             store.initialize()
-            record = store.get_flow_run(flow_record.run_id)
-            if record is not None:
-                record, _updated, locked = reconcile_flow_run(repo_root, record, store)
+            run = store.get_flow_run(flow_record.run_id)
+            if run is not None:
+                run, _updated, locked = reconcile_flow_run(repo_root, run, store)
                 if locked:
                     await self._send_message(
                         message.chat_id,
-                        f"Run {_code(record.id)} is locked for reconcile; try again.",
+                        f"Run {_code(run.id)} is locked for reconcile; try again.",
                         thread_id=message.thread_id,
                         reply_to=message.message_id,
                         parse_mode="Markdown",
@@ -1635,7 +1646,7 @@ You are the first ticket in a new ticket_flow run.
                     return
             outbound_text, keyboard = self._build_flow_start_card(
                 repo_root,
-                record,
+                run,
                 store,
                 prefix=f"Started ticket flow run {_code(flow_record.run_id)}.",
                 repo_id=repo_id,
@@ -1771,6 +1782,7 @@ You are the first ticket in a new ticket_flow run.
                 parse_mode="Markdown" if "`" in error else None,
             )
             return
+        assert record is not None  # _resolve_lifecycle_run invariant
 
         force = self._has_flag(argv, "--force")
         run_mirror = self._flow_run_mirror(repo_root)
@@ -1841,6 +1853,7 @@ You are the first ticket in a new ticket_flow run.
                 parse_mode="Markdown" if "`" in error else None,
             )
             return
+        assert record is not None  # _resolve_lifecycle_run invariant
 
         run_mirror = self._flow_run_mirror(repo_root)
         run_mirror.mirror_inbound(
@@ -1998,6 +2011,7 @@ You are the first ticket in a new ticket_flow run.
                 return
         finally:
             store.close()
+        assert record is not None  # _resolve_flow_archive_record invariant
 
         retire_mode = resolve_ticket_flow_retire_mode(record)
         if retire_mode == "blocked":

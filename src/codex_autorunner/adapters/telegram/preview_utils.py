@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, Callable, Iterable, Optional, Sequence
+from typing import Any, Callable, Iterable, Optional, Sequence, cast, overload
 
 from ...adapters.chat.compaction import (
     COMPACT_SEED_PREFIX,
@@ -85,7 +85,11 @@ def _is_ignored_first_user_preview(text: Optional[str]) -> bool:
     )
 
 
-def _strip_dispatch_begin(text: Optional[str]) -> Optional[str]:
+@overload
+def _strip_dispatch_begin(text: None) -> None: ...
+@overload
+def _strip_dispatch_begin(text: str) -> str: ...
+def _strip_dispatch_begin(text):
     if not isinstance(text, str):
         return text
     stripped = DISPATCH_BEGIN_STRIP_RE.sub("", text)
@@ -97,7 +101,7 @@ def _sanitize_user_preview(text: Optional[str]) -> Optional[str]:
         return text
     stripped = _strip_dispatch_begin(text)
     stripped = LEADING_HTML_COMMENT_RE.sub("", stripped)
-    stripped = strip_legacy_injected_context_transport_blocks(stripped)
+    stripped = cast(str, strip_legacy_injected_context_transport_blocks(stripped))
     stripped = COMPACT_SEED_BLOCK_RE.sub(" ", stripped)
     if _is_ignored_first_user_preview(stripped):
         return None
@@ -419,7 +423,7 @@ def _format_resume_summary(
         build_resumed_thread_lines(
             thread_id=thread_id,
             workspace_path=workspace_path,
-            model=model or DEFAULT_CHAT_AGENT_MODELS.get(agent, "default"),
+            model=model or DEFAULT_CHAT_AGENT_MODELS.get(agent or "", "default"),
             effort="default" if effort is None else effort,
             user_preview=user_preview,
             assistant_preview=assistant_preview,

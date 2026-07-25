@@ -8,7 +8,7 @@ import re
 import shlex
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from ....agents.opencode.supervisor import OpenCodeSupervisorError
 from ....core.chat_bindings import (
@@ -143,6 +143,7 @@ from ..types import (
 )
 
 if TYPE_CHECKING:
+    from ...chat.collaboration_policy import CollaborationEvaluationResult
     from ..state import TelegramTopicRecord
 
 from .commands import (
@@ -407,7 +408,7 @@ class TelegramCommandHandlers(
         resolved_agent = self._effective_agent(outcome.record)
         _durable_handled = getattr(outcome, "durable_delivery_handled", False)
         response_text = outcome.response
-        intermediate_response = outcome.intermediate_response
+        intermediate_response: Optional[str] = outcome.intermediate_response
         if not _durable_handled:
             if resolved_agent == "opencode":
                 if (
@@ -850,9 +851,9 @@ class TelegramCommandHandlers(
                 pending.future.set_result("cancel")
             await self._store.clear_pending_approval(request_id)
         for request_id in pending_question_ids:
-            pending = self._pending_questions.pop(request_id, None)
-            if pending and not pending.future.done():
-                pending.future.set_result(None)
+            pending_question = self._pending_questions.pop(request_id, None)
+            if pending_question and not pending_question.future.done():
+                pending_question.future.set_result(None)
         if pending_request_ids:
             runtime.pending_request_id = None
         queued_turn_cancelled = False
@@ -998,10 +999,13 @@ class TelegramCommandHandlers(
         self, message: TelegramMessage, _args: str = "", _runtime: Optional[Any] = None
     ) -> None:
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
-        command_policy, plain_text_policy = evaluate_collaboration_summary(
-            self,
-            message,
-            command_text="/debug",
+        command_policy, plain_text_policy = cast(
+            "tuple[CollaborationEvaluationResult, CollaborationEvaluationResult]",
+            evaluate_collaboration_summary(
+                self,
+                message,
+                command_text="/debug",
+            ),
         )
         record = await self._router.get_topic(key)
         scope = None
@@ -1067,10 +1071,13 @@ class TelegramCommandHandlers(
         self, message: TelegramMessage, _args: str = "", _runtime: Optional[Any] = None
     ) -> None:
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
-        command_policy, plain_text_policy = evaluate_collaboration_summary(
-            self,
-            message,
-            command_text="/ids",
+        command_policy, plain_text_policy = cast(
+            "tuple[CollaborationEvaluationResult, CollaborationEvaluationResult]",
+            evaluate_collaboration_summary(
+                self,
+                message,
+                command_text="/ids",
+            ),
         )
         lines = [
             f"Chat ID: {message.chat_id}",
@@ -1311,17 +1318,17 @@ class TelegramCommandHandlers(
                 "set",
             }
         ):
-            result: Any | None = None
+            search_result: Any | None = None
             cached_result = self._model_catalog_cache.get(cache_key)
             if cached_result is not None:
                 cached_payload, cached_time = cached_result
                 if time.monotonic() - cached_time < MODEL_CATALOG_TTL_SECONDS:
-                    result = cached_payload
-            if result is None:
+                    search_result = cached_payload
+            if search_result is None:
                 record_for_models = self._record_with_workspace_path(
                     record, workspace_path
                 )
-                result, aborted = await self._fetch_and_cache_model_list(
+                search_result, aborted = await self._fetch_and_cache_model_list(
                     message,
                     record_for_models,
                     agent,
@@ -1332,8 +1339,10 @@ class TelegramCommandHandlers(
                 if aborted:
                     return
 
-            if result is not None:
-                options = _coerce_model_options(result, include_efforts=supports_effort)
+            if search_result is not None:
+                options = _coerce_model_options(
+                    search_result, include_efforts=supports_effort
+                )
                 items = [(option.model_id, option.label) for option in options]
                 exact = find_exact_picker_item(items, search_query)
                 if exact is not None:
@@ -1371,7 +1380,7 @@ class TelegramCommandHandlers(
                             await self._send_message(
                                 message.chat_id,
                                 _format_model_list(
-                                    result,
+                                    search_result,
                                     include_efforts=supports_effort,
                                     set_hint=(
                                         "Use /model <provider/model> to set."
@@ -1814,6 +1823,7 @@ class TelegramCommandHandlers(
             ]
         )
 
+    @staticmethod
     async def _opencode_review_arguments(target: dict[str, Any]) -> str:
         target_type = target.get("type")
         if target_type == "uncommittedChanges":

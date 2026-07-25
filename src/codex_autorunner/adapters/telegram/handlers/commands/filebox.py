@@ -23,6 +23,7 @@ from ....chat.artifact_delivery import (
     enqueue_legacy_paths,
 )
 from ....chat.constants import TOPIC_NOT_BOUND_MESSAGE
+from ..._service_attrs import _TelegramServiceAttrs
 from ...adapter import TelegramAPIError, TelegramMessage
 from ...helpers import _path_within
 from ...state import TelegramTopicRecord
@@ -53,7 +54,7 @@ class _TelegramArtifactTransport:
         return receipt if isinstance(receipt, dict) else {}
 
 
-class FileBoxCommandsMixin:
+class FileBoxCommandsMixin(_TelegramServiceAttrs):
     def _artifact_target_key(
         self,
         *,
@@ -133,14 +134,16 @@ class FileBoxCommandsMixin:
             value /= 1024
         return f"{value:.1f} PB"
 
-    def _list_files(self, folder: Path) -> list[Path]:
+    def _list_files(self, folder: Optional[Path]) -> list[Path]:
+        if folder is None:
+            return []
         return list_regular_files(folder)
 
     async def _send_outbox_file(
         self,
         path: Path,
         *,
-        sent_dir: Path,
+        sent_dir: Optional[Path],
         chat_id: int,
         thread_id: Optional[int],
         reply_to: Optional[int],
@@ -177,24 +180,25 @@ class FileBoxCommandsMixin:
                 exc=exc,
             )
             return False
-        try:
-            sent_dir.mkdir(parents=True, exist_ok=True)
-            destination = sent_dir / path.name
-            if destination.exists():
-                token = secrets.token_hex(3)
-                destination = sent_dir / f"{path.stem}-{token}{path.suffix}"
-            path.replace(destination)
-        except OSError as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.files.outbox.move_failed",
-                chat_id=chat_id,
-                thread_id=thread_id,
-                path=str(path),
-                exc=exc,
-            )
-            return False
+        if sent_dir is not None:
+            try:
+                sent_dir.mkdir(parents=True, exist_ok=True)
+                destination = sent_dir / path.name
+                if destination.exists():
+                    token = secrets.token_hex(3)
+                    destination = sent_dir / f"{path.stem}-{token}{path.suffix}"
+                path.replace(destination)
+            except OSError as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.files.outbox.move_failed",
+                    chat_id=chat_id,
+                    thread_id=thread_id,
+                    path=str(path),
+                    exc=exc,
+                )
+                return False
         log_event(
             self._logger,
             logging.INFO,
@@ -325,7 +329,9 @@ class FileBoxCommandsMixin:
             lines.append(f"... and {len(files) - 50} more")
         return "\n".join(lines)
 
-    def _delete_files_in_dir(self, folder: Path) -> int:
+    def _delete_files_in_dir(self, folder: Optional[Path]) -> int:
+        if folder is None:
+            return 0
         return delete_regular_files(folder)
 
     async def _handle_files(
@@ -366,7 +372,6 @@ class FileBoxCommandsMixin:
         if pma_enabled:
             inbox_dir = self._pma_inbox_dir()
             pending_dir = self._pma_outbox_dir()
-            sent_dir = pending_dir
             if inbox_dir is None or pending_dir is None:
                 await self._send_message(
                     message.chat_id,
@@ -375,6 +380,7 @@ class FileBoxCommandsMixin:
                     reply_to=message.message_id,
                 )
                 return
+            sent_dir = pending_dir
         else:
             inbox_dir = self._files_inbox_dir(record.workspace_path, key)
             pending_dir = self._files_outbox_pending_dir(record.workspace_path, key)

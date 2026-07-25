@@ -22,6 +22,7 @@ from ...chat.models import (
     ChatReplyInfo,
     ChatThreadRef,
 )
+from .._service_attrs import _TelegramServiceAttrs
 from ..adapter import (
     QuestionCancelCallback,
     QuestionCustomCallback,
@@ -79,7 +80,7 @@ async def handle_custom_text_input(handlers: Any, message: TelegramMessage) -> b
     return await handle_custom_text_input_chat(handlers, event)
 
 
-class TelegramQuestionHandlers(ChatQuestionHandlers):
+class TelegramQuestionHandlers(_TelegramServiceAttrs, ChatQuestionHandlers):
     _platform = "telegram"
 
     async def _handle_question_request(
@@ -272,26 +273,47 @@ class TelegramQuestionHandlers(ChatQuestionHandlers):
     async def _chat_edit_message(
         self,
         *,
-        chat_id: int,
-        thread_id: int | None,
-        message_id: int,
+        chat_id: str,
+        thread_id: str | None,
+        message_id: str,
         text: str,
-        clear_actions: bool,
-        reply_markup: dict[str, Any] | None = None,
+        reply_markup: Any = None,
+        clear_actions: bool = False,
     ) -> None:
+        # ChatQuestionHandlers (adapters/chat, out of scope) uses platform-agnostic
+        # str ids; Telegram ids are int. Accept str and convert, matching the
+        # sibling _chat_delete_message override below.
+        if not message_id.lstrip("-").isdigit():
+            return
+        try:
+            parsed_chat = int(chat_id)
+        except ValueError:
+            return
         if clear_actions:
             reply_markup = {"inline_keyboard": []}
         await self._edit_message_text(
-            chat_id,
-            message_id,
+            parsed_chat,
+            int(message_id),
             text,
             reply_markup=reply_markup,
         )
 
     async def _chat_send_message(
-        self, *, chat_id: int, thread_id: int | None, text: str
+        self,
+        *,
+        chat_id: str,
+        thread_id: str | None,
+        text: str,
+        reply_markup: Any = None,
     ) -> None:
-        await self._send_message(chat_id, text, thread_id=thread_id)
+        try:
+            parsed_chat = int(chat_id)
+        except ValueError:
+            return
+        parsed_thread = (
+            int(thread_id) if thread_id and thread_id.lstrip("-").isdigit() else None
+        )
+        await self._send_message(parsed_chat, text, thread_id=parsed_thread)
 
     async def _chat_delete_message(
         self, *, chat_id: str, thread_id: str | None, message_id: str
