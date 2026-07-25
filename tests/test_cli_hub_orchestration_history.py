@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,15 @@ from codex_autorunner.core.orchestration.sqlite import (
 )
 
 runner = CliRunner()
+
+
+# The audit only flags a terminal execution as "missing a manifest" while it is
+# still inside the cold-trace retention window (90 days by default). A frozen
+# calendar date makes that a time bomb: this fixture used a literal 2026-04-12,
+# so the suite passed until that date aged out of the window and then began
+# failing on a day nobody changed anything. Anchor the fixture to "recently"
+# instead, and keep the deliberately-ancient cases as explicit literals.
+_RECENT_DAY = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
 def _seed_terminal_execution(hub_root: Path, execution_id: str) -> None:
@@ -52,8 +62,8 @@ def _seed_terminal_execution(hub_root: Path, execution_id: str) -> None:
                     "CLI",
                     "active",
                     "completed",
-                    "2026-04-12T00:00:00Z",
-                    "2026-04-12T00:05:00Z",
+                    f"{_RECENT_DAY}T00:00:00Z",
+                    f"{_RECENT_DAY}T00:05:00Z",
                 ),
             )
             conn.execute(
@@ -89,9 +99,9 @@ def _seed_terminal_execution(hub_root: Path, execution_id: str) -> None:
                     "gpt-test",
                     "high",
                     None,
-                    "2026-04-12T00:00:00Z",
-                    "2026-04-12T00:05:00Z",
-                    "2026-04-12T00:00:00Z",
+                    f"{_RECENT_DAY}T00:00:00Z",
+                    f"{_RECENT_DAY}T00:05:00Z",
+                    f"{_RECENT_DAY}T00:00:00Z",
                 ),
             )
             for index in range(1, 21):
@@ -100,7 +110,7 @@ def _seed_terminal_execution(hub_root: Path, execution_id: str) -> None:
                     "event_index": index,
                     "event_family": "output_delta",
                     "event": {
-                        "timestamp": f"2026-04-12T00:00:{index:02d}Z",
+                        "timestamp": f"{_RECENT_DAY}T00:00:{index:02d}Z",
                         "delta_type": "assistant_message",
                         "content": f"chunk-{index}",
                     },
@@ -111,7 +121,7 @@ def _seed_terminal_execution(hub_root: Path, execution_id: str) -> None:
                         "event_index": index,
                         "event_family": "run_notice",
                         "event": {
-                            "timestamp": "2026-04-12T00:00:00Z",
+                            "timestamp": f"{_RECENT_DAY}T00:00:00Z",
                             "kind": "info",
                             "message": "started",
                         },
@@ -122,7 +132,7 @@ def _seed_terminal_execution(hub_root: Path, execution_id: str) -> None:
                         "event_index": index,
                         "event_family": "terminal",
                         "event": {
-                            "timestamp": "2026-04-12T00:05:00Z",
+                            "timestamp": f"{_RECENT_DAY}T00:05:00Z",
                             "final_message": "done",
                         },
                     }

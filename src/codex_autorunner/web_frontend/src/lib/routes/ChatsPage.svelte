@@ -2897,6 +2897,10 @@
             </span>
           {/if}
 
+          <!-- Separators are drawn by CSS (`.chat-row-meta > * + *::before`)
+               rather than emitted as standalone dot elements. The meta line
+               wraps on narrow columns, and a free-standing dot would strand
+               itself at the end of a wrapped line with nothing after it. -->
           <span class="chat-row-meta">
             {#if !nested}
               <span
@@ -2905,11 +2909,9 @@
                 title={scopeTags.detailFull ?? scopeTags.detail}
               >{scopeTags.detail}</span>
               {#if chat.ticketId}
-                <span class="chat-meta-dot" aria-hidden="true">·</span>
                 <code>{chat.ticketId}</code>
               {/if}
               {#if chatModelMetaLabel(chat)}
-                <span class="chat-meta-dot" aria-hidden="true">·</span>
                 <span
                   class:runtime-unknown={runtimeModelIsExplicitlyUnknown(chat)}
                   class="chat-model"
@@ -2921,11 +2923,9 @@
                 <span class="chat-nested-title" title={chat.title}>{chat.title}</span>
               {/if}
               {#if listAgentLabel}
-                {#if chat.title && chat.title !== chat.ticketId}<span class="chat-meta-dot" aria-hidden="true">·</span>{/if}
                 <span class="chat-agent">{listAgentLabel}</span>
               {/if}
               {#if chatModelMetaLabel(chat)}
-                {#if (chat.title && chat.title !== chat.ticketId) || listAgentLabel}<span class="chat-meta-dot" aria-hidden="true">·</span>{/if}
                 <span
                   class:runtime-unknown={runtimeModelIsExplicitlyUnknown(chat)}
                   class="chat-model"

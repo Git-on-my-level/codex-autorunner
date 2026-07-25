@@ -288,7 +288,7 @@
   }
 
   .doc-viewer-tab-label {
-    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: var(--font-size-1);
     font-weight: 500;
     color: var(--color-ink-muted);
@@ -326,7 +326,7 @@
   }
 
   .doc-viewer-reader-filename {
-    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: var(--font-size-1);
     font-weight: 600;
     color: var(--color-ink);

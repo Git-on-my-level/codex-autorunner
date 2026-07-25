@@ -21,9 +21,17 @@ The hub is a focused, internal product for engineers. The visual taste is
 - **Cards do work.** Each row/card carries a clear identity (avatar, name),
   meta (branch, time, counts), and an action surface (hover chevron, click
   anywhere). Avoid double-nesting cards inside panels inside cards.
-- **Density without crowding.** Prefer `--space-2`/`--space-3` between
-  related elements, `--space-4`/`--space-5` between sections. Don't waste a
-  half-screen on a header that says "Repos".
+- **Density without crowding.** Prefer `--space-3`/`--space-4` between
+  related elements, `--space-5`/`--space-6` between sections. Don't waste a
+  half-screen on a header that says "Repos" — but don't crush a row into 4px
+  of padding either, so that its own text truncates against the column edge.
+  Density is about how much you show, not about how little air it gets.
+- **Prose is prose; machine text is machine text.** The proportional face
+  carries language, the mono face carries identifiers. Getting this backwards —
+  as this app did, by setting mono globally — is what makes an interface read
+  as generated rather than designed. See Typography.
+- **The reading column has a measure.** Content is centred and capped, not
+  stretched to whatever the display happens to be. See Measure.
 - **Hover earns affordance.** Borders strengthen, shadows lift gently,
   hidden chevrons slide in. Never animate layout-shifting properties.
 - **Each fact lives in exactly one place.** If the breadcrumb already
@@ -42,8 +50,8 @@ Reference implementations:
 
 - `src/lib/components/RepoWorktreeViews.svelte` (index branch) — header,
   KPI strip, repo cards, nested worktree tree.
-- `src/lib/components/PmaMemoryView.svelte` — header, segmented tabs,
-  reader card with sunken header bar.
+- `src/lib/components/MarkdownDocViewer.svelte` — segmented tabs and a
+  reader card with a sunken header bar.
 - `src/lib/components/SettingsView.svelte` — long config page using flat
   `.settings-section` blocks separated by hairline dividers, no nested
   panel chrome. Use this pattern for any page whose primary job is to
@@ -55,9 +63,18 @@ good shape rather than inventing a new one.
 
 ## Tokens
 
-All design tokens live in `src/app.css` under `:root`. **Always use the
-tokens. Never hardcode colors, radii, shadows, or spacing in component
+All design tokens live in `src/app.css` under `:root`, with per-theme
+overrides in `[data-theme="dark"]` and `src/theme-presets.css`. **Always use
+the tokens. Never hardcode colors, radii, shadows, or spacing in component
 styles.**
+
+> **A `var()` on an undeclared token fails silently.** It does not fall back —
+> the declaration is invalid and the property drops to its inherited or initial
+> value, so a popover renders transparent, a heading loses its colour, a chip
+> loses its size, and nothing warns you. `src/lib/test/designTokens.test.ts`
+> fails the build on any `var(--token)` written without a fallback whose token
+> is not declared. If you need a new token, add it to `:root` (and to every
+> theme block that overrides its family) rather than adding a fallback.
 
 ### Color
 - Surface scale: `--color-bg`, `--color-surface`, `--color-surface-muted`,
@@ -69,44 +86,73 @@ styles.**
   `--color-ink-muted` (meta), `--color-ink-faint` (decorative dots,
   separators, timestamps).
 - Semantic: `--color-success`, `--color-warning`, `--color-danger`,
-  `--color-accent` (indigo `#5b5fc7` — the brand). Each has a `-soft`
-  variant for chip backgrounds. Status dots/strips use the solid; chip
-  fills use the `-soft` with the solid as text.
+  `--color-accent` (teal — `#138a72` light, `#6cf5d8` dark — the brand). Each
+  has a `-soft` variant for chip backgrounds. Status dots/strips use the solid;
+  chip fills use the `-soft` with the solid as text.
 - Borders: `--color-border-subtle` for everyday divisions and card
   borders, `--color-border` for inputs, `--color-border-strong` for hover
   states.
+- `--color-surface-raised` is for popovers, menus, and anything that must read
+  as lifted off the page. In dark themes a shadow alone cannot convey elevation
+  against a near-black background, so the surface itself steps up.
 
 ### Spacing
-- Steps: `--space-1` (4px) → `--space-10` (40px). Mostly use 2/3/4/5/6.
+- Steps: `--space-1` (2px), `-2` (4px), `-3` (6px), `-4` (8px), `-5` (12px),
+  `-6` (16px), `-8` (24px), `-10` (32px). Mostly use 3/4/5/6.
 - Inside a card: `--space-3` to `--space-5` padding.
-- Between sibling cards: `--space-2` to `--space-3` gap.
-- Between page sections: `--space-3` to `--space-5` gap on the
-  `.page-stack`.
+- Between sibling rows in a list: `--space-2`.
+- Between page sections: `--space-5` gap on the `.page-stack`.
+- Between turns in a chat transcript: `--space-6`. Conversation turns are the
+  unit of reading; at list density they merge into one block of text.
 
 ### Radii
-- 6–8px for chips, pills, buttons, inputs.
-- 10–12px for cards and panels.
-- 14px max — only for the outermost surfaces (hero, modal). Never higher.
+- `--radius-1` (2px) / `--radius-2` (3px) for tight inline chrome.
+- `--radius-3` (6px) / `--radius-4` (8px) for chips, pills, buttons, inputs,
+  and list rows.
+- 10–14px literals for cards, message bubbles, and panels.
+- 16px max — only the composer and modals. Never higher.
 
 ### Shadows
 - `--shadow-1`: resting card shadow (almost invisible). Use sparingly.
-- Custom hover lift for cards:
-  `0 8px 24px -16px rgb(15 15 20 / 0.18), 0 2px 6px -3px rgb(15 15 20 / 0.06)`.
-  Don't invent new shadow values; copy this one.
+  `--shadow-sm` is an alias of it.
+- `--shadow-card-hover`: the hover lift for cards. Don't invent new shadow
+  values; use this token.
 - `--shadow-2`: modals only.
 - `--shadow-focus`: focus rings (already wired on globals).
 
 ### Typography
-- Body font: Inter (already loaded). Mono: JetBrains Mono.
-- Sizes: `--font-size-0` (12px) for meta and chips, `--font-size-1` (13px)
-  for secondary UI, `--font-size-2` (15px) for primary body, `--font-size-3`
-  (17px) for card titles, `--font-size-4` (20px) for page H1, `--font-size-5`
-  (26px) only for high-density dashboards / detail H1.
-- Weights: 500 for muted, 550–600 for body bold, 650 for headings and
+
+**Two families, two jobs.** This is the rule most worth getting right — it
+does more for how the product reads than any other token.
+
+- `--font-ui` (system sans) is the document default and carries **everything a
+  person reads as language**: nav, page and card titles, message bodies,
+  button labels, form labels, empty-state copy, help text.
+- `--font-mono` (JetBrains Mono) is **opt-in per element** and carries only
+  text a person copies, greps, or compares character-by-character: code and
+  `<pre>`, short ids (`#a1b2c3`), ticket ids, branch names, filesystem paths,
+  model ids, agent ids, raw trace detail.
+
+The opt-in list lives in one block near the top of `app.css`. Add your class
+there rather than writing `font-family` in a component. **Never re-declare a
+mono stack inline** (`ui-monospace, SFMono-Regular, …`) — use the token.
+
+Setting mono globally, as this app did, is the single loudest "generated by a
+tool" signal a UI can send: it makes ordinary sentences read like terminal
+output and costs roughly 15% of the horizontal density a proportional face
+gives for free.
+
+- Sizes: `--font-size-0` (10px) for chips and micro-meta, `--font-size-1`
+  (12px) for secondary UI, `--font-size-2` (13px) for primary body and list
+  rows, `--font-size-3` (15px) for card titles, transcript prose, and the
+  composer, `--font-size-4` (18px) for page H1, `--font-size-5` (22px) only for
+  detail H1.
+- Weights: 500 for muted, 550–620 for body bold and headings, 650 for
   numerics. Never go above 700.
 - Letter spacing: `-0.01em` to `-0.022em` on headings, default elsewhere.
 - Tabular numerics: always `font-variant-numeric: tabular-nums` on counts,
-  KPIs, and timestamps.
+  KPIs, and timestamps. The shared opt-in list in `app.css` covers the common
+  classes.
 
 ### Motion
 - Use `--transition-fast` (120ms) for hover state transitions.
@@ -131,6 +177,19 @@ this structure:
   <!-- Primary content: list, card grid, or panel -->
 </section>
 ```
+
+### Measure
+
+`.page-stack` is capped at `--measure-page` (1120px) and centred. **Never
+remove that cap to "use the space".** A full-bleed page on a 1440px display
+puts a repo's name and its action buttons ~900px apart, so the eye has to
+travel the whole width to connect a label with the thing that acts on it, and
+every list row reads as mostly empty. Long-form and form surfaces go narrower
+still (the settings detail pane caps at 720px).
+
+The chat surface is the deliberate exception: `.master-detail` / `.pma-layout`
+span the viewport because the list and the transcript are two independent
+columns, and the transcript caps its own content at 760px.
 
 Use the shared `PageHero` component for the title + subtitle + optional
 right-aligned KPI strip. **Don't reach for a hand-rolled `.section-heading`
@@ -220,10 +279,10 @@ Identity glyph for repos, agents, and any other entity with a name:
 - Foreground: same accent at full strength.
 - Inner ring: `inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent)`.
 - Initials are 1–2 uppercase letters extracted from the label
-  (`repoInitials()` in `RepoWorktreeViews.svelte`).
+  (`repoInitials()` in `src/lib/viewModels/repoIdentity.ts`).
 - Accent color hashes deterministically from the label using a fixed
-  8-color palette (`repoAccent()`). Reuse this helper, don't invent new
-  colors per entity type.
+  8-color palette (`repoAccent()`, same module). Reuse these helpers; don't
+  invent new colors per entity type.
 
 ### Title row
 
@@ -370,7 +429,8 @@ work. The default is intentionally subtle:
 
 ## Tabs
 
-Use the segmented-pill pattern (see `.memory-tabs-v2` in `PmaMemoryView`):
+Use the segmented-pill pattern (see `.doc-viewer-tabs` in
+`MarkdownDocViewer.svelte`):
 
 - Container: `1px solid var(--color-border-subtle)`, radius 10px, 4px
   inner padding, `--color-surface` background.
@@ -488,6 +548,37 @@ work to commit. It applies to settings, profile, preferences, and any
 other "I'm editing in place, hit save when done" surface. **Don't use it
 for transactional actions** (Send message, Create chat, Approve) — those
 stay as solid primary buttons because the action is the point.
+
+## Chat transcript
+
+The transcript is the app's primary surface. It should behave the way every
+chat client the user already knows behaves; anything that violates that
+expectation reads as broken even when it is technically fine.
+
+- **Content anchors to the bottom.** The newest turn sits just above the
+  composer, whether the transcript has two messages or two hundred. The
+  virtualised list is `flex: 1 1 auto`, so `margin-top: auto` alone does not
+  achieve this — while the content is shorter than the viewport
+  (`:not(.can-scroll)`) the viewport lays out as a column with
+  `justify-content: flex-end`. Do not remove that rule; without it a two-message
+  chat strands its content 800px above the input.
+- **The user's turn is the only element in the transcript that carries brand
+  colour** (`--color-accent-soft` fill, accent-tinted border, 14px radius with a
+  4px tail on the sending corner). It is what they authored, and tinting it is
+  what makes a long thread legible as an alternating exchange rather than one
+  column of grey text.
+- **The assistant's turn has no bubble** — bare prose on the page background,
+  introduced by a quiet byline. Consecutive assistant turns drop the repeated
+  byline.
+- **Prose measure is 760px** at `--font-size-3` with `line-height: 1.62`. The
+  transcript is the one place in the app tuned for sustained reading rather
+  than scanning.
+- **Turns are `--space-6` apart.** See Spacing.
+- **Live run state is a floating pill**, not a bar ruled across the
+  conversation, and it only appears while a run is actually active. Its
+  progressive disclosure is driven by `@container status-bar` queries, so it
+  must stay full-width with centred content — `container-type: inline-size`
+  forbids sizing to content.
 
 ## Empty / loading / error states
 
@@ -667,11 +758,11 @@ Don't:
   border). Always remove one of them. Long config pages should use the
   flat `.settings-section` pattern (hairline dividers between sections)
   rather than panel-in-panel.
-- Use brand purple (`--color-accent`) for non-action affordances. Purple
-  means "click me" or "active selection." A green dot means running, a
-  yellow dot means waiting — purple does not mean "info" or "in
-  progress." This applies to progress bars, status indicators, "live"
-  badges, and any other non-interactive affordance.
+- Use the brand accent for non-action affordances. Accent means "click me,"
+  "active selection," or "you wrote this" (the user's own chat turn). A green
+  dot means running, a yellow dot means waiting — the accent does not mean
+  "info" or "in progress." This applies to progress bars, status indicators,
+  "live" badges, and any other non-interactive affordance.
 - Invent new shadows, radii, or grey values. If the token doesn't exist,
   add it to `:root` in `app.css` with a justification, then use it.
 - Use uppercase eyebrows on every page. They were a phase. Drop them.
@@ -710,6 +801,25 @@ Don't:
 - Keep boilerplate prose in the runtime UI ("Approvals apply during
   turns…"). If the rule never changes with state, it belongs in the
   docs, not the chrome.
+- Set prose in the mono face. Nav labels, button labels, page titles, message
+  bodies, and help text are language, not machine text — see Typography. And
+  never write out a `ui-monospace, SFMono-Regular, …` stack by hand; that is
+  what `--font-mono` is for.
+- Let a page stretch to the viewport. `.page-stack` is capped and centred; a
+  1400px-wide row with one label on the left and one button on the right is
+  not "using the space," it is making the user's eye do the work.
+- Render a list row's identifying meta as a separate right-aligned column.
+  Agent, model, and status belong in the row's meta line, next to the title
+  they describe — pinned to the far edge they are hundreds of pixels away from
+  their own subject.
+- Emit standalone `·` separator elements in a meta line that can wrap. Draw
+  them with `> * + *::before` so the separator travels with the item it
+  precedes instead of dangling at the end of a wrapped line.
+- Show raw markdown in a preview or summary. Excerpts of a markdown body go
+  through `markdownPreview()` (`$lib/viewModels/plainText`) so a row reads as a
+  sentence rather than `## Goal Used by \`scripts/x.py\`. ## Evidence — …`.
+- Write `var(--token)` for a token that does not exist. It fails silently — see
+  the note at the top of Tokens. `designTokens.test.ts` enforces this.
 
 ## Build
 

@@ -210,10 +210,15 @@
     padding-block: var(--space-1);
   }
 
+  /* Settings forms read as a single column, not a 900px-wide field row. The
+     rail already claims the left third; the detail pane keeps a form measure
+     rather than stretching selects across the remaining viewport. */
   .settings-detail {
     display: flex;
     flex-direction: column;
     gap: 0;
+    width: 100%;
+    max-width: 720px;
     min-width: 0;
     min-height: 0;
     overflow: auto;

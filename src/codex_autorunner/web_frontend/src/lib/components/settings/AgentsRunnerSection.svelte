@@ -196,7 +196,9 @@
     border: 1px solid var(--color-border-subtle);
     border-radius: 999px;
     color: var(--color-ink-muted);
-    font-size: var(--font-size--1);
+    /* Was `--font-size--1`, which is not a token — the declaration was invalid
+       and the pill silently inherited the surrounding body size. */
+    font-size: var(--font-size-0);
     line-height: 1.4;
   }
 

@@ -11,6 +11,7 @@ import {
   type ChatScopeOption
 } from './chat';
 import { chatRoute, repoRoute, repoTicketRoute, worktreeRoute, worktreeTicketRoute } from './routes';
+import { markdownPreview } from './plainText';
 import {
   aliasesOverlap,
   buildTicketFlowStatusViewModel,
@@ -938,9 +939,7 @@ function formatDuration(seconds: number | null): string | null {
 }
 
 function bodyPreview(ticket: TicketSummary): string | null {
-  const body = bodyFromTicketSummary(ticket).replace(/\s+/g, ' ').trim();
-  if (!body) return null;
-  return body.length > 120 ? `${body.slice(0, 117)}...` : body;
+  return markdownPreview(bodyFromTicketSummary(ticket), 120) || null;
 }
 
 function buildWorkspaceFilters(rows: TicketListRow[]): { id: string; label: string; count: number }[] {
