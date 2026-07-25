@@ -15,6 +15,7 @@ from typing import (
     Awaitable,
     Callable,
     Mapping,
+    MutableMapping,
     Optional,
     Sequence,
     cast,
@@ -356,6 +357,12 @@ from .message_turns import (
 from .message_turns import (
     handle_message_event as handle_discord_message_event,
 )
+from .opencode_supervisor_pool import (
+    DISCORD_OPENCODE_PRUNE_EMPTY_INTERVAL_SECONDS,  # noqa: F401 (re-exported for tests)
+    DISCORD_OPENCODE_PRUNE_FALLBACK_INTERVAL_SECONDS,  # noqa: F401 (re-exported for tests)
+    OpenCodeSupervisorCacheEntry,
+    OpenCodeSupervisorPool,
+)
 from .outbox import DiscordOutboxManager
 from .picker_helpers import (
     format_discord_thread_picker_label as _format_discord_thread_picker_label_impl,
@@ -401,9 +408,6 @@ from .service_lifecycle import (
 )
 from .service_lifecycle import (
     run_chat_queue_reset_loop as _run_chat_queue_reset_loop_impl,
-)
-from .service_lifecycle import (
-    run_opencode_prune_loop as _run_opencode_prune_loop_impl,
 )
 from .service_lifecycle import (
     service_uptime_ms as _service_uptime_ms_impl,
@@ -474,8 +478,6 @@ THREAD_LIST_MAX_PAGES = 5
 THREAD_LIST_PAGE_LIMIT = 100
 APP_SERVER_START_BACKOFF_INITIAL_SECONDS = 1.0
 APP_SERVER_START_BACKOFF_MAX_SECONDS = 30.0
-DISCORD_OPENCODE_PRUNE_FALLBACK_INTERVAL_SECONDS = 300.0
-DISCORD_OPENCODE_PRUNE_EMPTY_INTERVAL_SECONDS = 600.0
 # Kept for test compatibility; queued notice payloads are shaped in
 # service_normalization.py.
 DISCORD_QUEUED_PLACEHOLDER_TEXT = "Queued (waiting for available worker...)"
@@ -500,17 +502,41 @@ def _path_within(*, root: Path, target: Path) -> bool:
     return is_within(root=root, target=target)
 
 
-def _opencode_prune_interval(idle_ttl_seconds: Optional[int]) -> Optional[float]:
-    if not idle_ttl_seconds or idle_ttl_seconds <= 0:
-        return None
-    return float(min(600.0, max(60.0, idle_ttl_seconds / 2)))
+def _load_repo_config_for_opencode_pool(
+    workspace_root: Path, *, hub_path: Optional[Path]
+) -> Any:
+    # Defined here (rather than passed as a bound reference to the module
+    # attribute) so that tests monkeypatching `load_repo_config` on this
+    # module continue to take effect: this function's global lookup of
+    # `load_repo_config` is resolved dynamically against this module's
+    # namespace on every call.
+    return load_repo_config(workspace_root, hub_path=hub_path)
 
 
-@dataclass
-class _OpenCodeSupervisorCacheEntry:
-    supervisor: OpenCodeSupervisor
-    prune_interval_seconds: Optional[float]
-    last_requested_at: float
+def _build_opencode_supervisor_for_pool(
+    repo_config: Any,
+    *,
+    workspace_root: Path,
+    logger: logging.Logger,
+    base_env: Optional[MutableMapping[str, str]] = None,
+) -> Optional[OpenCodeSupervisor]:
+    # See `_load_repo_config_for_opencode_pool` above for why this
+    # indirection exists.
+    return build_opencode_supervisor_from_repo_config(
+        repo_config,
+        workspace_root=workspace_root,
+        logger=logger,
+        base_env=base_env,
+    )
+
+
+def _log_event_for_opencode_pool(
+    logger: logging.Logger, level: int, event: str, **kwargs: Any
+) -> None:
+    # See `_load_repo_config_for_opencode_pool` above for why this
+    # indirection exists: it lets tests monkeypatch `log_event` on this
+    # module and have it take effect for events logged by the pool.
+    log_event(logger, level, event, **kwargs)
 
 
 @dataclass(frozen=True)
@@ -786,8 +812,6 @@ class DiscordBotService(DiscordInteractionResponseMixin):
                 self._hub_config_path = root_hub_config
 
         self._app_server_lock = asyncio.Lock()
-        self._opencode_supervisors: dict[str, _OpenCodeSupervisorCacheEntry] = {}
-        self._opencode_lock = asyncio.Lock()
         self.app_server_events = AppServerEventBuffer()
         self._app_server_state_root = resolve_global_state_root() / "workspaces"
         root_app_server_config = None
@@ -832,6 +856,18 @@ class DiscordBotService(DiscordInteractionResponseMixin):
             opencode_supervisor=None,
         )
         self.app_server_supervisor = _DiscordAppServerSupervisorAdapter(self)
+        self._opencode_supervisor_pool = OpenCodeSupervisorPool(
+            logger=self._logger,
+            hub_config_path=self._hub_config_path,
+            load_repo_config=_load_repo_config_for_opencode_pool,
+            build_supervisor=_build_opencode_supervisor_for_pool,
+            log_event=_log_event_for_opencode_pool,
+            workspace_has_running_execution=(
+                self._workspace_has_running_opencode_execution
+            ),
+            publish_global_supervisor=self._publish_global_opencode_supervisor,
+            register_owned_supervisor=self._register_owned_opencode_supervisor,
+        )
         self.opencode_supervisor: OpenCodeHarnessSupervisorProtocol = (
             _DiscordOpenCodeSupervisorAdapter(self)
         )
@@ -984,7 +1020,7 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         await _recover_managed_thread_executions_on_startup_impl(self)
         await _reconcile_progress_leases_on_startup_impl(self)
         self._opencode_prune_task = asyncio.create_task(
-            _run_opencode_prune_loop_impl(self)
+            self._opencode_supervisor_pool.run_prune_loop()
         )
         if self._filebox_housekeeping_enabled():
             self._filebox_prune_task = asyncio.create_task(
@@ -1082,6 +1118,17 @@ class DiscordBotService(DiscordInteractionResponseMixin):
     @property
     def hub_client(self) -> Optional[HttpHubControlPlaneClient]:
         return self._hub_client
+
+    @property
+    def _opencode_supervisors(self) -> dict[str, OpenCodeSupervisorCacheEntry]:
+        # Ownership lives on `_opencode_supervisor_pool`; kept as a
+        # pool-delegating property so existing call sites (and tests) that
+        # inspect the cache directly keep working unchanged.
+        return self._opencode_supervisor_pool.supervisors
+
+    @property
+    def _opencode_lock(self) -> asyncio.Lock:
+        return self._opencode_supervisor_pool.lock
 
     def _is_within_cold_start_window(self, *, now: Optional[float] = None) -> bool:
         return _is_within_cold_start_window_impl(self, now=now)
@@ -3568,39 +3615,22 @@ class DiscordBotService(DiscordInteractionResponseMixin):
                 await asyncio.sleep(sleep_time)
                 delay = min(delay * 2, APP_SERVER_START_BACKOFF_MAX_SECONDS)
 
+    def _publish_global_opencode_supervisor(
+        self, supervisor: OpenCodeSupervisor
+    ) -> None:
+        self._runtime_services.opencode_supervisor = supervisor
+
+    def _register_owned_opencode_supervisor(
+        self, supervisor: OpenCodeSupervisor
+    ) -> None:
+        self._runtime_services.register_owned_supervisor(supervisor)
+
     async def _opencode_supervisor_for_workspace(
         self, workspace_root: Path
     ) -> Optional[OpenCodeSupervisor]:
-        repo_config = load_repo_config(
-            workspace_root,
-            hub_path=self._hub_config_path,
+        return await self._opencode_supervisor_pool.supervisor_for_workspace(
+            workspace_root
         )
-        opencode_config = getattr(repo_config, "opencode", None)
-        server_scope = getattr(opencode_config, "server_scope", "global")
-        key = "global" if server_scope == "global" else str(workspace_root)
-        async with self._opencode_lock:
-            existing = self._opencode_supervisors.get(key)
-            if existing is not None:
-                existing.last_requested_at = time.monotonic()
-                return existing.supervisor
-            supervisor = build_opencode_supervisor_from_repo_config(
-                repo_config,
-                workspace_root=workspace_root,
-                logger=self._logger,
-                base_env=None,
-            )
-            if supervisor is None:
-                return None
-            prune_ttl = getattr(opencode_config, "idle_ttl_seconds", None)
-            self._opencode_supervisors[key] = _OpenCodeSupervisorCacheEntry(
-                supervisor=supervisor,
-                prune_interval_seconds=_opencode_prune_interval(prune_ttl),
-                last_requested_at=time.monotonic(),
-            )
-            if key == "global":
-                self._runtime_services.opencode_supervisor = supervisor
-            self._runtime_services.register_owned_supervisor(supervisor)
-            return supervisor
 
     def _reap_managed_processes(self, *, stage: str) -> None:
         try:
@@ -3643,14 +3673,10 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         return bool(repo_config.housekeeping.enabled)
 
     async def _next_opencode_prune_interval_seconds(self) -> float:
-        from .service_lifecycle import (
-            next_opencode_prune_interval_seconds as _next_interval_impl,
-        )
-
-        return await _next_interval_impl(self)
+        return await self._opencode_supervisor_pool.next_prune_interval_seconds()
 
     async def _run_opencode_prune_loop(self) -> None:
-        await _run_opencode_prune_loop_impl(self)
+        await self._opencode_supervisor_pool.run_prune_loop()
 
     async def _run_filebox_prune_loop(self) -> None:
         while True:
@@ -3731,106 +3757,7 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         return interval_seconds
 
     async def _prune_opencode_supervisors(self) -> None:
-        async with self._opencode_lock:
-            cached_entries = list(self._opencode_supervisors.items())
-        cached_supervisors = len(cached_entries)
-        if not cached_entries:
-            log_event(
-                self._logger,
-                logging.DEBUG,
-                "discord.opencode.prune_sweep",
-                cached_supervisors=0,
-                cached_supervisors_after=0,
-                live_handles=0,
-                killed_processes=0,
-                evicted_supervisors=0,
-            )
-            return
-
-        now = time.monotonic()
-        live_handles = 0
-        killed_processes = 0
-        eviction_candidates: list[tuple[str, _OpenCodeSupervisorCacheEntry]] = []
-
-        for workspace_path, entry in cached_entries:
-            workspace_root = canonicalize_path(Path(workspace_path))
-            execution_running = self._workspace_has_running_opencode_execution(
-                workspace_root
-            )
-            if execution_running is not False:
-                entry.last_requested_at = now
-                try:
-                    snapshot = await entry.supervisor.lifecycle_snapshot()
-                except (OSError, RuntimeError, ValueError) as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "discord.opencode.prune_failed",
-                        workspace_path=workspace_path,
-                        exc=exc,
-                    )
-                else:
-                    live_handles += snapshot.cached_handles
-                log_event(
-                    self._logger,
-                    logging.DEBUG,
-                    "discord.opencode.prune_deferred",
-                    workspace_path=workspace_path,
-                    reason=(
-                        "active_runtime_execution"
-                        if execution_running
-                        else "execution_state_unknown"
-                    ),
-                )
-                continue
-            try:
-                killed_processes += await entry.supervisor.prune_idle()
-                snapshot = await entry.supervisor.lifecycle_snapshot()
-            except (OSError, RuntimeError, ValueError) as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.opencode.prune_failed",
-                    workspace_path=workspace_path,
-                    exc=exc,
-                )
-                continue
-            live_handles += snapshot.cached_handles
-            idle_for = max(0.0, now - entry.last_requested_at)
-            eviction_delay = (
-                entry.prune_interval_seconds
-                or DISCORD_OPENCODE_PRUNE_FALLBACK_INTERVAL_SECONDS
-            )
-            if snapshot.cached_handles == 0 and idle_for >= eviction_delay:
-                eviction_candidates.append((workspace_path, entry))
-
-        evicted_supervisors = 0
-        evicted_objects: list[OpenCodeSupervisor] = []
-        if eviction_candidates:
-            async with self._opencode_lock:
-                for workspace_path, entry in eviction_candidates:
-                    current = self._opencode_supervisors.get(workspace_path)
-                    if current is not entry:
-                        continue
-                    self._opencode_supervisors.pop(workspace_path, None)
-                    evicted_supervisors += 1
-                    evicted_objects.append(entry.supervisor)
-        for supervisor in evicted_objects:
-            with contextlib.suppress(Exception):
-                await supervisor.close_all()
-
-        async with self._opencode_lock:
-            cached_supervisors_after = len(self._opencode_supervisors)
-        log_event(
-            self._logger,
-            logging.DEBUG,
-            "discord.opencode.prune_sweep",
-            cached_supervisors=cached_supervisors,
-            cached_supervisors_after=cached_supervisors_after,
-            live_handles=live_handles,
-            killed_processes=killed_processes,
-            evicted_supervisors=evicted_supervisors,
-        )
+        await self._opencode_supervisor_pool.prune()
 
     async def _list_opencode_models_for_picker(
         self,

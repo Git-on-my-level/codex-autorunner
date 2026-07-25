@@ -4,20 +4,16 @@ import asyncio
 import contextlib
 import logging
 import time
-from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, Optional
 
 from ...core.logging_utils import log_event
 from ...core.managed_processes import (
     reap_managed_processes as _reap_managed_processes_core,
 )
-from ...core.utils import canonicalize_path
 
 CHAT_QUEUE_RESET_POLL_INTERVAL_SECONDS = 2.0
 _DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS = 10.0
 DISCORD_INTERACTION_COLD_START_WINDOW_SECONDS = 120.0
-DISCORD_OPENCODE_PRUNE_FALLBACK_INTERVAL_SECONDS = 300.0
-DISCORD_OPENCODE_PRUNE_EMPTY_INTERVAL_SECONDS = 600.0
 
 
 def service_uptime_ms(service: Any, *, now: Optional[float] = None) -> Optional[float]:
@@ -142,130 +138,6 @@ async def reconcile_progress_leases_on_startup(service: Any) -> None:
             "discord.turn.progress_reconcile_startup_finished",
             reconciled=reconciled,
         )
-
-
-async def next_opencode_prune_interval_seconds(service: Any) -> float:
-    async with service._opencode_lock:
-        intervals = [
-            entry.prune_interval_seconds
-            for entry in service._opencode_supervisors.values()
-            if entry.prune_interval_seconds is not None
-        ]
-        has_supervisors = bool(service._opencode_supervisors)
-    if intervals:
-        return cast(float, min(intervals))
-    if not has_supervisors:
-        return DISCORD_OPENCODE_PRUNE_EMPTY_INTERVAL_SECONDS
-    return DISCORD_OPENCODE_PRUNE_FALLBACK_INTERVAL_SECONDS
-
-
-async def run_opencode_prune_loop(service: Any) -> None:
-    while True:
-        await asyncio.sleep(await next_opencode_prune_interval_seconds(service))
-        await prune_opencode_supervisors(service)
-
-
-async def prune_opencode_supervisors(service: Any) -> None:
-    async with service._opencode_lock:
-        cached_entries = list(service._opencode_supervisors.items())
-    cached_supervisors = len(cached_entries)
-    if not cached_entries:
-        log_event(
-            service._logger,
-            logging.DEBUG,
-            "discord.opencode.prune_sweep",
-            cached_supervisors=0,
-            cached_supervisors_after=0,
-            live_handles=0,
-            killed_processes=0,
-            evicted_supervisors=0,
-        )
-        return
-
-    now = time.monotonic()
-    live_handles = 0
-    killed_processes = 0
-    eviction_candidates: list[tuple[str, Any]] = []
-
-    for workspace_path, entry in cached_entries:
-        workspace_root = canonicalize_path(Path(workspace_path))
-        execution_running = service._workspace_has_running_opencode_execution(
-            workspace_root
-        )
-        if execution_running is not False:
-            entry.last_requested_at = now
-            try:
-                snapshot = await entry.supervisor.lifecycle_snapshot()
-            except (OSError, RuntimeError, ValueError) as exc:
-                log_event(
-                    service._logger,
-                    logging.WARNING,
-                    "discord.opencode.prune_failed",
-                    workspace_path=workspace_path,
-                    exc=exc,
-                )
-            else:
-                live_handles += snapshot.cached_handles
-            log_event(
-                service._logger,
-                logging.DEBUG,
-                "discord.opencode.prune_deferred",
-                workspace_path=workspace_path,
-                reason=(
-                    "active_runtime_execution"
-                    if execution_running
-                    else "execution_state_unknown"
-                ),
-            )
-            continue
-        try:
-            killed_processes += await entry.supervisor.prune_idle()
-            snapshot = await entry.supervisor.lifecycle_snapshot()
-        except (OSError, RuntimeError, ValueError) as exc:
-            log_event(
-                service._logger,
-                logging.WARNING,
-                "discord.opencode.prune_failed",
-                workspace_path=workspace_path,
-                exc=exc,
-            )
-            continue
-        live_handles += snapshot.cached_handles
-        idle_for = max(0.0, now - entry.last_requested_at)
-        eviction_delay = (
-            entry.prune_interval_seconds
-            or DISCORD_OPENCODE_PRUNE_FALLBACK_INTERVAL_SECONDS
-        )
-        if snapshot.cached_handles == 0 and idle_for >= eviction_delay:
-            eviction_candidates.append((workspace_path, entry))
-
-    evicted_supervisors = 0
-    evicted_objects: list[Any] = []
-    if eviction_candidates:
-        async with service._opencode_lock:
-            for workspace_path, entry in eviction_candidates:
-                current = service._opencode_supervisors.get(workspace_path)
-                if current is not entry:
-                    continue
-                service._opencode_supervisors.pop(workspace_path, None)
-                evicted_supervisors += 1
-                evicted_objects.append(entry.supervisor)
-    for supervisor in evicted_objects:
-        with contextlib.suppress(Exception):
-            await supervisor.close_all()
-
-    async with service._opencode_lock:
-        cached_supervisors_after = len(service._opencode_supervisors)
-    log_event(
-        service._logger,
-        logging.DEBUG,
-        "discord.opencode.prune_sweep",
-        cached_supervisors=cached_supervisors,
-        cached_supervisors_after=cached_supervisors_after,
-        live_handles=live_handles,
-        killed_processes=killed_processes,
-        evicted_supervisors=evicted_supervisors,
-    )
 
 
 async def run_chat_queue_reset_loop(service: Any) -> None:
@@ -430,14 +302,7 @@ async def close_all_app_server_supervisors(service: Any) -> None:
 
 
 async def close_all_opencode_supervisors(service: Any) -> None:
-    async with service._opencode_lock:
-        opencode_supervisors = [
-            entry.supervisor for entry in service._opencode_supervisors.values()
-        ]
-        service._opencode_supervisors.clear()
-    for supervisor in opencode_supervisors:
-        with contextlib.suppress(Exception):
-            await supervisor.close_all()
+    await service._opencode_supervisor_pool.close_all()
 
 
 async def close_all_agent_runtime_supervisors(service: Any) -> None:
@@ -537,8 +402,7 @@ async def shutdown_service(service: Any) -> None:
     if runtime_services is not None:
         with contextlib.suppress(Exception):
             await runtime_services.close()
-        async with service._opencode_lock:
-            service._opencode_supervisors.clear()
+        await service._opencode_supervisor_pool.clear_cache()
     else:
         await close_all_app_server_supervisors(service)
         await close_all_opencode_supervisors(service)
