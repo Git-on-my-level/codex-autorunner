@@ -24,7 +24,7 @@ def test_render_screenshot_help_mentions_mode_readiness_and_cleanup() -> None:
     assert "--ready-url" in output
     assert "--project-root" in output
     assert "--project-context" in output
-    assert "no-project-conte" in output
+    assert "--no-project-cont" in output
     assert "tears it down on" in output
     assert "every exit path." in output
 
@@ -47,7 +47,7 @@ def test_render_demo_help_mentions_manifest_and_artifacts_options() -> None:
     assert "--full-artifacts" in output
     assert "--project-root" in output
     assert "--project-context" in output
-    assert "no-project-conte" in output
+    assert "--no-project-cont" in output
 
 
 def test_render_observe_help_mentions_serve_mode_readiness_and_cleanup() -> None:
@@ -59,7 +59,7 @@ def test_render_observe_help_mentions_serve_mode_readiness_and_cleanup() -> None
     assert "--ready-url" in output
     assert "--project-root" in output
     assert "--project-context" in output
-    assert "no-project-conte" in output
+    assert "--no-project-cont" in output
     assert "tears it down on" in output
     assert "every exit path." in output
 

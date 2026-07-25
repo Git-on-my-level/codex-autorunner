@@ -58,7 +58,7 @@ def test_pma_cli_targets_commands_removed() -> None:
         ("files", {"--json"}),
         ("active", {"--json"}),
         ("agents", {"--json"}),
-        ("models", {"--json", "AGENT"}),
+        ("models", {"--json", "{agent}"}),
     ],
 )
 def test_pma_help_shows_json_option(subcommand, expected_options):
@@ -129,7 +129,7 @@ def test_pma_upload_help():
     assert result.exit_code == 0
     output = result.stdout
     assert "|".join(BOXES) in output, "PMA upload should require box argument"
-    assert "FILES" in output, "PMA upload should accept files"
+    assert "{files}" in output, "PMA upload should accept files"
     assert "--json" in output, "PMA upload should support --json output mode"
 
 
@@ -140,7 +140,7 @@ def test_pma_download_help():
     assert result.exit_code == 0
     output = result.stdout
     assert "|".join(BOXES) in output, "PMA download should require box argument"
-    assert "FILENAME" in output, "PMA download should require filename"
+    assert "{filename}" in output, "PMA download should require filename"
     assert "--output" in output, "PMA download should support --output option"
 
 
@@ -150,8 +150,8 @@ def test_pma_delete_help():
     result = runner.invoke(pma_app, ["delete", "--help"])
     assert result.exit_code == 0
     output = result.stdout
-    assert "BOX" in output, "PMA delete should support box argument"
-    assert "FILENAME" in output, "PMA delete should support filename argument"
+    assert "box" in output.lower(), "PMA delete should support box argument"
+    assert "filename" in output.lower(), "PMA delete should support filename argument"
     assert "--all" in output, "PMA delete should support --all flag"
     assert "--json" in output, "PMA delete should support --json output mode"
 

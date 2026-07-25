@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -33,15 +34,34 @@ from codex_autorunner.core.orchestration.turn_timeline import persist_turn_timel
 from codex_autorunner.core.ports.run_event import RunNotice
 
 
+def _iso_utc(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _default_execution_times() -> tuple[str, str]:
+    finished = datetime.now(timezone.utc) - timedelta(days=1)
+    started = finished - timedelta(minutes=5)
+    return _iso_utc(started), _iso_utc(finished)
+
+
+def _parse_iso_utc(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
 def _seed_execution(
     hub_root: Path,
     *,
     execution_id: str,
     status: str = "completed",
-    started_at: str = "2026-04-12T00:00:00Z",
-    finished_at: str = "2026-04-12T00:05:00Z",
+    started_at: str | None = None,
+    finished_at: str | None = None,
     output_chunks: int = 3,
 ) -> None:
+    if started_at is None or finished_at is None:
+        default_started, default_finished = _default_execution_times()
+        started_at = started_at or default_started
+        finished_at = finished_at or default_finished
+    started_dt = _parse_iso_utc(started_at)
     initialize_orchestration_sqlite(hub_root, durable=False)
     with open_orchestration_sqlite(hub_root, durable=False) as conn:
         with conn:
@@ -146,13 +166,13 @@ def _seed_execution(
                 (
                     f"turn-timeline:{execution_id}:0002",
                     "run_notice",
-                    "2026-04-12T00:00:30Z",
+                    _iso_utc(started_dt + timedelta(seconds=30)),
                     "recorded",
                     {
                         "event_index": 2,
                         "event_family": "run_notice",
                         "event": {
-                            "timestamp": "2026-04-12T00:00:30Z",
+                            "timestamp": _iso_utc(started_dt + timedelta(seconds=30)),
                             "kind": "thinking",
                             "message": "planning",
                         },
@@ -161,13 +181,13 @@ def _seed_execution(
                 (
                     f"turn-timeline:{execution_id}:0003",
                     "tool_call",
-                    "2026-04-12T00:01:00Z",
+                    _iso_utc(started_dt + timedelta(minutes=1)),
                     "recorded",
                     {
                         "event_index": 3,
                         "event_family": "tool_call",
                         "event": {
-                            "timestamp": "2026-04-12T00:01:00Z",
+                            "timestamp": _iso_utc(started_dt + timedelta(minutes=1)),
                             "tool_name": "shell",
                             "tool_input": {"cmd": "pwd"},
                         },
@@ -176,13 +196,15 @@ def _seed_execution(
                 (
                     f"turn-timeline:{execution_id}:0004",
                     "tool_result",
-                    "2026-04-12T00:01:01Z",
+                    _iso_utc(started_dt + timedelta(minutes=1, seconds=1)),
                     "completed",
                     {
                         "event_index": 4,
                         "event_family": "tool_result",
                         "event": {
-                            "timestamp": "2026-04-12T00:01:01Z",
+                            "timestamp": _iso_utc(
+                                started_dt + timedelta(minutes=1, seconds=1)
+                            ),
                             "tool_name": "shell",
                             "status": "completed",
                             "result": {"stdout": "/tmp"},
@@ -192,7 +214,7 @@ def _seed_execution(
             ]
             next_index = 5
             for chunk in range(output_chunks):
-                timestamp = f"2026-04-12T00:02:{chunk:02d}Z"
+                timestamp = _iso_utc(started_dt + timedelta(minutes=2, seconds=chunk))
                 rows.append(
                     (
                         f"turn-timeline:{execution_id}:{next_index:04d}",
@@ -238,13 +260,15 @@ def _seed_execution(
                     (
                         f"turn-timeline:{execution_id}:{next_index:04d}",
                         "token_usage",
-                        "2026-04-12T00:04:00Z",
+                        _iso_utc(started_dt + timedelta(minutes=4)),
                         "recorded",
                         {
                             "event_index": next_index,
                             "event_family": "token_usage",
                             "event": {
-                                "timestamp": "2026-04-12T00:04:00Z",
+                                "timestamp": _iso_utc(
+                                    started_dt + timedelta(minutes=4)
+                                ),
                                 "usage": {"input": 12, "output": 7},
                             },
                         },
@@ -822,6 +846,7 @@ def test_audit_flags_recent_terminal_execution_without_manifest_even_with_zero_h
 ) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
+    started_at, finished_at = _default_execution_times()
     initialize_orchestration_sqlite(hub_root, durable=False)
     with open_orchestration_sqlite(hub_root, durable=False) as conn:
         with conn:
@@ -853,8 +878,8 @@ def test_audit_flags_recent_terminal_execution_without_manifest_even_with_zero_h
                     "Zero hot",
                     "active",
                     "completed",
-                    "2026-04-12T00:00:00Z",
-                    "2026-04-12T00:05:00Z",
+                    started_at,
+                    finished_at,
                 ),
             )
             conn.execute(
@@ -890,9 +915,9 @@ def test_audit_flags_recent_terminal_execution_without_manifest_even_with_zero_h
                     "gpt-test",
                     "high",
                     None,
-                    "2026-04-12T00:00:00Z",
-                    "2026-04-12T00:05:00Z",
-                    "2026-04-12T00:00:00Z",
+                    started_at,
+                    finished_at,
+                    started_at,
                 ),
             )
 
