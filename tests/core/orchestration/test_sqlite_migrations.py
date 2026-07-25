@@ -15,6 +15,9 @@ from codex_autorunner.core.orchestration import (
     current_orchestration_schema_version,
     list_orchestration_table_definitions,
 )
+from codex_autorunner.core.orchestration import (
+    migration_sqlite_helpers as migration_sqlite_helpers_module,
+)
 from codex_autorunner.core.orchestration import migrations as migrations_module
 from codex_autorunner.core.orchestration.legacy_backfill_gate import (
     LEGACY_ORCHESTRATION_BACKFILL_KEY,
@@ -1265,8 +1268,12 @@ def test_ensure_column_ignores_duplicate_column_races(monkeypatch) -> None:
         def execute(self, sql: str):
             raise sqlite3.OperationalError("duplicate column name: status_updated_at")
 
-    monkeypatch.setattr(migrations_module, "_table_exists", lambda *_args: True)
-    monkeypatch.setattr(migrations_module, "_table_columns", lambda *_args: set())
+    monkeypatch.setattr(
+        migration_sqlite_helpers_module, "table_exists", lambda *_args: True
+    )
+    monkeypatch.setattr(
+        migration_sqlite_helpers_module, "table_columns", lambda *_args: set()
+    )
 
     migrations_module._ensure_column(
         FakeConn(),

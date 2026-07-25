@@ -1,10 +1,23 @@
+"""Orchestration SQLite schema migrations.
+
+Rule: v1-46 below (``_apply_v1`` through ``_apply_v46``, and the
+``_MIGRATIONS`` tuple that sequences them) are a FROZEN ladder. Never modify,
+renumber, reorder, or merge any of them — behavior against existing
+databases must stay bit-identical.
+
+Every new durable-state migration is v47 or higher and is added to
+``migrations_registry.REGISTERED_MIGRATIONS`` instead, each living in its own
+module under ``migrations_future/``. See ``migrations_registry.py`` for the
+how-to. ``_all_migration_steps`` near the bottom of this module is the single
+ordering authority that applies the frozen ladder first, then the registry.
+"""
+
 from __future__ import annotations
 
 import json
 import sqlite3
 import uuid
 from dataclasses import dataclass
-from typing import Callable
 
 from ..runtime_identity import (
     RUNTIME_STAGE_EFFECTIVE,
@@ -14,9 +27,15 @@ from ..runtime_identity import (
     RuntimeIdentityEnvelope,
     RuntimeIdentityStage,
 )
-from ..sqlite_utils import table_columns, table_exists
+from ..sqlite_utils import SqliteMigrationStep, table_columns, table_exists
 from ..time_utils import now_iso
 from .compatibility import SchemaCompatibilityError, evaluate_schema_compatibility
+from .migration_sqlite_helpers import (
+    column_not_null,
+    ensure_column,
+    ensure_resource_owner_columns,
+)
+from .migrations_registry import REGISTERED_MIGRATIONS
 from .models import OrchestrationTableDefinition
 from .turn_execution_contract import TurnExecutionRequest
 from .turn_execution_storage import (
@@ -28,14 +47,18 @@ from .turn_execution_storage import (
     build_turn_execution_request_from_storage,
 )
 
-ORCHESTRATION_SCHEMA_VERSION = 46
+# _MigrationStep is the frozen ladder's step type; it is the same shape as
+# the project-wide SqliteMigrationStep (version, name, apply), reused here
+# so migrations_registry.py and migrations_future/ modules can build steps
+# without importing anything private from this module.
+_MigrationStep = SqliteMigrationStep
 
-
-@dataclass(frozen=True)
-class _MigrationStep:
-    version: int
-    name: str
-    apply: Callable[[sqlite3.Connection], None]
+# Every v1-46 call site below uses these original private names unchanged;
+# the implementations now live in migration_sqlite_helpers.py so v47+
+# migrations can reuse them too.
+_column_not_null = column_not_null
+_ensure_column = ensure_column
+_ensure_resource_owner_columns = ensure_resource_owner_columns
 
 
 @dataclass(frozen=True)
@@ -376,70 +399,6 @@ def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
 
 def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
     return table_columns(conn, table_name)
-
-
-def _column_not_null(
-    conn: sqlite3.Connection, table_name: str, column_name: str
-) -> bool | None:
-    if not _table_exists(conn, table_name):
-        return None
-    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-    for row in rows:
-        if str(row["name"]) == column_name:
-            return bool(row["notnull"])
-    return None
-
-
-def _ensure_column(
-    conn: sqlite3.Connection,
-    table_name: str,
-    column_name: str,
-    ddl: str,
-) -> None:
-    if not _table_exists(conn, table_name):
-        return
-    if column_name in _table_columns(conn, table_name):
-        return
-    try:
-        statement = f"ALTER TABLE {table_name} "
-        statement += f"ADD COLUMN {ddl}"
-        conn.execute(statement)
-    except sqlite3.OperationalError as exc:
-        if f"duplicate column name: {column_name}".lower() not in str(exc).lower():
-            raise
-
-
-def _ensure_resource_owner_columns(
-    conn: sqlite3.Connection,
-    table_name: str,
-    *,
-    repo_column: str = "repo_id",
-) -> None:
-    if not _table_exists(conn, table_name):
-        return
-    _ensure_column(conn, table_name, "resource_kind", "resource_kind TEXT")
-    _ensure_column(conn, table_name, "resource_id", "resource_id TEXT")
-    columns = _table_columns(conn, table_name)
-    if repo_column not in columns:
-        return
-    conn.execute(f"""
-        UPDATE {table_name}
-           SET resource_kind = CASE
-                   WHEN NULLIF(TRIM(COALESCE(resource_kind, '')), '') IS NOT NULL
-                       THEN resource_kind
-                   WHEN NULLIF(TRIM(COALESCE({repo_column}, '')), '') IS NOT NULL
-                       THEN 'repo'
-                   ELSE resource_kind
-               END,
-               resource_id = CASE
-                   WHEN NULLIF(TRIM(COALESCE(resource_id, '')), '') IS NOT NULL
-                       THEN resource_id
-                   WHEN NULLIF(TRIM(COALESCE({repo_column}, '')), '') IS NOT NULL
-                       THEN {repo_column}
-                   ELSE resource_id
-               END
-         WHERE NULLIF(TRIM(COALESCE({repo_column}, '')), '') IS NOT NULL
-        """)
 
 
 def _apply_v3(conn: sqlite3.Connection) -> None:
@@ -2910,6 +2869,42 @@ _MIGRATIONS = (
 )
 
 
+if len(_MIGRATIONS) != 46 or _MIGRATIONS[-1].version != 46:
+    raise RuntimeError(
+        "the frozen v1-46 orchestration migration ladder (_MIGRATIONS) must "
+        "not change; add new migrations to "
+        "migrations_registry.REGISTERED_MIGRATIONS instead of appending here"
+    )
+
+
+def _all_migration_steps() -> tuple[SqliteMigrationStep, ...]:
+    """Single ordering authority for applying orchestration migrations.
+
+    The frozen v1-46 ladder above always runs first, in its existing order;
+    v47+ steps from ``migrations_registry.REGISTERED_MIGRATIONS`` run after
+    it, in the order they were registered there. No other code path should
+    independently decide migration ordering.
+    """
+    combined = _MIGRATIONS + REGISTERED_MIGRATIONS
+    previous_version = 0
+    for step in combined:
+        if step.version <= previous_version:
+            raise RuntimeError(
+                "orchestration migration steps must have strictly "
+                f"increasing, unique version numbers; got {step.version} "
+                f"after {previous_version}"
+            )
+        previous_version = step.version
+    return combined
+
+
+# Derived from the frozen ladder plus whatever is currently registered for
+# v47+, so registering a new migration automatically becomes the new target
+# schema version. With an empty registry this evaluates to 46, matching the
+# frozen ladder's own ceiling exactly.
+ORCHESTRATION_SCHEMA_VERSION = max(step.version for step in _all_migration_steps())
+
+
 _TABLE_DEFINITIONS = (
     OrchestrationTableDefinition(
         name="orch_thread_targets",
@@ -3150,7 +3145,9 @@ def collect_orchestration_migration_status(
     ).fetchall()
     applied_versions = tuple(int(row["version"] or 0) for row in applied_rows)
     pending_versions = tuple(
-        step.version for step in _MIGRATIONS if step.version > current_version
+        step.version
+        for step in _all_migration_steps()
+        if step.version > current_version
     )
     attempt_rows = conn.execute(
         """
@@ -3225,7 +3222,7 @@ def apply_orchestration_migrations(conn: sqlite3.Connection) -> int:
         )
 
     try:
-        for step in _MIGRATIONS:
+        for step in _all_migration_steps():
             if step.version <= current_version:
                 continue
             applied_at = now_iso()
