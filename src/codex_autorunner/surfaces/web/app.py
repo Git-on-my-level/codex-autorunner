@@ -367,8 +367,6 @@ def create_hub_app(
         target = f"{context.base_path}/chats" if context.base_path else "/chats"
         return RedirectResponse(target, status_code=307)
 
-    _register_spa_shell_routes(app, web_static_dir, _web_index_response)
-
     def _resolve_worktree_parent_repo_id(worktree_id: str) -> str:
         for snapshot in context.supervisor.list_repos():
             if getattr(snapshot, "id", None) != worktree_id:
@@ -461,6 +459,13 @@ def create_hub_app(
     def pma_worktree_index(repo_id: str, worktree_id: str):
         _require_worktree_scope(repo_id, worktree_id)
         return _web_index_response()
+
+    # Registered LAST, deliberately. Starlette matches routes in registration
+    # order, and these templates include per-section catch-alls. Registering
+    # them earlier let a catch-all such as `/repos/{rest:path}` shadow the
+    # bespoke worktree-scope and legacy-redirect handlers above, which is how a
+    # scope-validated URL could quietly return the generic shell instead.
+    _register_spa_shell_routes(app, web_static_dir, _web_index_response)
 
     app.include_router(build_system_routes())
     mount_manager.mount_initial(initial_snapshots)

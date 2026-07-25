@@ -217,6 +217,42 @@ def test_worktree_frontend_route_rejects_missing_parent_scope(tmp_path):
     )
 
 
+def test_worktree_scope_validation_survives_a_missing_spa_manifest(
+    tmp_path, monkeypatch
+):
+    """A missing route manifest must not shadow scope-validated handlers.
+
+    Without a manifest the hub falls back to broad per-section catch-alls
+    including `/repos/{rest:path}`. Starlette matches in registration order, so
+    if those are registered before the worktree handlers the catch-all answers
+    first and a mismatched scope silently renders the shell instead of 404ing.
+    """
+    from codex_autorunner.surfaces.web import app as web_app_module
+
+    monkeypatch.setattr(
+        web_app_module, "_load_spa_route_manifest", lambda _static_dir: None
+    )
+
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    _seed_manifest_worktree(hub_root, base_id="base", worktree_id="base--review")
+    client = TestClient(create_hub_app(hub_root), follow_redirects=False)
+
+    mismatched = client.get("/repos/other/worktrees/base--review")
+
+    assert (
+        mismatched.status_code == 404
+    ), "scope validation was shadowed by the fallback SPA catch-all"
+    assert (
+        mismatched.json()["detail"]
+        == "Worktree not found in repo scope: other/base--review"
+    )
+
+    # The fallback must still serve the shell for ordinary repo deep links.
+    ordinary = client.get("/repos/base")
+    assert ordinary.status_code == 200
+
+
 def test_worktree_frontend_route_rejects_orphaned_manifest_worktree(tmp_path):
     hub_root = tmp_path / "hub"
     seed_hub_files(hub_root, force=True)

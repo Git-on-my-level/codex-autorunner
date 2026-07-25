@@ -30,7 +30,9 @@ checker = _load_module()
 
 
 def test_repo_surfaces_are_clean() -> None:
-    assert checker.find_violations() == []
+    violations, errors = checker.find_violations()
+    assert violations == []
+    assert errors == []
     assert checker.main([]) == 0
 
 
@@ -40,8 +42,9 @@ def test_rotate_corrupt_db_is_banned_anywhere_in_surfaces(tmp_path: Path) -> Non
         "def wipe(db, exc):\n    rotate_corrupt_flow_db(db, str(exc))\n"
     )
 
-    violations = checker.find_violations(tmp_path)
+    violations, errors = checker.find_violations(tmp_path)
 
+    assert errors == []
     assert [v.symbol for v in violations] == ["rotate_corrupt_flow_db"]
 
 
@@ -53,8 +56,9 @@ def test_flow_controller_construction_is_banned_under_web(tmp_path: Path) -> Non
         "    return FlowController(definition=1, db_path=2, artifacts_root=3)\n"
     )
 
-    violations = checker.find_violations(tmp_path)
+    violations, errors = checker.find_violations(tmp_path)
 
+    assert errors == []
     assert [v.symbol for v in violations] == ["FlowController"]
     assert violations[0].line == 3
 
@@ -69,7 +73,7 @@ def test_flow_controller_construction_is_allowed_outside_web(tmp_path: Path) -> 
         "    return FlowController(definition=1, db_path=2, artifacts_root=3)\n"
     )
 
-    assert checker.find_violations(tmp_path) == []
+    assert checker.find_violations(tmp_path)[0] == []
 
 
 def test_injected_dependency_is_not_a_violation(tmp_path: Path) -> None:
@@ -80,15 +84,36 @@ def test_injected_dependency_is_not_a_violation(tmp_path: Path) -> None:
         "    return rotate_corrupt_flow_db(1, '2')\n"
     )
 
-    assert checker.find_violations(tmp_path) == []
+    assert checker.find_violations(tmp_path)[0] == []
 
 
-def test_unparseable_file_does_not_silently_pass(tmp_path: Path, capsys) -> None:
+def test_parameter_shadowing_is_scoped_to_its_own_function(tmp_path: Path) -> None:
+    # One function taking `FlowController` as an injected dependency must not
+    # hide a genuine construction in a different function of the same module.
+    (tmp_path / "web").mkdir()
+    (tmp_path / "web" / "mixed.py").write_text(
+        "from x import FlowController\n"
+        "def injected(FlowController):\n"
+        "    return FlowController()\n"
+        "def constructs():\n"
+        "    return FlowController(definition=1, db_path=2, artifacts_root=3)\n"
+    )
+
+    violations, errors = checker.find_violations(tmp_path)
+
+    assert errors == []
+    assert [(v.symbol, v.line) for v in violations] == [("FlowController", 5)]
+
+
+def test_unparseable_file_fails_the_check(tmp_path: Path) -> None:
+    # A file the checker cannot read is not a passing file.
     (tmp_path / "broken.py").write_text("def (:\n")
 
-    checker.find_violations(tmp_path)
+    violations, errors = checker.find_violations(tmp_path)
 
-    assert "could not parse" in capsys.readouterr().err
+    assert violations == []
+    assert len(errors) == 1 and "could not read or parse" in errors[0]
+    assert checker.main(["--root", str(tmp_path)]) == 1
 
 
 @pytest.mark.parametrize("missing", ["nonexistent-root"])

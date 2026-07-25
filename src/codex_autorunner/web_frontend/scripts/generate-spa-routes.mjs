@@ -24,7 +24,7 @@
 // worktree-scope validation, "nest tolerant" catch-alls, etc.) — that policy
 // lives in app.py and is intentionally NOT derived from this manifest.
 
-import { mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -135,7 +135,12 @@ function main() {
   };
 
   mkdirSync(OUTPUT_DIR, { recursive: true });
-  writeFileSync(OUTPUT_PATH, `${JSON.stringify(manifest, null, 2)}\n`, 'utf-8');
+  // Write atomically: a reader that catches a half-written file parses it as
+  // malformed and silently falls back to broad SPA coverage, so the window
+  // where the file exists but is incomplete must not exist.
+  const tmpPath = `${OUTPUT_PATH}.tmp`;
+  writeFileSync(tmpPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf-8');
+  renameSync(tmpPath, OUTPUT_PATH);
   console.log(
     `Wrote ${manifest.routes.length} SPA route templates to ${relative(FRONTEND_ROOT, OUTPUT_PATH)}`
   );

@@ -85,28 +85,48 @@ def _called_name(node: ast.Call) -> str | None:
     return None
 
 
-def _locally_bound(tree: ast.Module) -> set[str]:
-    """Names bound as parameters or import aliases in this module.
-
-    A function that *receives* ``archive_flow_run_artifacts`` as an injected
-    dependency is following the rule, not breaking it, so calls through such a
-    name must not be flagged.
-    """
+def _module_aliases(tree: ast.Module) -> set[str]:
+    """Import aliases bound in this module (``import x as y``)."""
     bound: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            args = node.args
-            for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs):
-                bound.add(arg.arg)
-            if args.vararg:
-                bound.add(args.vararg.arg)
-            if args.kwarg:
-                bound.add(args.kwarg.arg)
-        elif isinstance(node, ast.ImportFrom):
+        if isinstance(node, ast.ImportFrom):
             for alias in node.names:
                 if alias.asname:
                     bound.add(alias.asname)
     return bound
+
+
+def _shadowed_calls(tree: ast.Module) -> set[int]:
+    """Line numbers of calls made through a name bound by the enclosing function.
+
+    A function that *receives* ``archive_flow_run_artifacts`` as an injected
+    dependency is following the rule, not breaking it, so calls through such a
+    parameter must not be flagged.
+
+    Scoping matters here: collecting parameter names module-wide would let one
+    unrelated function's parameter suppress a genuine violation in a different
+    function of the same file.
+    """
+    shadowed: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        args = node.args
+        params = {arg.arg for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs)}
+        if args.vararg:
+            params.add(args.vararg.arg)
+        if args.kwarg:
+            params.add(args.kwarg.arg)
+        if not params:
+            continue
+        for inner in ast.walk(node):
+            if (
+                isinstance(inner, ast.Call)
+                and isinstance(inner.func, ast.Name)
+                and inner.func.id in params
+            ):
+                shadowed.add(inner.lineno)
+    return shadowed
 
 
 def _scope_matches(path: Path, prefix: str, root: Path) -> bool:
@@ -126,28 +146,37 @@ def iter_surface_files(root: Path) -> Iterable[Path]:
         yield path
 
 
-def find_violations(root: Path = SURFACES_ROOT) -> list[Violation]:
+def find_violations(root: Path = SURFACES_ROOT) -> tuple[list[Violation], list[str]]:
+    """Return (violations, unreadable-file errors).
+
+    A file this check cannot read or parse is an *error*, not a pass: silently
+    skipping it is how a guardrail reports success over code it never looked at.
+    """
     violations: list[Violation] = []
+    errors: list[str] = []
     for path in iter_surface_files(root):
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except (OSError, SyntaxError) as exc:
-            print(f"warning: could not parse {path}: {exc}", file=sys.stderr)
+            errors.append(f"{path}: could not read or parse ({exc})")
             continue
 
-        shadowed = _locally_bound(tree)
+        aliases = _module_aliases(tree)
+        shadowed_lines = _shadowed_calls(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             name = _called_name(node)
             if name is None or name not in BANNED_CALLS:
                 continue
-            if isinstance(node.func, ast.Name) and name in shadowed:
+            if isinstance(node.func, ast.Name) and (
+                node.lineno in shadowed_lines or name in aliases
+            ):
                 continue
             if not _scope_matches(path, BANNED_CALLS[name], root):
                 continue
             violations.append(Violation(path=path, line=node.lineno, symbol=name))
-    return violations
+    return violations, errors
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -164,7 +193,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"error: surfaces root not found: {args.root}", file=sys.stderr)
         return 2
 
-    violations = find_violations(args.root)
+    violations, errors = find_violations(args.root)
+
+    if errors:
+        print("Flow lifecycle ownership could not inspect:\n", file=sys.stderr)
+        for error in errors:
+            print(f"  {error}", file=sys.stderr)
+        print(
+            "\nA file this check cannot parse is not a passing file. Fix the "
+            "syntax or the permissions.",
+            file=sys.stderr,
+        )
+        return 1
+
     if not violations:
         print("Flow lifecycle ownership: OK (no surface owns flow lifecycle state)")
         return 0

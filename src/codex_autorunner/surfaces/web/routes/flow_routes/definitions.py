@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
 if TYPE_CHECKING:
-    from ....core.flows import FlowController, FlowDefinition, FlowRunRecord
-    from ....flows.controller_provider import FlowControllerProvider
+    from .....core.flows import FlowController, FlowDefinition, FlowRunRecord
+    from .....flows.controller_provider import FlowControllerProvider
     from . import FlowRoutesState
 
 _logger = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ def _flow_run_record_payload(record: "FlowRunRecord") -> dict[str, Any]:
 def build_flow_definition(
     repo_root: Path, flow_type: str, state: "FlowRoutesState"
 ) -> FlowDefinition:
-    from ....core.flows import FlowDefinition
+    from .....core.flows import FlowDefinition
 
     repo_root = repo_root.resolve()
     key = (repo_root, flow_type)
@@ -47,12 +47,12 @@ def build_flow_definition(
         if cached_definition is not None:
             return cached_definition
 
-    from ....adapters.agents.build_agent_pool import build_agent_pool
-    from ....core.config import load_repo_config
-    from ....core.runtime import RuntimeContext
-    from ....core.state import load_state
-    from ....flows.ticket_flow import build_ticket_flow_definition
-    from ....tickets import DEFAULT_MAX_TOTAL_TURNS
+    from .....adapters.agents.build_agent_pool import build_agent_pool
+    from .....core.config import load_repo_config
+    from .....core.runtime import RuntimeContext
+    from .....core.state import load_state
+    from .....flows.ticket_flow import build_ticket_flow_definition
+    from .....tickets import DEFAULT_MAX_TOTAL_TURNS
 
     if flow_type == "ticket_flow":
         config = load_repo_config(repo_root)
@@ -81,6 +81,11 @@ def build_flow_definition(
 
         raise HTTPException(status_code=404, detail=f"Unknown flow type: {flow_type}")
 
+    # Validate before caching. This module and routes/flows.py used to build
+    # definitions separately and only the latter validated, so which of the two
+    # lazily-constructed providers won a race decided whether definitions were
+    # validated at all. There is now one builder, and it always validates.
+    definition.validate()
     with state.lock:
         state.definition_cache[key] = definition
     return definition
@@ -93,7 +98,7 @@ def controller_provider_for(state: "FlowRoutesState") -> "FlowControllerProvider
     than on FlowRoutesState. Racing constructions are harmless: every provider
     shares the same cache mapping and lock.
     """
-    from ....flows.controller_provider import FlowControllerProvider
+    from .....flows.controller_provider import FlowControllerProvider
     from ...services import flow_store as flow_store_service
 
     existing = state.controller_provider

@@ -14,7 +14,6 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from ....adapters.agents.build_agent_pool import build_agent_pool
 from ....adapters.chat.surface_action_manifest import (
     SurfaceActionManifestContext,
     build_surface_action_manifest,
@@ -22,7 +21,6 @@ from ....adapters.chat.surface_action_manifest import (
 from ....adapters.github.service import GitHubError, GitHubService
 from ....agents.hermes_identity import canonicalize_hermes_identity
 from ....core.apps import resolve_registered_app_artifact_path
-from ....core.config import load_repo_config
 from ....core.config_contract import ConfigError
 from ....core.file_chat_keys import (
     ticket_chat_scope,
@@ -64,7 +62,6 @@ from ....core.flows.worker_process import (
     write_worker_exit_info,
 )
 from ....core.orchestration import build_ticket_flow_orchestration_service
-from ....core.runtime import RuntimeContext
 from ....core.state import load_state
 from ....core.ticket_flow_operator import (
     resolve_run_reuse_policy,
@@ -78,12 +75,10 @@ from ....flows.controller_provider import (
     FlowControllerProvider,
     FlowControllerUnavailable,
 )
-from ....flows.ticket_flow import build_ticket_flow_definition
 from ....flows.ticket_flow.runtime_helpers import (
     normalize_ticket_flow_input_data,
     seed_bootstrap_ticket_if_needed,
 )
-from ....tickets import DEFAULT_MAX_TOTAL_TURNS
 from ....tickets.bulk import (
     bulk_clear_model_pin,
     bulk_set_agent,
@@ -114,6 +109,7 @@ from ..schemas import (
 )
 from ..services import flow_store as flow_store_service
 from .flow_routes import FlowRoutesState
+from .flow_routes import definitions as _definitions
 from .flow_routes.dependencies import build_default_flow_route_dependencies
 from .flow_routes.runtime_service import (
     recover_flow_store_if_possible,
@@ -249,73 +245,23 @@ def _safe_list_flow_runs(
 def _build_flow_definition(
     repo_root: Path, flow_type: str, state: FlowRoutesState
 ) -> FlowDefinition:
-    repo_root = repo_root.resolve()
-    key = (repo_root, flow_type)
-    with state.lock:
-        cached_definition = cast(
-            Optional[FlowDefinition], state.definition_cache.get(key)
-        )
-        if cached_definition is not None:
-            return cached_definition
+    """Build (and cache) a flow definition.
 
-    if flow_type == "ticket_flow":
-        config = load_repo_config(repo_root)
-        engine = RuntimeContext(
-            repo_root=repo_root,
-            config=config,
-        )
-        agent_pool = build_agent_pool(engine.config)
-        definition = build_ticket_flow_definition(
-            agent_pool=agent_pool,
-            auto_commit_default=engine.config.git_auto_commit,
-            require_commit_default=load_state(
-                engine.state_path
-            ).ticket_flow_require_commit,
-            include_previous_ticket_context_default=(
-                engine.config.ticket_flow.include_previous_ticket_context
-            ),
-            max_total_turns_default=(
-                engine.config.ticket_flow.max_total_turns
-                if engine.config.ticket_flow.max_total_turns is not None
-                else DEFAULT_MAX_TOTAL_TURNS
-            ),
-        )
-    else:
-        raise HTTPException(status_code=404, detail=f"Unknown flow type: {flow_type}")
-
-    definition.validate()
-    with state.lock:
-        state.definition_cache[key] = definition
-    return definition
+    Delegates to flow_routes.definitions, which is the single builder. This
+    module used to carry a near-identical copy that differed only in validating
+    before caching; the copies have been collapsed onto the validating one.
+    """
+    return _definitions.build_flow_definition(repo_root, flow_type, state)
 
 
 def _controller_provider_for(state: FlowRoutesState) -> FlowControllerProvider:
-    """Return this app's controller provider, creating it on first use.
+    """Return this app's controller provider.
 
-    Bound to the state's existing cache and lock so that other call sites which
-    address ``state.controller_cache`` directly (definition builders, explicit
-    eviction) continue to see the same controllers.
+    Delegates so there is exactly one lazy constructor bound to a given state:
+    two constructors meant the race winner's definition factory was the one all
+    later callers used.
     """
-    provider = state.controller_provider
-    if isinstance(provider, FlowControllerProvider):
-        return provider
-    built = FlowControllerProvider(
-        definition_factory=lambda root, flow_type: _build_flow_definition(
-            root, flow_type, state
-        ),
-        paths_factory=_flow_paths,
-        cache=state.controller_cache,
-        lock=state.lock,
-    )
-    # Constructing a second provider is harmless (both share the same cache and
-    # lock), so a brief guarded swap is enough; holding state.lock across
-    # construction would deadlock against the definition factory.
-    with state.lock:
-        existing = state.controller_provider
-        if isinstance(existing, FlowControllerProvider):
-            return existing
-        state.controller_provider = built
-    return built
+    return _definitions.controller_provider_for(state)
 
 
 def _get_flow_controller(
