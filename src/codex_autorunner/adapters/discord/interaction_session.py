@@ -90,7 +90,8 @@ class DiscordInteractionSession:
             InteractionInitialResponse.DEFER_EPHEMERAL,
             InteractionInitialResponse.DEFER_COMPONENT_UPDATE,
         }:
-            return self.initial_response.value
+            # Enum.value is typed Any; this enum's members are all str literals.
+            return str(self.initial_response.value)
         return None
 
     def _max_message_length(self) -> int:

@@ -429,6 +429,69 @@ def test_parity_checker_skips_when_source_files_are_unavailable(monkeypatch) -> 
     results = run_parity_checks(repo_root=None)
     assert all(result.passed for result in results)
     assert all(result.metadata.get("skipped") is True for result in results)
+    assert all(result.skipped for result in results)
+
+
+def _registry_check(
+    *,
+    telegram_source: str | None,
+    discord_source: str | None = "",
+) -> parity_checker.ParityCheckResult:
+    """Drive the registry check with controlled sources.
+
+    ``None`` means the file is absent from disk; a string means it is present
+    with those contents.
+    """
+
+    def _tree(source: str | None) -> "object | None":
+        return parity_checker._parse_module(source if source is not None else "")
+
+    return parity_checker._check_contract_registry_entries_cataloged(
+        contract=(),
+        discord_commands_ast=_tree(discord_source),
+        discord_interaction_registry_ast=_tree(discord_source),
+        telegram_commands_spec_ast=_tree(telegram_source),
+        source_available={
+            "discord_commands": discord_source is not None,
+            "discord_interaction_registry": discord_source is not None,
+            "telegram_commands_spec": telegram_source is not None,
+        },
+    )
+
+
+def test_registry_check_fails_when_present_source_is_uninspectable() -> None:
+    # The registry is on disk and perfectly valid Python, but builds its dict
+    # incrementally instead of returning a literal. The extractor cannot read
+    # it, so the check must fail rather than report parity it never verified.
+    result = _registry_check(
+        telegram_source=(
+            "def build_command_specs():\n"
+            "    specs = {}\n"
+            "    for name in ('start', 'status'):\n"
+            "        specs[name] = object()\n"
+            "    return specs\n"
+        ),
+    )
+    assert not result.passed
+    assert not result.skipped
+    assert result.metadata["reason"] == "registry_sources_uninspectable"
+    assert "telegram.commands_spec" in result.metadata["uninspectable_sources"]
+
+
+def test_registry_check_fails_when_builder_is_renamed() -> None:
+    result = _registry_check(
+        telegram_source="def build_specs():\n    return {'start': object()}\n",
+    )
+    assert not result.passed
+    assert result.metadata["reason"] == "registry_sources_uninspectable"
+
+
+def test_registry_check_skips_when_source_is_absent() -> None:
+    # No checkout on disk: nothing to inspect, and nothing wrong with the code.
+    result = _registry_check(telegram_source=None, discord_source=None)
+    assert result.passed
+    assert result.skipped
+    assert result.metadata["reason"] == "registry_sources_unavailable"
 
 
 def _write_fixture_repo(

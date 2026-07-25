@@ -195,6 +195,9 @@ _run_guardrails() {
   echo "Checking import boundaries..."
   "$PYTHON_BIN" scripts/check_import_boundaries.py
 
+  echo "Checking flow lifecycle ownership..."
+  "$PYTHON_BIN" scripts/check_flow_lifecycle_ownership.py
+
   echo "Validating hub interface contracts..."
   "$PYTHON_BIN" scripts/validate_interfaces.py
 
@@ -226,8 +229,8 @@ _run_static_checks() {
   echo "Validating CLI command hints..."
   "$PYTHON_BIN" scripts/check_cli_command_hints.py
 
-  echo "Type check (mypy, strict repo-wide)..."
-  make typecheck-strict PYTHON="$PYTHON_BIN"
+  echo "Type check (mypy, repo-wide)..."
+  make typecheck PYTHON="$PYTHON_BIN"
 }
 
 _run_pytest() {

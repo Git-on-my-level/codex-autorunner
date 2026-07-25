@@ -11,7 +11,7 @@ Notes for running codex-autorunner inside containerized or cloud-provisioned VMs
 | Python tests | `make test` or `.venv/bin/python -m pytest -m "not integration"` | Serial by default; use `-n auto` for xdist parallelism |
 | Lane-aware checks | `./scripts/check.sh` (auto-detect) or `./scripts/check.sh --lane <lane>` | Lanes: `core`, `web-ui`, `web-core-contract`, `chat-apps`, `aggregate` (full) |
 | Full validation | `./scripts/check.sh --full` or `make check-full` | Runs all lanes plus extended checks |
-| Linting | `black --check src tests`, `ruff check src tests`, `make typecheck-strict` | Individual linters for targeted runs |
+| Linting | `black --check src tests`, `ruff check src tests`, `make typecheck` | Individual linters for targeted runs |
 | Web Hub build | `pnpm run build` or `make build` | Builds the default Svelte UI in `src/codex_autorunner/web_frontend/` → ignored `src/codex_autorunner/web_static/`; always rebuild before packaging or static-mode smoke tests |
 
 ## Startup caveats
@@ -26,7 +26,7 @@ Notes for running codex-autorunner inside containerized or cloud-provisioned VMs
 - **Tests are hermetic**: Tests use isolated temp directories (via fixtures and `tmp_path`). A guard script (`scripts/check_test_tmp_usage.py`) runs as part of the standard check flow and blocks new non-hermetic `/tmp` writable patterns in tests. Known read-only exceptions are allowlisted in `scripts/test_tmp_usage_allowlist.json`.
 - **No external services required**: SQLite is embedded (stdlib); no Postgres/Redis/Docker needed for core dev workflows.
 - **Pre-commit subset**: The pre-commit hook (`scripts/check.sh`) runs `pytest -m "not integration and not slow"` with lane-aware scoping. Use the same marker set when iterating locally to match pre-commit behavior.
-- **Individual lint commands**: `black --check src tests`, `ruff check src tests`, `pnpm lint`, `make typecheck-strict`. The full suite is `make check`.
+- **Individual lint commands**: `black --check src tests`, `ruff check src tests`, `pnpm lint`, `make typecheck`. The full suite is `make check`.
 
 ## Optional Docker Profile Probe
 
