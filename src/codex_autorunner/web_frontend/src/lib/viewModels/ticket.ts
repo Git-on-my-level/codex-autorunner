@@ -77,6 +77,8 @@ export type TicketListRow = {
   diffStats: TicketSummary['diffStats'];
   durationLabel: string | null;
   bodyPreview: string | null;
+  /** Whitespace-collapsed raw body for list search (includes fenced code). */
+  bodySearchText: string;
   status: WorkStatus;
   currentRunState: WorkStatus | null;
   currentRunId: string | null;
@@ -763,6 +765,7 @@ function ticketToListRow(ticket: TicketSummary, source: TicketSourceData, lookup
     diffStats: ticket.diffStats,
     durationLabel: formatDuration(ticket.durationSeconds),
     bodyPreview: bodyPreview(ticket),
+    bodySearchText: bodySearchText(ticket),
     status: ticket.status,
     currentRunState: run?.status ?? chat?.status ?? null,
     currentRunId: run?.id ?? null,
@@ -940,6 +943,10 @@ function formatDuration(seconds: number | null): string | null {
 
 function bodyPreview(ticket: TicketSummary): string | null {
   return markdownPreview(bodyFromTicketSummary(ticket), 120) || null;
+}
+
+function bodySearchText(ticket: TicketSummary): string {
+  return bodyFromTicketSummary(ticket).replace(/\s+/g, ' ').trim();
 }
 
 function buildWorkspaceFilters(rows: TicketListRow[]): { id: string; label: string; count: number }[] {

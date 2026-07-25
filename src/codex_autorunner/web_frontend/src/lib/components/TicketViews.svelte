@@ -88,7 +88,7 @@
       const haystack = [
         row.title,
         row.numberLabel,
-        row.bodyPreview ?? '',
+        row.bodySearchText,
         row.agentLabel,
         row.modelLabel ?? '',
         row.repoLabel ?? '',
