@@ -1,11 +1,14 @@
+import json
+import logging
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Optional
+from typing import Callable, Optional
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.middleware.gzip import GZipMiddleware
+from starlette.routing import Route
 from starlette.types import ASGIApp
 
 from ...core.config_validation import is_loopback_host
@@ -58,6 +61,143 @@ from .static_assets import (
 )
 
 __all__ = ["create_hub_app", "create_repo_app"]
+
+logger = logging.getLogger(__name__)
+
+# --- Web Hub SPA shell (deep links / refresh) --------------------------------
+# SvelteKit owns URL -> screen after the client loads. A full document request
+# (refresh / open-in-new-tab) for any path the client router can render must
+# get the same index.html, or the browser gets FastAPI's JSON 404 and the tab
+# looks blank. `src/codex_autorunner/web_frontend/scripts/generate-spa-routes.mjs`
+# walks `web_frontend/src/routes/**/+page.svelte` at build time (SvelteKit's
+# own source of truth for URL shapes) and writes `spa_routes.json` into
+# `web_static/` (the directory that actually ships in the Python package).
+# `_register_spa_shell_routes` below reads that manifest at app-construction
+# time instead of hand-mirroring the route list here. Adding/removing a
+# SvelteKit page no longer requires touching this file.
+#
+# The manifest is a faithful, complete mirror of `src/routes/` and encodes no
+# hub-side policy. Two small policy decisions stay hand-maintained here
+# (deliberately NOT derived from the manifest, since neither is inferable from
+# filesystem shape alone):
+#   - `_NEST_TOLERANT_SPA_SEGMENTS`: top-level sections that tolerate
+#     arbitrary nested paths beyond what any single +page.svelte declares.
+#   - Worktree-scoped paths (containing a literal "worktrees" segment): these
+#     need parent-scope validation or a legacy redirect, not a blanket shell
+#     response, so they stay bespoke routes further down in `create_hub_app`.
+_SPA_ROUTE_MANIFEST_FILENAME = "spa_routes.json"
+
+_NEST_TOLERANT_SPA_SEGMENTS: tuple[str, ...] = (
+    "chats",
+    "services",
+    "automations",
+    "settings",
+)
+
+_WORKTREE_SEGMENT = "worktrees"
+
+
+def _spa_route_manifest_path(web_static_dir: Path) -> Path:
+    return web_static_dir / _SPA_ROUTE_MANIFEST_FILENAME
+
+
+def _load_spa_route_manifest(web_static_dir: Path) -> Optional[list[str]]:
+    """Load the build-emitted SPA route manifest.
+
+    Returns None if the manifest is absent, unreadable, or malformed (older or
+    partial builds) so callers can fall back gracefully instead of failing
+    app construction.
+    """
+    manifest_path = _spa_route_manifest_path(web_static_dir)
+    try:
+        raw = manifest_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        logger.warning(
+            "Web Hub SPA route manifest at %s is not valid JSON; ignoring it.",
+            manifest_path,
+        )
+        return None
+    routes = data.get("routes") if isinstance(data, dict) else None
+    if not isinstance(routes, list) or not all(
+        isinstance(item, str) for item in routes
+    ):
+        logger.warning(
+            "Web Hub SPA route manifest at %s has an unexpected shape; ignoring it.",
+            manifest_path,
+        )
+        return None
+    return routes
+
+
+def _is_worktree_scoped_path(path: str) -> bool:
+    return _WORKTREE_SEGMENT in path.strip("/").split("/")
+
+
+def _is_catch_all_template(path: str) -> bool:
+    last_segment = path.rsplit("/", 1)[-1]
+    return last_segment.startswith("{") and last_segment.endswith(":path}")
+
+
+def _spa_shell_route_templates(manifest_routes: Optional[list[str]]) -> list[str]:
+    """Resolve the Starlette path templates that should serve the SPA shell."""
+    templates: set[str] = set()
+
+    if manifest_routes is None:
+        logger.warning(
+            "Web Hub SPA route manifest missing; falling back to broad SPA "
+            "shell coverage. Run `pnpm web:build` to regenerate `%s`.",
+            _SPA_ROUTE_MANIFEST_FILENAME,
+        )
+        # Without precise route data, prefer serving the shell too broadly
+        # (a screen that can at least load and refresh itself) over FastAPI's
+        # bare JSON 404 (a blank tab) for the structured sections the
+        # manifest would otherwise cover precisely.
+        for segment in ("repos", "tickets", "contextspace"):
+            templates.add(f"/{segment}")
+            templates.add(f"/{segment}/{{rest:path}}")
+    else:
+        for path in manifest_routes:
+            if _is_worktree_scoped_path(path):
+                continue
+            top_segment = path.strip("/").split("/", 1)[0]
+            if top_segment in _NEST_TOLERANT_SPA_SEGMENTS:
+                continue
+            templates.add(path)
+            if not _is_catch_all_template(path):
+                templates.add(f"{path}/")
+
+    for segment in _NEST_TOLERANT_SPA_SEGMENTS:
+        templates.add(f"/{segment}")
+        templates.add(f"/{segment}/{{rest:path}}")
+
+    templates.add("/hub")
+    return sorted(templates)
+
+
+def _register_spa_shell_routes(
+    app: FastAPI,
+    web_static_dir: Path,
+    index_response: Callable[[], HTMLResponse],
+) -> None:
+    manifest_routes = _load_spa_route_manifest(web_static_dir)
+    templates = _spa_shell_route_templates(manifest_routes)
+
+    def _spa_shell_endpoint(request):  # noqa: ARG001 - static shell; path params unused
+        return index_response()
+
+    for template in templates:
+        app.router.routes.append(
+            Route(
+                template,
+                endpoint=_spa_shell_endpoint,
+                methods=["GET"],
+                include_in_schema=False,
+            )
+        )
 
 
 def create_hub_app(
@@ -214,9 +354,12 @@ def create_hub_app(
     # --- Web Hub SPA shell (deep links / refresh) ---
     # SvelteKit owns URL→screen after load. The hub must return the same index.html
     # for any refreshable path the frontend can emit, or the browser gets FastAPI's
-    # JSON 404. Add a hub GET that maps to _web_index_response() when you introduce a
-    # new client-only subtree under src/codex_autorunner/web_frontend/src/routes/.
-    # Prefer a "{rest:path}" catch-all per top-level segment when that subtree can nest.
+    # JSON 404. The shell routes for filesystem-derived paths (repos/**, tickets/**,
+    # hub, contextspace/**) and the "nest tolerant" sections (chats, services,
+    # automations, settings) are registered from the build-time route manifest by
+    # `_register_spa_shell_routes` below -- see that function's docstring and the
+    # module-level comment above it. Worktree-scoped paths keep bespoke handlers
+    # further down (parent-scope validation / legacy redirects).
     # See surfaces/web/AGENTS.md (section Web Hub SPA shell).
 
     @app.get("/", include_in_schema=False)
@@ -224,25 +367,7 @@ def create_hub_app(
         target = f"{context.base_path}/chats" if context.base_path else "/chats"
         return RedirectResponse(target, status_code=307)
 
-    @app.get("/chats", include_in_schema=False)
-    @app.get("/chats/{rest:path}", include_in_schema=False)
-    @app.get("/repos", include_in_schema=False)
-    @app.get("/repos/{repo_id}", include_in_schema=False)
-    @app.get("/repos/{repo_id}/tickets", include_in_schema=False)
-    @app.get("/repos/{repo_id}/tickets/", include_in_schema=False)
-    @app.get("/repos/{repo_id}/tickets/{ticket_id}", include_in_schema=False)
-    @app.get("/repos/{repo_id}/tickets/{ticket_id}/", include_in_schema=False)
-    @app.get("/tickets", include_in_schema=False)
-    @app.get("/tickets/{ticket_id}", include_in_schema=False)
-    @app.get("/services", include_in_schema=False)
-    @app.get("/services/{rest:path}", include_in_schema=False)
-    @app.get("/automations", include_in_schema=False)
-    @app.get("/automations/{rest:path}", include_in_schema=False)
-    @app.get("/settings", include_in_schema=False)
-    @app.get("/settings/{rest:path}", include_in_schema=False)
-    @app.get("/hub", include_in_schema=False)
-    def web_hub_index(rest: Optional[str] = None):
-        return _web_index_response()
+    _register_spa_shell_routes(app, web_static_dir, _web_index_response)
 
     def _resolve_worktree_parent_repo_id(worktree_id: str) -> str:
         for snapshot in context.supervisor.list_repos():
@@ -299,10 +424,6 @@ def create_hub_app(
         parent_repo_id = _resolve_worktree_parent_repo_id(worktree_id)
         return _legacy_spa_redirect(f"/repos/{parent_repo_id}/worktrees/{worktree_id}")
 
-    @app.get("/contextspace/{workspace_id}", include_in_schema=False)
-    def pma_contextspace_shell(workspace_id: str):
-        return _web_index_response()
-
     @app.get("/repos/{repo_id}/terminal", include_in_schema=False)
     @app.get("/repos/{repo_id}/terminal/{rest:path}", include_in_schema=False)
     def legacy_repo_terminal_redirect(repo_id: str, rest: Optional[str] = None):
@@ -311,20 +432,12 @@ def create_hub_app(
         loc = f"{context.base_path}{target}" if context.base_path else target
         return RedirectResponse(loc, status_code=307)
 
-    @app.get("/repos/{repo_id}/contextspace", include_in_schema=False)
-    def pma_repo_contextspace_shell(repo_id: str):
-        return _web_index_response()
-
     @app.get(
         "/repos/{repo_id}/worktrees/{worktree_id}/contextspace",
         include_in_schema=False,
     )
     def pma_worktree_contextspace_shell(repo_id: str, worktree_id: str):
         _require_worktree_scope(repo_id, worktree_id)
-        return _web_index_response()
-
-    @app.get("/repos/{repo_id}/", include_in_schema=False)
-    def pma_repo_index_slash(repo_id: str):
         return _web_index_response()
 
     @app.get("/repos/{repo_id}/worktrees/{worktree_id}", include_in_schema=False)
