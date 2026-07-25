@@ -3,7 +3,7 @@ from __future__ import annotations
 import enum
 import logging
 from collections import OrderedDict
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from .components import DISCORD_SELECT_OPTION_MAX_OPTIONS
 from .errors import DiscordAPIError, is_unknown_interaction_error
@@ -90,8 +90,7 @@ class DiscordInteractionSession:
             InteractionInitialResponse.DEFER_EPHEMERAL,
             InteractionInitialResponse.DEFER_COMPONENT_UPDATE,
         }:
-            # Enum.value is typed Any; this enum's members are all str literals.
-            return str(self.initial_response.value)
+            return cast(str, self.initial_response.value)
         return None
 
     def _max_message_length(self) -> int:

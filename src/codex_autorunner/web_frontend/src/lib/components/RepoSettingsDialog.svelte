@@ -127,7 +127,7 @@
     margin: 0;
   }
   textarea {
-    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-family: var(--font-mono);
     font-size: 0.9rem;
     resize: vertical;
     min-height: 6em;

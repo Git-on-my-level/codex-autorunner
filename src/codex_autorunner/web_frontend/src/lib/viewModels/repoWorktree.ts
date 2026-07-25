@@ -1,5 +1,6 @@
 import { mapSurfaceArtifact } from './domain';
 import { renderMarkdownToHtml } from './markdown';
+import { markdownPreview } from './plainText';
 import type {
   GitStatusSummary,
   ChatSummary,
@@ -1169,9 +1170,7 @@ function formatDuration(seconds: number | null): string | null {
 function bodyPreview(ticket: TicketSummary): string | null {
   const rawBody = ticket.raw.body ?? ticket.raw.content ?? ticket.raw.markdown;
   if (typeof rawBody !== 'string') return null;
-  const body = rawBody.replace(/\s+/g, ' ').trim();
-  if (!body) return null;
-  return body.length > 110 ? `${body.slice(0, 107)}...` : body;
+  return markdownPreview(rawBody, 110) || null;
 }
 
 function artifactToRow(artifact: SurfaceArtifact): RepoWorktreeArtifactRow {

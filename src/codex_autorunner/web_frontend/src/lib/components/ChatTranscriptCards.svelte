@@ -9,6 +9,7 @@
     type ChatToolCallCard
   } from '$lib/viewModels/chat';
   import { collapseRepeatedParagraphs } from '$lib/viewModels/traceText';
+  import { markdownPreview } from '$lib/viewModels/plainText';
   import type { MessageCapsuleRef } from '$lib/viewModels/domain';
   import type { ArtifactDelivery, SurfaceArtifact } from '$lib/viewModels/domain';
 
@@ -140,23 +141,10 @@
   }
 
   // Collapsed disclosure summaries should read as a calm one-line teaser, not a
-  // wall of raw markdown (`**bold**`, backticks, headings). Strip the syntax so
-  // the rendered body — not the summary — carries the formatting.
+  // wall of raw markdown (`**bold**`, backticks, headings). Shared with the
+  // ticket and repo list previews, which had the same problem.
   function plainTextPreview(value: string | null | undefined, max = 80): string {
-    if (!value) return '';
-    const stripped = value
-      .replace(/```[\s\S]*?```/g, ' ')
-      .replace(/`([^`]+)`/g, '$1')
-      .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
-      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-      .replace(/[*_~]{1,3}([^*_~]+)[*_~]{1,3}/g, '$1')
-      .replace(/^#{1,6}\s+/gm, '')
-      .replace(/^\s*[-*+]\s+/gm, '')
-      .replace(/^\s*>\s?/gm, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    if (!stripped) return '';
-    return stripped.length > max ? `${stripped.slice(0, max).trimEnd()}…` : stripped;
+    return markdownPreview(value, max);
   }
 
   function traceSummaryLabel(card: Extract<ChatTranscriptCard, { kind: 'intermediate' }>): string {

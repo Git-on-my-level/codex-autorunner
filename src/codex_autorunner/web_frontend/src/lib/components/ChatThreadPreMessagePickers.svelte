@@ -171,7 +171,7 @@
   }
 
   .scope-locked-value {
-    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: var(--font-size-1);
     color: var(--color-ink);
     overflow: hidden;

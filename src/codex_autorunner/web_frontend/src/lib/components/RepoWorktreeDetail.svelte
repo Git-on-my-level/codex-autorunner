@@ -310,10 +310,13 @@
             aria-label="Ticket flow — view all tickets"
             data-sveltekit-preload-data="tap"
           >
-            <div class="kanban-col kanban-queued"><span>Queued</span><strong>{ticketKanban.queued}</strong></div>
-            <div class="kanban-col kanban-active"><span>Active</span><strong>{ticketKanban.active}</strong></div>
-            <div class="kanban-col kanban-failed"><span>Needs fix</span><strong>{ticketKanban.failed}</strong></div>
-            <div class="kanban-col kanban-done"><span>Done</span><strong>{ticketKanban.done}<em>/{ticketKanban.total}</em></strong></div>
+            <!-- `is-zero` mutes the semantic tint. A green "0 active" reads as
+                 success and a red "0 needs fix" reads as alarm, when both mean
+                 "nothing here". Colour is reserved for counts that matter. -->
+            <div class="kanban-col kanban-queued" class:is-zero={ticketKanban.queued === 0}><span>Queued</span><strong>{ticketKanban.queued}</strong></div>
+            <div class="kanban-col kanban-active" class:is-zero={ticketKanban.active === 0}><span>Active</span><strong>{ticketKanban.active}</strong></div>
+            <div class="kanban-col kanban-failed" class:is-zero={ticketKanban.failed === 0}><span>Needs fix</span><strong>{ticketKanban.failed}</strong></div>
+            <div class="kanban-col kanban-done" class:is-zero={ticketKanban.done === 0}><span>Done</span><strong>{ticketKanban.done}<em>/{ticketKanban.total}</em></strong></div>
           </a>
         {/if}
         <div class="workspace-ticket-list">
@@ -346,12 +349,15 @@
       <!-- chatsSection snippet is rendered above via {@render chatsSection()} -->
       {#snippet chatsSection()}
       <section class="page-panel execution-panel wide">
+        <!-- A heading that is also a link, differentiated only by a trailing
+             arrow, gives the user no way to tell which text on the row is
+             clickable. Heading + ghost button is the pattern the rest of the
+             page (Contextspace, Repo tickets) already uses. -->
         <div class="panel-heading-row chats-panel-heading">
-          <h2 class="panel-heading-link-host">
-            <a class="panel-heading-link" href={href(detail.scopedChatListHref)} data-sveltekit-preload-data="tap">
-              Chats<span class="panel-heading-link-chevron" aria-hidden="true">→</span>
-            </a>
-          </h2>
+          <h2>Chats</h2>
+          <a class="ghost-button" href={href(detail.scopedChatListHref)} data-sveltekit-preload-data="tap">
+            Browse all
+          </a>
         </div>
         {#if detail.chatList.totalChatCount === 0}
           <div class="panel-empty-card" role="status">
@@ -585,7 +591,7 @@
         <section class="page-panel execution-panel wide contextspace-panel contextspace-empty-panel">
           <div class="panel-heading-row">
             <h2>Contextspace</h2>
-            <a class="ghost-button" href={href(detail.contextspaceHref)} data-sveltekit-preload-data="tap">Set up contextspace →</a>
+            <a class="ghost-button" href={href(detail.contextspaceHref)} data-sveltekit-preload-data="tap">Set up contextspace</a>
           </div>
         </section>
       {/if}

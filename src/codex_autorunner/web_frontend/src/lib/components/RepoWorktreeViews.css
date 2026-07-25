@@ -76,7 +76,7 @@
   /* Branch glyph in meta rows — decorative, ink-faint, mono nudge. */
   .branch-glyph {
     color: var(--color-ink-faint);
-    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: 11px;
     line-height: 1;
   }
@@ -475,7 +475,7 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: 11px;
     color: var(--color-ink-soft);
   }
@@ -1001,7 +1001,7 @@
   }
 
   .contextspace-row-kind {
-    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: 11px;
     color: var(--color-ink-soft);
     overflow: hidden;
@@ -1151,7 +1151,7 @@
   }
 
   .git-chip-diff {
-    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--font-mono);
   }
 
   .git-chip-ahead {
@@ -1215,7 +1215,7 @@
   }
 
   .contextspace-compact-name {
-    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: 11px;
     color: var(--color-ink-soft);
     white-space: nowrap;
@@ -1296,7 +1296,7 @@
   }
 
   .contextspace-spec-preview-body code {
-    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: 0.92em;
     padding: 1px 5px;
     border-radius: 4px;
@@ -1342,7 +1342,7 @@
     padding: 10px 14px;
     max-height: 220px;
     overflow: auto;
-    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: 12px;
     line-height: 1.5;
     color: var(--color-ink-soft);
@@ -1504,6 +1504,20 @@
   .kanban-failed strong { color: var(--color-danger); }
   .kanban-done { border-left-color: var(--color-ink-muted); }
 
+  /* A zero carries no signal, so it gets no signal colour: both the accent
+     rule and the numeral drop back to the neutral scale. */
+  .kanban-col.is-zero {
+    border-left-color: var(--color-border-subtle);
+  }
+
+  .kanban-col.is-zero strong {
+    color: var(--color-ink-faint);
+  }
+
+  .kanban-col.is-zero span {
+    color: var(--color-ink-faint);
+  }
+
   /* Status panel wrapper for relocated git status bar */
   .status-panel-section .git-status-bar {
     border: 0;
@@ -1518,17 +1532,20 @@
 
   /* Danger zone footer — quiet section, no panel chrome */
   .danger-zone-panel {
-    margin-top: var(--space-4);
-    padding-top: var(--space-3);
-    border-top: 1px dashed var(--color-border-subtle);
+    margin-top: var(--space-6);
+    padding-top: var(--space-5);
+    border-top: 1px solid var(--color-border-subtle);
   }
 
+  /* Sentence case, matching every other section heading on the page. A shouted
+     uppercase eyebrow was the loudest type on a page whose actual content is
+     quiet — and it made a two-button footer look like the main event. */
   .danger-zone-heading {
-    margin: 0 0 var(--space-2) 0;
-    font-size: var(--font-size-1);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    margin: 0 0 var(--space-3) 0;
+    font-size: var(--font-size-2);
+    font-weight: 620;
+    text-transform: none;
+    letter-spacing: -0.01em;
     color: var(--color-ink-muted);
   }
 

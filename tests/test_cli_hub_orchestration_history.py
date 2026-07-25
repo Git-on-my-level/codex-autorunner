@@ -21,6 +21,14 @@ from codex_autorunner.core.orchestration.sqlite import (
 runner = CliRunner()
 
 
+# The audit only flags a terminal execution as "missing a manifest" while it is
+# still inside the cold-trace retention window (90 days by default). A frozen
+# calendar date makes that a time bomb: this fixture used a literal 2026-04-12,
+# so the suite passed until that date aged out of the window and then began
+# failing on a day nobody changed anything. Anchor the fixture to "recently"
+# instead, and keep the deliberately-ancient cases as explicit literals.
+
+
 def _default_execution_times() -> tuple[str, str]:
     finished = datetime.now(timezone.utc) - timedelta(days=1)
     started = finished - timedelta(minutes=5)
