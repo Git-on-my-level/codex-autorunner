@@ -244,6 +244,25 @@ describe('ticket view models', () => {
     expect(filterTicketRows(vm.rows, 'open')).toHaveLength(1);
   });
 
+  it('keeps fenced code in bodySearchText while bodyPreview strips markdown', () => {
+    const vm = buildTicketListViewModel({
+      tickets: [
+        {
+          ...mockTicketSummary,
+          raw: {
+            body: '## Goal\n\n```\nsecret_token_xyz\n```\n'
+          }
+        }
+      ],
+      runs: [],
+      chats: [],
+      artifacts: []
+    });
+
+    expect(vm.rows[0].bodyPreview).toBe('Goal');
+    expect(vm.rows[0].bodySearchText).toContain('secret_token_xyz');
+  });
+
   it('parses ticket contract sections from markdown', () => {
     const sections = parseTicketContract(`Intro note
 

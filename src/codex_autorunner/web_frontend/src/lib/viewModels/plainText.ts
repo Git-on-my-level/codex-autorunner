@@ -8,14 +8,24 @@
  * the user cannot act on. Strip the syntax so the excerpt reads as a sentence;
  * the full body still renders as real markdown wherever it is displayed.
  */
+function stripMarkdownEmphasis(text: string): string {
+  return text
+    .replace(/\*\*\*(.+?)\*\*\*/g, '$1')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/~~(.+?)~~/g, '$1')
+    .replace(/(?<!\w)\*([^*\n]+?)\*(?!\w)/g, '$1')
+    .replace(/(?<!\w)(?<!_)_(?!_)([^_\n]+?)(?<!_)_(?!\w)(?!_)/g, '$1');
+}
+
 export function markdownToPlainText(value: string | null | undefined): string {
   if (!value) return '';
-  return value
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-    .replace(/[*_~]{1,3}([^*_~]+)[*_~]{1,3}/g, '$1')
+  return stripMarkdownEmphasis(
+    value
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+  )
     .replace(/^#{1,6}\s+/gm, '')
     .replace(/^\s*[-*+]\s+/gm, '')
     .replace(/^\s*>\s?/gm, '')

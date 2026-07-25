@@ -33,6 +33,13 @@ describe('markdownToPlainText', () => {
   it('collapses all whitespace to single spaces', () => {
     expect(markdownToPlainText('a\n\n\tb   c')).toBe('a b c');
   });
+
+  it('preserves underscores in identifiers and paths', () => {
+    expect(markdownToPlainText('Rename `foo_bar_baz` and touch __init__.py')).toBe(
+      'Rename foo_bar_baz and touch __init__.py'
+    );
+    expect(markdownToPlainText('file_name then **Ready**')).toBe('file_name then Ready');
+  });
 });
 
 describe('markdownPreview', () => {
