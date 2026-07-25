@@ -1,8 +1,17 @@
 :root {
   color-scheme: light;
+  /* Two families, two jobs.
+     --font-ui carries chrome and prose: nav, titles, message bodies, labels.
+     --font-mono carries machine text only: code, ids, branches, paths, counts.
+     Setting mono globally (the previous default) made every sentence in the app
+     read like terminal output and cost ~15% of the horizontal density that a
+     proportional face gives for free. */
+  --font-ui: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji",
+    "Segoe UI Emoji";
   --font-mono: "JetBrains Mono", "JetBrains Mono Variable", ui-monospace,
     SFMono-Regular, Menlo, Monaco, "Courier New", monospace;
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-feature-settings: "calt", "ss01";
   --color-bg: #f7f6f1;
   --color-surface: #ffffff;
@@ -50,8 +59,24 @@
   --font-size-4: 18px;
   --font-size-5: 22px;
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
   --transition-fast: 120ms var(--ease-out);
   --transition-base: 180ms var(--ease-out);
+  /* Reading measure. Pages are laid out in a centered column instead of
+     stretching a single 60-character row across a 1440px display. */
+  --measure-page: 1120px;
+  --measure-prose: 74ch;
+  /* Aliases for names that leaked into components before the core scale was
+     settled. They previously resolved to nothing, which silently dropped a
+     radius, a shadow, or a text color at the use site. */
+  --radius-sm: var(--radius-3);
+  --shadow-sm: var(--shadow-1);
+  --color-text: var(--color-ink);
+  --color-text-strong: var(--color-ink);
+  --color-text-muted: var(--color-ink-muted);
+  --color-accent-strong: var(--color-accent-hover);
+  --color-surface-raised: var(--color-surface);
+  --color-warning-ink: var(--color-warning);
   /* Surfaces that are not in the core scale (panels, scrims, mixed glyphs) */
   --color-panel-tint: #fbfcfe;
   --color-scrim: rgb(15 15 20 / 0.32);
@@ -94,6 +119,9 @@
   --shadow-2: 0 16px 40px -12px rgb(0 0 0 / 0.55), 0 8px 16px -8px rgb(0 0 0 / 0.4);
   --shadow-card-hover: 0 8px 24px -16px rgb(0 0 0 / 0.55), 0 2px 6px -3px rgb(0 0 0 / 0.35);
   --shadow-focus: 0 0 0 3px var(--color-accent-ring);
+  /* Popovers and menus need to read as lifted off the page, and on a near-black
+     background a shadow alone cannot do that — the surface itself must step up. */
+  --color-surface-raised: #171c2a;
   --color-panel-tint: #161c24;
   --color-scrim: rgb(0 0 0 / 0.55);
   --color-media-chip-bg: rgb(0 0 0 / 0.55);
@@ -122,15 +150,55 @@ body {
   min-width: 320px;
   background: var(--color-bg);
   color: var(--color-ink);
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: var(--font-size-2);
   letter-spacing: 0;
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
 h1, h2, h3 {
-  letter-spacing: 0;
-  font-weight: 600;
+  letter-spacing: -0.014em;
+  font-weight: 620;
+}
+
+/* Machine text keeps the mono face: things the user copies, greps, or compares
+   character-by-character. Everything else reads as prose. */
+code,
+kbd,
+samp,
+pre,
+.mono,
+.id-tag,
+.chat-id-tag,
+.ticket-id,
+.branch-name,
+.timeline-detail,
+.terminal-output,
+.chat-scope-detail-tag,
+.chat-model,
+.chat-agent,
+.chat-agent-tag,
+.chat-agent-model,
+.chat-header-scope,
+.chat-header-config,
+.repo-ingress-link,
+.worktree-branch,
+.repo-card-path,
+.git-branch {
+  font-family: var(--font-mono);
+  font-feature-settings: "calt" 0;
+}
+
+/* Counts, timestamps, and elapsed values line up column-wise even in the
+   proportional face. */
+.updated-at,
+.message-timestamp,
+.count-chip,
+.nav-badge,
+.nav-attention-badge,
+.hero-stats dd,
+.metric-card strong {
+  font-variant-numeric: tabular-nums;
 }
 
 button,
@@ -198,11 +266,11 @@ a {
 
 .brand-mark {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
+  grid-template-columns: 22px minmax(0, 1fr);
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   min-width: 0;
-  padding: var(--space-1) var(--space-2);
+  padding: var(--space-1);
   border-radius: var(--radius-2);
   transition: background-color var(--transition-fast);
 }
@@ -226,17 +294,6 @@ a {
   text-decoration: none;
 }
 
-.brand-mark {
-  grid-template-columns: 22px minmax(0, 1fr);
-  gap: var(--space-2);
-  padding: var(--space-1);
-}
-
-.brand-title {
-  font-size: var(--font-size-1);
-  font-weight: 600;
-}
-
 .brand-title-input {
   width: 100%;
   min-width: 0;
@@ -258,6 +315,8 @@ a {
   outline: none;
 }
 
+/* The sidebar subtitle is not rendered in any layout; keep the single rule that
+   hides it rather than the four that argued about its colour and size. */
 .brand-subtitle {
   display: none;
 }
@@ -285,17 +344,9 @@ a {
 
 .brand-title {
   display: block;
+  font-size: var(--font-size-2);
   font-weight: 600;
   letter-spacing: -0.012em;
-}
-
-.brand-title {
-  font-size: var(--font-size-2);
-}
-
-.brand-subtitle {
-  font-size: 11px;
-  letter-spacing: 0;
 }
 
 .brand-subtitle,
@@ -1023,9 +1074,19 @@ a.scope-chip-label:hover {
 
 .chat-list-scroll .chat-list-virtual-list,
 .message-stack .chat-transcript-virtual-list {
-  --virtual-list-gap: var(--space-2);
   width: 100%;
   height: 100%;
+}
+
+/* Index rows sit close together; transcript turns do not. Setting one gap for
+   both put conversation turns 4px apart, which read as a single block of text
+   with no visible speaker change. */
+.chat-list-scroll .chat-list-virtual-list {
+  --virtual-list-gap: var(--space-2);
+}
+
+.message-stack .chat-transcript-virtual-list {
+  --virtual-list-gap: var(--space-6);
 }
 
 .section-heading h1,
@@ -1182,14 +1243,14 @@ a.scope-chip-label:hover {
 .chip,
 .send-button,
 .new-chat-button {
-  min-height: 26px;
+  min-height: 28px;
   border: 1px solid var(--color-border);
   border-radius: 6px;
   background: var(--color-surface);
   color: var(--color-ink-soft);
   cursor: pointer;
   font-weight: 500;
-  font-size: var(--font-size-0);
+  font-size: var(--font-size-1);
 }
 
 .chip {
@@ -1299,15 +1360,18 @@ a.scope-chip-label:hover {
   border: 0;
 }
 
+/* 4px of inline padding put the meta line's ellipsis flush against the column
+   edge, so every row looked clipped rather than truncated. Give the row real
+   gutters and let the text end short of the boundary. */
 .chat-card {
   display: flex;
   align-items: flex-start;
-  gap: var(--space-2);
+  gap: var(--space-3);
   width: 100%;
   text-align: left;
-  padding: var(--space-2) var(--space-2);
+  padding: var(--space-3) var(--space-4);
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
   color: var(--color-ink);
   cursor: pointer;
@@ -1601,26 +1665,45 @@ a.scope-chip-label:hover {
   flex-shrink: 0;
 }
 
+/* Three meta values share one line in a ~300px column. Left to shrink freely
+   they all truncated at once — `smoke-re… · TICKET-350-smoke-fixtu… · model
+   unkno…` — and none was readable. Instead, nominate a single item to absorb
+   the overflow (the ticket id, which is the longest and the most predictable
+   to reconstruct) and let the others stay whole. */
 .chat-row-meta {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 0 var(--space-2);
   min-width: 0;
   font-size: 11px;
+  line-height: 1.5;
   color: var(--color-ink-faint);
   overflow: hidden;
 }
 
 .chat-row-meta > * {
+  flex: 0 0 auto;
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.chat-row-meta > .chat-meta-dot {
-  flex-shrink: 0;
+.chat-row-meta > code {
+  flex: 0 1 auto;
+  min-width: 6ch;
 }
+
+/* The separator belongs to the item that follows it rather than being emitted
+   as a standalone element, so it is never left stranded by a hidden sibling. */
+.chat-row-meta > * + *::before {
+  content: "·";
+  margin-right: var(--space-2);
+  color: var(--color-ink-faint);
+  opacity: 0.7;
+}
+
 
 .chat-agent-tag {
   flex-shrink: 0;
@@ -1942,9 +2025,16 @@ a.scope-chip-label:hover {
   color: var(--color-ink-muted);
 }
 
+/* The subtitle's leading segments (badges, live status) are all conditional,
+   so the separator in front of the ticket id can end up first on the line and
+   render as a stray bullet before any content. */
+.chat-header-subtitle > .chat-meta-dot:first-child {
+  display: none;
+}
+
 .chat-header-subtitle code,
 .chat-header-id {
-  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--color-ink-faint);
 }
@@ -2110,7 +2200,7 @@ a.scope-chip-label:hover {
 }
 
 .chat-header-config {
-  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--color-ink-faint);
   white-space: nowrap;
@@ -2226,11 +2316,15 @@ textarea:hover {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
-  gap: var(--space-2);
+  /* Turns are the unit of reading here. At 4px they ran together into one
+     block of text; a full line of space makes the speaker change visible
+     before a single word is read. */
+  gap: var(--space-6);
+  --virtual-list-gap: var(--space-6);
   min-height: 0;
   min-width: 0;
-  padding: var(--space-3) max(var(--space-2), env(safe-area-inset-right))
-    var(--space-3) max(var(--space-1), env(safe-area-inset-left));
+  padding: var(--space-5) max(var(--space-5), env(safe-area-inset-right))
+    var(--space-5) max(var(--space-5), env(safe-area-inset-left));
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
@@ -2253,6 +2347,19 @@ textarea:hover {
 .message-stack > :first-child {
   /* Bottom-anchor short transcripts without reversing DOM, screen-reader, or keyboard order. */
   margin-top: auto;
+}
+
+/* The virtualised transcript is `flex: 1 1 auto`, so `margin-top: auto` above
+   never moves it — it already fills the stack and its rows pin to the top of
+   its own scroll box. The result was a chat whose two messages sat 800px above
+   the composer. While the content is shorter than the viewport, lay the
+   viewport out as a column that justifies to the end so the newest message
+   rests just above the composer, the way every chat client behaves. Once the
+   transcript overflows (`.can-scroll`), normal scroll positioning takes over. */
+.message-stack .chat-transcript-virtual-list:not(.can-scroll) {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
 }
 
 .assistant-skeleton {
@@ -2373,11 +2480,12 @@ textarea:hover {
 .message,
 .artifact-card,
 .approval-card {
-  max-width: 720px;
+  max-width: 760px;
   min-width: 0;
   padding: var(--space-2) var(--space-4);
-  border-radius: 10px;
-  line-height: 1.65;
+  border-radius: 12px;
+  font-size: var(--font-size-3);
+  line-height: 1.62;
 }
 
 .tool-call-bar {
@@ -2426,17 +2534,32 @@ textarea:hover {
   padding-right: 0;
 }
 
-.message.assistant span {
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  color: var(--color-ink-faint);
-  font-weight: 550;
+/* The assistant's name is a quiet byline, not a heading. It reads once at the
+   top of the turn and then gets out of the way of the answer. */
+.message.assistant > span:first-child {
+  font-size: var(--font-size-1);
+  letter-spacing: 0;
+  color: var(--color-ink-muted);
+  font-weight: 600;
   text-transform: none;
-  margin-bottom: 2px;
-  opacity: 0.85;
+  margin-bottom: var(--space-2);
+  opacity: 1;
 }
 
-.message span {
+/* Consecutive assistant turns drop the repeated byline — the same speaker
+   twice in a row does not need to introduce itself twice. */
+.message.assistant + .message.assistant > span:first-child,
+.chat-transcript-virtual-item:has(> .message.assistant)
+  + .chat-transcript-virtual-item
+  .message.assistant
+  > span:first-child {
+  display: none;
+}
+
+/* Direct child only. As a descendant selector this also blanket-styled every
+   inline <span> that came out of the markdown renderer, turning them into
+   uppercase 11px blocks mid-sentence. */
+.message > span:first-child {
   display: block;
   font-size: 11px;
   font-weight: 600;
@@ -2480,19 +2603,24 @@ textarea:hover {
   overflow-wrap: anywhere;
 }
 
+/* The user's own turn is the one element in the transcript that should carry
+   brand colour: it is the thing they authored, and tinting it makes the
+   conversation legible as an alternating exchange at a glance. The previous
+   grey-on-cream bubble was nearly the same value as the page, so a long
+   thread read as one undifferentiated column of text. */
 .message.user {
   align-self: flex-end;
   max-width: 560px;
-  padding: 6px var(--space-3);
-  background: var(--color-surface-muted);
-  border: 1px solid var(--color-border-subtle);
+  padding: var(--space-3) var(--space-5);
+  background: var(--color-accent-soft);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 22%, transparent);
   color: var(--color-ink);
-  border-radius: 10px 10px 2px 10px;
+  border-radius: 14px 14px 4px 14px;
   margin-left: auto;
-  font-size: var(--font-size-1);
+  font-size: var(--font-size-2);
 }
 
-.message.user span {
+.message.user > span:first-child {
   display: none;
 }
 
@@ -2640,8 +2768,8 @@ textarea:hover {
 
 /* Delivery affordance on user messages: a static ✓ next to the timestamp on
    committed messages, and a "Sending…" pulse while the row is optimistic.
-   The `.message.user span { display: none }` rule above hides the "You"
-   label, so all delivery span overrides need user-scoped specificity. */
+   The `.message.user > span:first-child { display: none }` rule above hides the
+   "You" label, so all delivery span overrides need user-scoped specificity. */
 .message.user .message-delivery-tick,
 .message.assistant .message-delivery-tick {
   display: inline-block;
@@ -3532,11 +3660,27 @@ video.shared-file-media {
   pointer-events: auto;
 }
 
+/* Live run state floats over the transcript as a pill that hugs its own
+   content. As a full-bleed bar it drew a hard horizontal rule across the
+   conversation for the sake of three words, and read as chrome rather than as
+   a transient state. Sized to content, it reads as a notification. */
+/* Live run state floats over the transcript. It stays full-width because the
+   progressive-disclosure rules below are `@container` queries on this element,
+   and `container-type: inline-size` forbids sizing to content — but it now
+   reads as a floating pill rather than a grey slab ruled across the
+   conversation, and its content centres so three words don't sit alone at the
+   far-left of an 800px bar. */
 .composer-status-bar {
   width: 100%;
   max-width: none;
-  border-radius: 8px;
-  background: var(--color-surface-sunken);
+  justify-content: center;
+  border-radius: 999px;
+  padding-inline: var(--space-5);
+  border-color: var(--color-border);
+  background: color-mix(in srgb, var(--color-surface) 92%, var(--color-bg));
+  box-shadow: var(--shadow-card-hover);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   container-type: inline-size;
   container-name: status-bar;
 }
@@ -4372,7 +4516,7 @@ video.shared-file-media {
   min-width: 0;
   color: var(--color-ink);
   font-weight: 600;
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-size-0);
   letter-spacing: -0.005em;
   overflow-wrap: anywhere;
@@ -5166,11 +5310,11 @@ video.shared-file-media {
      stack visible whitespace above the textarea; each rendered optional row
      and the textarea adds its own margin-bottom below for spacing. */
   row-gap: 0;
-  column-gap: var(--space-2);
+  column-gap: var(--space-3);
   align-items: center;
-  padding: 0 var(--space-2) var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3) var(--space-3) var(--space-5);
   border: 1px solid var(--color-border);
-  border-radius: 12px;
+  border-radius: 16px;
   background: var(--color-surface);
   box-shadow: 0 1px 2px rgb(15 15 20 / 0.03);
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
@@ -5575,8 +5719,8 @@ textarea {
      drag-grip can expand the composer up to ~80% of viewport. */
   max-height: 80vh;
   overflow-y: hidden;
-  font-size: var(--font-size-2);
-  line-height: 1.5;
+  font-size: var(--font-size-3);
+  line-height: 1.55;
 }
 
 .composer textarea:focus-visible {
@@ -5587,14 +5731,29 @@ textarea {
   color: var(--color-ink-faint);
 }
 
+/* The one primary action on the chat surface. It was a 10px label in a 30px
+   chip that disappeared next to the attachment icons; at rest with an empty
+   composer it also rendered as a washed-out accent fill, which reads as
+   "broken" rather than "nothing to send yet". */
 .send-button {
   grid-area: send;
-  min-height: 30px;
-  padding: 0 var(--space-3);
-  font-weight: 550;
-  font-size: var(--font-size-0);
-  border-radius: 8px;
+  min-height: 34px;
+  padding: 0 var(--space-6);
+  font-weight: 600;
+  font-size: var(--font-size-2);
+  border-radius: 10px;
   box-shadow: none;
+}
+
+.send-button:disabled {
+  border-color: var(--color-border);
+  background: var(--color-surface-muted);
+  color: var(--color-ink-faint);
+  opacity: 1;
+}
+
+.send-button:not(:disabled):active {
+  transform: translateY(1px);
 }
 
 .interrupt-send-button {
@@ -5653,11 +5812,17 @@ textarea:disabled {
   margin: var(--space-2) 0 0;
 }
 
+/* Every scrolling page lays out in a centered column. Without this a single
+   repo row stretches the full 1440px of a desktop display, leaving ~900px of
+   dead space between its name and its buttons — the eye has to travel the
+   whole width to connect a label with its action. */
 .page-stack {
   display: grid;
-  gap: var(--space-3);
+  gap: var(--space-5);
   min-width: 0;
-  max-width: 100%;
+  width: 100%;
+  max-width: var(--measure-page);
+  margin-inline: auto;
 }
 
 .repos-index-v2 {
@@ -6061,7 +6226,7 @@ textarea:disabled {
 .memory-tabs small {
   font-size: 11px;
   color: var(--color-ink-faint);
-  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
 }
 
 .memory-reader {
@@ -6799,7 +6964,9 @@ textarea:disabled {
   border-radius: var(--radius-2);
   background: transparent;
   color: var(--color-ink-muted);
-  font-family: var(--font-mono);
+  /* Button labels are prose ("Browse all", "Set up contextspace"), not machine
+     text; the mono face made every action ~15% wider for no gain. The input
+     inside a form dialog keeps mono because it holds a filesystem path. */
   font-size: var(--font-size-1);
   font-weight: 500;
   cursor: pointer;
@@ -6858,7 +7025,7 @@ textarea:disabled {
 }
 
 .meta-chip-path {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -7682,7 +7849,7 @@ textarea:disabled {
 code,
 .markdown-body code,
 .markdown-body pre {
-  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 0.875em;
 }
 
@@ -7939,7 +8106,7 @@ textarea:disabled {
 /* Run row — id + colored status dot in meta */
 .row-id {
   margin-left: 6px;
-  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 10.5px;
   font-weight: 500;
   color: var(--color-ink-faint);
@@ -8001,7 +8168,7 @@ textarea:disabled {
 }
 
 .chat-id-tag {
-  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 550;
   color: var(--color-ink-muted);
@@ -8095,7 +8262,7 @@ textarea:disabled {
 }
 
 .chat-model {
-  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 10.5px;
 }
 
@@ -8247,7 +8414,6 @@ textarea:disabled {
   max-width: min(460px, calc(100vw - var(--space-6)));
   box-shadow: 0 0 0 1px var(--color-accent-soft),
     0 24px 60px -20px rgb(0 0 0 / 0.55);
-  font-family: var(--font-mono);
 }
 .form-dialog::backdrop {
   background: rgb(0 0 0 / 0.55);

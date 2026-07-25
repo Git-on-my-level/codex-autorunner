@@ -712,11 +712,14 @@ def test_managed_thread_message_route_uses_orchestration_service_seam(
             )
         )
     )
-    assert (
-        captured["request"]
-        .metadata["runtime_prompt"]
-        .endswith("hello from route\n</user_message>\n")
-    )
+    # The user message closes the prompt: nothing (injected context, hub
+    # snapshot, compaction summary) may be appended after it. The web surface
+    # also appends artifact-delivery instructions to the execution message, so
+    # the user's own text is inside the final block rather than at its very end.
+    runtime_prompt = captured["request"].metadata["runtime_prompt"]
+    assert runtime_prompt.endswith("\n</user_message>\n")
+    final_user_message = runtime_prompt.rsplit("<user_message>\n", 1)[1]
+    assert final_user_message.startswith("hello from route")
     assert fake_service.record_calls[0]["status"] == "ok"
     assert fake_service.record_calls[0]["execution_id"] == "managed-turn-1"
 
@@ -2363,7 +2366,12 @@ def test_managed_thread_message_route_uses_live_runtime_binding_for_compact_seed
     runtime_prompt = captured["request"].metadata["runtime_prompt"]
     assert "Context summary (from compaction):" not in runtime_prompt
     assert "compact summary" not in runtime_prompt
-    assert runtime_prompt.endswith("hello from route\n</user_message>\n")
+    # See the seam test above: the user message closes the prompt, and the web
+    # surface's artifact-delivery instructions sit inside that final block.
+    assert runtime_prompt.endswith("\n</user_message>\n")
+    assert runtime_prompt.rsplit("<user_message>\n", 1)[1].startswith(
+        "hello from route"
+    )
 
 
 def test_managed_thread_message_route_queued_send_starts_queue_worker(

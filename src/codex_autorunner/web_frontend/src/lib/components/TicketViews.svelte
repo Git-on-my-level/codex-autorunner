@@ -88,7 +88,7 @@
       const haystack = [
         row.title,
         row.numberLabel,
-        row.bodyPreview ?? '',
+        row.bodySearchText,
         row.agentLabel,
         row.modelLabel ?? '',
         row.repoLabel ?? '',
@@ -537,23 +537,19 @@
                       <StatusPill status={row.currentRunState} title="Run status" />
                     {/if}
                   </div>
+                  <!-- Agent and model belong in the row's meta line. As a
+                       separate right-aligned column they ended up ~800px from
+                       the title they describe, so the eye had to cross the
+                       whole row to pair a ticket with the agent running it. -->
                   <div class="ticket-card-meta">
-                    {#if row.bodyPreview}<span class="ticket-card-preview">{row.bodyPreview}</span>{/if}
+                    {#if agentText}<span class="ticket-card-agent">{agentText}</span>{/if}
+                    {#if row.modelLabel}<span class="ticket-card-model">{row.modelLabel}</span>{/if}
                     <TicketDiffStats stats={row.diffStats} />
                     {#if row.durationLabel}<span>{row.durationLabel}</span>{/if}
                     {#if row.updatedAt}<span>{rowRelativeTime(row)}</span>{/if}
+                    {#if row.bodyPreview}<span class="ticket-card-preview">{row.bodyPreview}</span>{/if}
                   </div>
                 </div>
-                {#if agentText || row.modelLabel}
-                  <div class="ticket-card-side" aria-label="Agent and model">
-                    {#if agentText}
-                      <span class="ticket-card-agent">{agentText}</span>
-                    {/if}
-                    {#if row.modelLabel}
-                      <span class="ticket-card-model">{row.modelLabel}</span>
-                    {/if}
-                  </div>
-                {/if}
               </a>
             </article>
           {/snippet}
@@ -1072,7 +1068,7 @@
 
   .ticket-card-body {
     display: grid;
-    grid-template-columns: 4.5ch minmax(0, 1fr) auto;
+    grid-template-columns: 4.5ch minmax(0, 1fr);
     align-items: center;
     gap: var(--space-3);
     min-width: 0;
@@ -1100,47 +1096,20 @@
     color: var(--color-accent);
   }
 
-  .ticket-card-side {
-    display: inline-flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 2px;
-    white-space: nowrap;
-    text-align: right;
-    flex-shrink: 0;
-    font-size: var(--font-size-0);
-    line-height: 1.25;
-  }
-
   .ticket-card-agent {
     color: var(--color-ink-soft);
-    font-weight: 500;
+    font-weight: 550;
+    white-space: nowrap;
   }
 
   .ticket-card-model {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, 'Courier New', monospace;
-    font-size: 11px;
+    font-family: var(--font-mono);
     color: var(--color-ink-faint);
     letter-spacing: 0.01em;
     max-width: 14rem;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-
-  @media (max-width: 640px) {
-    .ticket-card-body {
-      grid-template-columns: 4.5ch minmax(0, 1fr);
-    }
-    .ticket-card-side {
-      grid-column: 2 / -1;
-      flex-direction: row;
-      justify-content: flex-start;
-      align-items: baseline;
-      gap: var(--space-2);
-    }
-    .ticket-card-model {
-      max-width: none;
-    }
+    white-space: nowrap;
   }
 
   .ticket-card-main {
@@ -1183,12 +1152,15 @@
     margin-right: var(--space-2);
     color: var(--color-border-strong);
   }
+  /* Shrink, never grow: a growing preview pushed every meta item after it to
+     the far edge of the row. */
   .ticket-card-preview {
     color: var(--color-ink-muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    flex: 1 1 200px;
+    flex: 0 1 auto;
+    min-width: 8ch;
   }
   .ticket-card-meta :global(.ticket-diff-stats) {
     font-variant-numeric: tabular-nums;
@@ -1217,7 +1189,7 @@
   }
 
   .kbd {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, 'Courier New', monospace;
+    font-family: var(--font-mono);
     font-size: var(--font-size-0);
     font-variant-numeric: tabular-nums;
     color: var(--color-ink-muted);
@@ -1368,7 +1340,7 @@
     border: 1px solid var(--color-border-subtle);
     border-radius: 6px;
     color: var(--color-ink);
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, 'Courier New', monospace;
+    font-family: var(--font-mono);
     font-size: var(--font-size-0);
     line-height: 1.5;
   }
@@ -1391,7 +1363,7 @@
     border: 1px solid var(--color-border-subtle);
     border-radius: 6px;
     overflow-x: auto;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, 'Courier New', monospace;
+    font-family: var(--font-mono);
     font-size: var(--font-size-0);
     line-height: 1.5;
     color: var(--color-ink);
@@ -1403,7 +1375,7 @@
   }
   .ticket-repair-path code,
   .ticket-repair-hint code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, 'Courier New', monospace;
+    font-family: var(--font-mono);
     font-size: 12px;
     background: var(--color-surface-muted);
     padding: 1px 4px;
@@ -1527,7 +1499,7 @@
 
   .ticket-inline-path {
     color: var(--color-ink-faint);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: var(--font-size-0);
     overflow: hidden;
     text-overflow: ellipsis;

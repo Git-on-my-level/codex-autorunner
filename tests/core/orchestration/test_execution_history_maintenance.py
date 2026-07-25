@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -32,14 +33,22 @@ from codex_autorunner.core.orchestration.sqlite import (
 from codex_autorunner.core.orchestration.turn_timeline import persist_turn_timeline
 from codex_autorunner.core.ports.run_event import RunNotice
 
+# The audit only flags a terminal execution as "missing a manifest" while it is
+# still inside the cold-trace retention window (90 days by default). A frozen
+# calendar date makes that a time bomb: this fixture used a literal 2026-04-12,
+# so the suite passed until that date aged out of the window and then began
+# failing on a day nobody changed anything. Anchor the fixture to "recently"
+# instead, and keep the deliberately-ancient cases as explicit literals.
+_RECENT_DAY = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+
 
 def _seed_execution(
     hub_root: Path,
     *,
     execution_id: str,
     status: str = "completed",
-    started_at: str = "2026-04-12T00:00:00Z",
-    finished_at: str = "2026-04-12T00:05:00Z",
+    started_at: str = f"{_RECENT_DAY}T00:00:00Z",
+    finished_at: str = f"{_RECENT_DAY}T00:05:00Z",
     output_chunks: int = 3,
 ) -> None:
     initialize_orchestration_sqlite(hub_root, durable=False)
@@ -146,13 +155,13 @@ def _seed_execution(
                 (
                     f"turn-timeline:{execution_id}:0002",
                     "run_notice",
-                    "2026-04-12T00:00:30Z",
+                    f"{_RECENT_DAY}T00:00:30Z",
                     "recorded",
                     {
                         "event_index": 2,
                         "event_family": "run_notice",
                         "event": {
-                            "timestamp": "2026-04-12T00:00:30Z",
+                            "timestamp": f"{_RECENT_DAY}T00:00:30Z",
                             "kind": "thinking",
                             "message": "planning",
                         },
@@ -161,13 +170,13 @@ def _seed_execution(
                 (
                     f"turn-timeline:{execution_id}:0003",
                     "tool_call",
-                    "2026-04-12T00:01:00Z",
+                    f"{_RECENT_DAY}T00:01:00Z",
                     "recorded",
                     {
                         "event_index": 3,
                         "event_family": "tool_call",
                         "event": {
-                            "timestamp": "2026-04-12T00:01:00Z",
+                            "timestamp": f"{_RECENT_DAY}T00:01:00Z",
                             "tool_name": "shell",
                             "tool_input": {"cmd": "pwd"},
                         },
@@ -176,13 +185,13 @@ def _seed_execution(
                 (
                     f"turn-timeline:{execution_id}:0004",
                     "tool_result",
-                    "2026-04-12T00:01:01Z",
+                    f"{_RECENT_DAY}T00:01:01Z",
                     "completed",
                     {
                         "event_index": 4,
                         "event_family": "tool_result",
                         "event": {
-                            "timestamp": "2026-04-12T00:01:01Z",
+                            "timestamp": f"{_RECENT_DAY}T00:01:01Z",
                             "tool_name": "shell",
                             "status": "completed",
                             "result": {"stdout": "/tmp"},
@@ -192,7 +201,7 @@ def _seed_execution(
             ]
             next_index = 5
             for chunk in range(output_chunks):
-                timestamp = f"2026-04-12T00:02:{chunk:02d}Z"
+                timestamp = f"{_RECENT_DAY}T00:02:{chunk:02d}Z"
                 rows.append(
                     (
                         f"turn-timeline:{execution_id}:{next_index:04d}",
@@ -238,13 +247,13 @@ def _seed_execution(
                     (
                         f"turn-timeline:{execution_id}:{next_index:04d}",
                         "token_usage",
-                        "2026-04-12T00:04:00Z",
+                        f"{_RECENT_DAY}T00:04:00Z",
                         "recorded",
                         {
                             "event_index": next_index,
                             "event_family": "token_usage",
                             "event": {
-                                "timestamp": "2026-04-12T00:04:00Z",
+                                "timestamp": f"{_RECENT_DAY}T00:04:00Z",
                                 "usage": {"input": 12, "output": 7},
                             },
                         },
@@ -471,14 +480,14 @@ def test_compaction_precheck_ignores_summary_rows_for_threshold(
                     "repo",
                     "repo-1",
                     None,
-                    "2026-04-12T00:05:30Z",
+                    f"{_RECENT_DAY}T00:05:30Z",
                     "recorded",
                     json.dumps(
                         {
                             "event_index": 9999,
                             "event_family": "run_notice",
                             "event": {
-                                "timestamp": "2026-04-12T00:05:30Z",
+                                "timestamp": f"{_RECENT_DAY}T00:05:30Z",
                                 "kind": "progress",
                                 "message": "post-compaction follow-up",
                             },
@@ -799,7 +808,7 @@ def test_compaction_refreshes_checkpoint_hot_state_after_reducing_hot_rows(
         target_id="thread-1",
         events=[
             RunNotice(
-                timestamp="2026-04-12T00:06:00Z",
+                timestamp=f"{_RECENT_DAY}T00:06:00Z",
                 kind="progress",
                 message="follow-up after compaction",
             )
@@ -853,8 +862,8 @@ def test_audit_flags_recent_terminal_execution_without_manifest_even_with_zero_h
                     "Zero hot",
                     "active",
                     "completed",
-                    "2026-04-12T00:00:00Z",
-                    "2026-04-12T00:05:00Z",
+                    f"{_RECENT_DAY}T00:00:00Z",
+                    f"{_RECENT_DAY}T00:05:00Z",
                 ),
             )
             conn.execute(
@@ -890,9 +899,9 @@ def test_audit_flags_recent_terminal_execution_without_manifest_even_with_zero_h
                     "gpt-test",
                     "high",
                     None,
-                    "2026-04-12T00:00:00Z",
-                    "2026-04-12T00:05:00Z",
-                    "2026-04-12T00:00:00Z",
+                    f"{_RECENT_DAY}T00:00:00Z",
+                    f"{_RECENT_DAY}T00:05:00Z",
+                    f"{_RECENT_DAY}T00:00:00Z",
                 ),
             )
 
@@ -988,7 +997,7 @@ def test_is_terminal_execution_row_recognizes_all_terminal_statuses() -> None:
 
 
 def test_is_terminal_execution_row_uses_finished_at_as_fallback() -> None:
-    row = {"status": "running", "finished_at": "2026-04-12T00:05:00Z"}
+    row = {"status": "running", "finished_at": f"{_RECENT_DAY}T00:05:00Z"}
     assert _is_terminal_execution_row(row) is True
 
     row_empty = {"status": "running", "finished_at": ""}

@@ -206,7 +206,7 @@
     background: var(--color-surface);
     padding: var(--space-3) var(--space-4);
     color: var(--color-ink);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: var(--font-size-1);
     line-height: 1.55;
     resize: vertical;
@@ -217,7 +217,7 @@
   }
 
   .kbd {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, 'Courier New', monospace;
+    font-family: var(--font-mono);
     font-size: var(--font-size-0);
     color: var(--color-ink-muted);
     background: var(--color-surface-muted);

@@ -143,7 +143,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, 'Courier New', monospace;
+    font-family: var(--font-mono);
   }
   .cs-role {
     color: var(--color-ink-faint);

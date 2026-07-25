@@ -122,7 +122,7 @@
     border-radius: 6px;
     background: var(--color-surface-muted);
     color: var(--color-ink);
-    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: var(--font-size-0);
   }
 </style>
