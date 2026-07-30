@@ -27,10 +27,21 @@ runner = CliRunner()
 # so the suite passed until that date aged out of the window and then began
 # failing on a day nobody changed anything. Anchor the fixture to "recently"
 # instead, and keep the deliberately-ancient cases as explicit literals.
-_RECENT_DAY = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+def _default_execution_times() -> tuple[str, str]:
+    finished = datetime.now(timezone.utc) - timedelta(days=1)
+    started = finished - timedelta(minutes=5)
+
+    def iso(dt: datetime) -> str:
+        return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    return iso(started), iso(finished)
 
 
 def _seed_terminal_execution(hub_root: Path, execution_id: str) -> None:
+    started_at, finished_at = _default_execution_times()
+    started_dt = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
     initialize_orchestration_sqlite(hub_root, durable=False)
     with open_orchestration_sqlite(hub_root, durable=False) as conn:
         with conn:
@@ -62,8 +73,8 @@ def _seed_terminal_execution(hub_root: Path, execution_id: str) -> None:
                     "CLI",
                     "active",
                     "completed",
-                    f"{_RECENT_DAY}T00:00:00Z",
-                    f"{_RECENT_DAY}T00:05:00Z",
+                    started_at,
+                    finished_at,
                 ),
             )
             conn.execute(
@@ -99,18 +110,30 @@ def _seed_terminal_execution(hub_root: Path, execution_id: str) -> None:
                     "gpt-test",
                     "high",
                     None,
-                    f"{_RECENT_DAY}T00:00:00Z",
-                    f"{_RECENT_DAY}T00:05:00Z",
-                    f"{_RECENT_DAY}T00:00:00Z",
+                    started_at,
+                    finished_at,
+                    started_at,
                 ),
             )
             for index in range(1, 21):
                 event_type = "output_delta"
+                event_timestamp = (
+                    started_at
+                    if index == 1
+                    else (
+                        finished_at
+                        if index == 20
+                        else (started_dt + timedelta(seconds=index))
+                        .astimezone(timezone.utc)
+                        .isoformat()
+                        .replace("+00:00", "Z")
+                    )
+                )
                 payload = {
                     "event_index": index,
                     "event_family": "output_delta",
                     "event": {
-                        "timestamp": f"{_RECENT_DAY}T00:00:{index:02d}Z",
+                        "timestamp": event_timestamp,
                         "delta_type": "assistant_message",
                         "content": f"chunk-{index}",
                     },
@@ -121,7 +144,7 @@ def _seed_terminal_execution(hub_root: Path, execution_id: str) -> None:
                         "event_index": index,
                         "event_family": "run_notice",
                         "event": {
-                            "timestamp": f"{_RECENT_DAY}T00:00:00Z",
+                            "timestamp": started_at,
                             "kind": "info",
                             "message": "started",
                         },
@@ -132,7 +155,7 @@ def _seed_terminal_execution(hub_root: Path, execution_id: str) -> None:
                         "event_index": index,
                         "event_family": "terminal",
                         "event": {
-                            "timestamp": f"{_RECENT_DAY}T00:05:00Z",
+                            "timestamp": finished_at,
                             "final_message": "done",
                         },
                     }

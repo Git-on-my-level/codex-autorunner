@@ -14,6 +14,7 @@ from ....chat.status_diagnostics import (
     build_status_block_lines,
 )
 from ....chat.ticket_flow_cleanliness import get_ticket_flow_cleanliness
+from ..._service_attrs import _TelegramServiceAttrs
 from ...adapter import TelegramMessage
 from ...collaboration_helpers import (
     collaboration_summary_lines,
@@ -71,7 +72,16 @@ def _telegram_status_base_lines(
     return lines
 
 
-class WorkspaceStatusMixin:
+class WorkspaceStatusMixin(_TelegramServiceAttrs):
+    # Provided by ``WorkspaceCommands``; declared here for static analysis.
+    def _process_monitor_root(
+        self,
+        record: Optional["TelegramTopicRecord"],
+        *,
+        allow_fallback: bool = False,
+    ) -> Optional[Path]:
+        raise NotImplementedError
+
     async def _handle_status(
         self, message: TelegramMessage, _args: str = "", runtime: Optional[Any] = None
     ) -> None:

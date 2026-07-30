@@ -47,7 +47,7 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks build web-build test test-fast test-full test-chat-platform-contract test-chat-surface-lab test-managed-thread-cutover check check-full check-web-core-contract check-extended preflight-hub-startup format serve serve-hub serve-onboarding web-ui-fast web-ui-screens web-ui-smoke web-ui-dogfood-report launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict perf-idle-cpu perf-chat-latency-budgets perf-chat-seeded-exploration
+.PHONY: install dev hooks build web-build test test-fast test-full test-chat-platform-contract test-chat-surface-lab test-managed-thread-cutover check check-full check-web-core-contract check-extended preflight-hub-startup format serve serve-hub serve-onboarding web-ui-fast web-ui-screens web-ui-smoke web-ui-dogfood-report launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck typecheck-strict perf-idle-cpu perf-chat-latency-budgets perf-chat-seeded-exploration
 
 build: web-build
 
@@ -165,8 +165,12 @@ test-managed-thread-cutover:
 test-integration:
 	$(PYTHON) -m pytest -m integration --basetemp "$(PYTEST_BASETEMP)"
 
-typecheck-strict:
+typecheck:
 	$(PYTHON) -m mypy src/codex_autorunner
+
+# Deprecated alias. The config is not mypy --strict; see [tool.mypy] in
+# pyproject.toml for what is actually enabled.
+typecheck-strict: typecheck
 
 check:
 	./scripts/check.sh

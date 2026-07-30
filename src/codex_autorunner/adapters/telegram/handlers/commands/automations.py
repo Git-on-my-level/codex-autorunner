@@ -10,10 +10,11 @@ from .....adapters.chat.automation_surface import (
     run_automation_for_chat,
     set_automation_enabled_for_chat,
 )
+from ..._service_attrs import _TelegramServiceAttrs
 from ...adapter import TelegramMessage
 
 
-class AutomationCommands:
+class AutomationCommands(_TelegramServiceAttrs):
     async def _handle_automation(
         self, message: TelegramMessage, args: str, _runtime: Any
     ) -> None:

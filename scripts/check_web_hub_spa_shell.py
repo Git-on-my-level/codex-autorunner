@@ -1,48 +1,51 @@
 #!/usr/bin/env python3
-"""Verify hub GET routes serve the PMA HTML shell for every SvelteKit +page path.
+"""Verify the built Web Hub SPA route manifest is present and in sync.
 
-SvelteKit navigates in-browser without round-tripping the server; a full load
-(refresh / open in new tab) must receive index.html for each URL the client can
-render, or FastAPI returns JSON and the tab appears blank.
+The hub used to hand-maintain a second, parallel list of FastAPI routes
+mirroring ``web_frontend/src/routes/**/+page.svelte`` so that a full page
+load (refresh / open in new tab) of any SvelteKit-routable URL gets
+``index.html`` instead of FastAPI's JSON 404. That hand-maintained list and
+the frontend's routes could (and did) drift.
 
-This script builds probe URLs from directory names under
-``web_frontend/src/routes`` (same rules as SvelteKit dynamic segments) and
-asserts each probe succeeds with either:
-  - 200 + Web Hub HTML markers, or
-  - 307/308 (legacy redirects for /worktrees).
+The frontend build now materializes the filesystem router as
+``web_static/spa_routes.json`` (see
+``web_frontend/scripts/generate-spa-routes.mjs``), and
+``src/codex_autorunner/surfaces/web/app.py`` reads that manifest at app
+construction time instead of hand-mirroring the route list. This script no
+longer boots the hub app or walks routes over HTTP -- that runtime
+correctness proof lives in
+``tests/surfaces/web/test_web_static_routes.py``. Its only remaining job is a
+fast, no-server-boot build-freshness check: recompute the expected route
+templates directly from ``web_frontend/src/routes/`` and confirm the shipped
+manifest matches, i.e. that ``pnpm web:build`` actually ran after the most
+recent routing change.
 
 Usage:
   python scripts/check_web_hub_spa_shell.py
 
-Exit code 0 on success, 1 on failure, 2 on environment/setup errors.
+Exit code 0 on success, 1 on drift (manifest present but stale), 2 on
+environment/setup errors (manifest or routes directory missing).
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
-import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# Param names in brackets map to stable probe slugs seeded in the temp manifest.
-PROBE_BY_PARAM: dict[str, str] = {
-    "repoid": "probe-repo",
-    "worktreeid": "probe-worktree",
-    "ticketid": "TICKET-SHELL-CHECK",
-    "workspaceid": "probe-workspace",
-    "chatid": "00000000-0000-4000-8000-000000000001",
-}
+MANIFEST_FILENAME = "spa_routes.json"
 
-# Prefixes where the hub returns redirects instead of the HTML shell.
-REDIRECT_PREFIXES: tuple[str, ...] = ("/worktrees",)
-
-_WEB_MARKERS: tuple[str, ...] = (
-    "<title>Web Hub</title>",
-    "/_app/immutable/entry/app.",
-)
+# Kept for reference/consistency with app.py; this script only verifies the
+# manifest is a faithful, current mirror of the filesystem -- it doesn't
+# apply hub-side routing policy (nest-tolerant segments, worktree scoping),
+# since that policy is intentionally NOT derived from the manifest.
+_OPTIONAL_SEGMENT = re.compile(r"^\[\[([^\]]+)\]\]$")
+_REST_SEGMENT = re.compile(r"^\[\.\.\.([^\]]+)\]$")
+_DYNAMIC_SEGMENT = re.compile(r"^\[([^\]]+)\]$")
 
 
 def _repo_root() -> Path:
@@ -53,143 +56,126 @@ def routes_dir(repo_root: Path) -> Path:
     return repo_root / "src" / "codex_autorunner" / "web_frontend" / "src" / "routes"
 
 
-def segment_to_probe_slug(segment: str) -> str:
-    """Map one SvelteKit route directory name to a URL path segment."""
-    m = re.fullmatch(r"\[\[([^\]]+)\]\]", segment)
+def manifest_path(repo_root: Path) -> Path:
+    return repo_root / "src" / "codex_autorunner" / "web_static" / MANIFEST_FILENAME
+
+
+def translate_segment(segment: str) -> str:
+    """Translate one SvelteKit route segment to its Starlette equivalent.
+
+    Mirrors ``web_frontend/scripts/generate-spa-routes.mjs``:
+      [foo]     -> {foo}
+      [[foo]]   -> {foo}  (caller handles the "omitted" variant separately)
+      [...foo]  -> {foo:path}
+      literal   -> unchanged
+    """
+    m = _REST_SEGMENT.fullmatch(segment)
     if m:
-        inner = m.group(1).strip().lower()
-        return PROBE_BY_PARAM.get(inner, f"probe-{inner}")
-    m = re.fullmatch(r"\[([^\]]+)\]", segment)
+        return f"{{{m.group(1).strip()}:path}}"
+    m = _DYNAMIC_SEGMENT.fullmatch(segment)
     if m:
-        inner = m.group(1).strip().lower()
-        return PROBE_BY_PARAM.get(inner, f"probe-{inner}")
+        return f"{{{m.group(1).strip()}}}"
+    m = _OPTIONAL_SEGMENT.fullmatch(segment)
+    if m:
+        return f"{{{m.group(1).strip()}}}"
     return segment
 
 
-def _route_segment_probe_variants(rel_parent: Path) -> list[list[str]]:
-    """Path segment lists for each +page URL variant (e.g. optional ``[[param]]`` omitted)."""
+def route_templates_for_page(rel_parent: Path) -> list[str]:
+    """Starlette path template(s) implied by one +page.svelte's directory.
+
+    Returns [] for the root page (rel_parent == "."), which the hub always
+    redirects rather than serving a shell entry for. Trailing optional
+    (``[[name]]``) segments expand into "with" and "without" variants.
+    """
     raw_parts = list(rel_parent.parts)
     non_group = [p for p in raw_parts if not (p.startswith("(") and p.endswith(")"))]
     if not non_group:
         return []
-    slug_parts = [segment_to_probe_slug(p) for p in non_group]
+
+    literal_parts = [translate_segment(p) for p in non_group]
+
     opt_run = 0
     for p in reversed(non_group):
-        if re.fullmatch(r"\[\[([^\]]+)\]\]", p):
+        if _OPTIONAL_SEGMENT.fullmatch(p):
             opt_run += 1
         else:
             break
+
     if opt_run == 0:
-        return [slug_parts]
-    variants: list[list[str]] = []
+        return ["/" + "/".join(literal_parts)]
+
+    variants: list[str] = []
     for drop in range(0, opt_run + 1):
-        variant = slug_parts[: len(slug_parts) - drop]
-        if variant:
-            variants.append(variant)
+        kept = literal_parts[: len(literal_parts) - drop]
+        if kept:
+            variants.append("/" + "/".join(kept))
     return variants
 
 
-def collect_probe_paths(routes: Path) -> list[str]:
-    """Return sorted unique URL paths (e.g. /chats/uuid) for every +page.svelte."""
+def expected_route_templates(routes: Path) -> list[str]:
+    """Recompute the full expected Starlette route-template set from disk."""
     if not routes.is_dir():
-        raise FileNotFoundError(f"PMA routes directory missing: {routes}")
+        raise FileNotFoundError(f"Web Hub routes directory missing: {routes}")
 
-    urls: set[str] = set()
+    templates: set[str] = set()
     for page in sorted(routes.rglob("+page.svelte")):
         if "node_modules" in page.parts:
             continue
         rel_parent = page.parent.relative_to(routes)
         if rel_parent == Path("."):
-            # Root layout page; hub serves / with a redirect — checked separately.
-            continue
-        for parts in _route_segment_probe_variants(rel_parent):
-            urls.add("/" + "/".join(parts))
-
-    # /hub and / are not always inferred the way we want; force-check.
-    urls.add("/hub")
-    return sorted(urls)
+            continue  # root layout page; hub always redirects, checked separately
+        templates.update(route_templates_for_page(rel_parent))
+    return sorted(templates)
 
 
-def _expects_redirect(path: str) -> bool:
-    if path in REDIRECT_PREFIXES:
-        return True
-    return any(
-        path == prefix or path.startswith(f"{prefix}/") for prefix in REDIRECT_PREFIXES
-    )
-
-
-def _prepare_hub(hub_root: Path) -> None:
-    from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
-    from codex_autorunner.core.config import load_hub_config
-    from codex_autorunner.manifest import load_manifest, save_manifest
-
-    seed_hub_files(hub_root, force=True)
-    base_id = PROBE_BY_PARAM["repoid"]
-    worktree_id = PROBE_BY_PARAM["worktreeid"]
-    base_root = hub_root / base_id
-    worktree_root = hub_root / "worktrees" / worktree_id
-    seed_repo_files(base_root, force=True, git_required=False)
-    seed_repo_files(worktree_root, force=True, git_required=False)
-    hub_config = load_hub_config(hub_root)
-    manifest = load_manifest(hub_config.manifest_path, hub_root)
-    manifest.ensure_repo(
-        hub_root,
-        base_root,
-        repo_id=base_id,
-        kind="base",
-    )
-    manifest.ensure_repo(
-        hub_root,
-        worktree_root,
-        repo_id=worktree_id,
-        kind="worktree",
-        worktree_of=base_id,
-        branch="feature/test",
-    )
-    save_manifest(hub_config.manifest_path, manifest, hub_root)
+def load_manifest_routes(path: Path) -> list[str]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    routes = data.get("routes") if isinstance(data, dict) else None
+    if not isinstance(routes, list) or not all(isinstance(r, str) for r in routes):
+        raise ValueError(f"Manifest at {path} has an unexpected shape")
+    return sorted(routes)
 
 
 def run_checks(*, repo_root: Path) -> tuple[list[str], list[str]]:
-    """Return (errors, probe_paths)."""
-    errors: list[str] = []
+    """Return (errors, expected_templates)."""
     rd = routes_dir(repo_root)
     try:
-        paths = collect_probe_paths(rd)
+        expected = expected_route_templates(rd)
     except FileNotFoundError as exc:
         return [str(exc)], []
 
-    sys.path.insert(0, str(repo_root / "src"))
-    from fastapi.testclient import TestClient
+    mp = manifest_path(repo_root)
+    if not mp.exists():
+        return (
+            [
+                f"Manifest not found at {mp}. Run `pnpm web:build` (or "
+                "`pnpm --filter @codex-autorunner/web-hub build`) to generate it."
+            ],
+            expected,
+        )
 
-    from codex_autorunner.server import create_hub_app
+    try:
+        actual = load_manifest_routes(mp)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return [f"Failed to read manifest at {mp}: {exc}"], expected
 
-    with tempfile.TemporaryDirectory() as tmp:
-        hub_root = Path(tmp) / "hub"
-        _prepare_hub(hub_root)
-        client = TestClient(create_hub_app(hub_root))
-
-        for path in paths:
-            response = client.get(path, follow_redirects=False)
-            if _expects_redirect(path):
-                if response.status_code not in (307, 308):
-                    errors.append(
-                        f"{path}: expected redirect (307/308), got {response.status_code}"
-                    )
-                continue
-            if response.status_code != 200:
-                errors.append(
-                    f"{path}: expected 200 HTML shell, got {response.status_code}: "
-                    f"{response.text[:200]!r}"
-                )
-                continue
-            body = response.text
-            missing = [m for m in _WEB_MARKERS if m not in body]
-            if missing:
-                errors.append(
-                    f"{path}: PMA HTML markers missing {missing}; "
-                    f"body prefix: {body[:160]!r}"
-                )
-    return errors, paths
+    errors: list[str] = []
+    expected_set = set(expected)
+    actual_set = set(actual)
+    missing = sorted(expected_set - actual_set)
+    extra = sorted(actual_set - expected_set)
+    if missing:
+        errors.append(
+            "Manifest is missing routes present in web_frontend/src/routes/: "
+            + ", ".join(missing)
+        )
+    if extra:
+        errors.append(
+            "Manifest has routes no longer present in web_frontend/src/routes/ "
+            "(stale build): " + ", ".join(extra)
+        )
+    return errors, expected
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -203,18 +189,22 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     repo_root = args.repo_root.resolve()
 
-    errors, paths = run_checks(repo_root=repo_root)
+    errors, expected = run_checks(repo_root=repo_root)
     if errors:
-        print("Web Hub SPA shell check failed:", file=sys.stderr)
+        print("Web Hub SPA route manifest check failed:", file=sys.stderr)
         for line in errors:
             print(f"  - {line}", file=sys.stderr)
         print(
-            "\nFix: add matching @app.get routes that return _web_index_response() "
-            "(see surfaces/web/app.py, comment “Web Hub SPA shell”).",
+            "\nFix: run `pnpm web:build` to regenerate "
+            "src/codex_autorunner/web_static/spa_routes.json from the current "
+            "web_frontend/src/routes/ tree.",
             file=sys.stderr,
         )
         return 1
-    print(f"Web Hub SPA shell check OK ({repo_root}) — {len(paths)} paths")
+    print(
+        f"Web Hub SPA route manifest OK ({repo_root}) — "
+        f"{len(expected)} route templates in sync"
+    )
     return 0
 
 

@@ -14,7 +14,6 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from ....adapters.agents.build_agent_pool import build_agent_pool
 from ....adapters.chat.surface_action_manifest import (
     SurfaceActionManifestContext,
     build_surface_action_manifest,
@@ -22,7 +21,6 @@ from ....adapters.chat.surface_action_manifest import (
 from ....adapters.github.service import GitHubError, GitHubService
 from ....agents.hermes_identity import canonicalize_hermes_identity
 from ....core.apps import resolve_registered_app_artifact_path
-from ....core.config import load_repo_config
 from ....core.config_contract import ConfigError
 from ....core.file_chat_keys import (
     ticket_chat_scope,
@@ -64,7 +62,6 @@ from ....core.flows.worker_process import (
     write_worker_exit_info,
 )
 from ....core.orchestration import build_ticket_flow_orchestration_service
-from ....core.runtime import RuntimeContext
 from ....core.state import load_state
 from ....core.ticket_flow_operator import (
     resolve_run_reuse_policy,
@@ -74,12 +71,14 @@ from ....core.ticket_flow_operator import (
     ticket_flow_preflight as shared_ticket_flow_preflight,
 )
 from ....core.utils import atomic_write, find_repo_root
-from ....flows.ticket_flow import build_ticket_flow_definition
+from ....flows.controller_provider import (
+    FlowControllerProvider,
+    FlowControllerUnavailable,
+)
 from ....flows.ticket_flow.runtime_helpers import (
     normalize_ticket_flow_input_data,
     seed_bootstrap_ticket_if_needed,
 )
-from ....tickets import DEFAULT_MAX_TOTAL_TURNS
 from ....tickets.bulk import (
     bulk_clear_model_pin,
     bulk_set_agent,
@@ -110,9 +109,9 @@ from ..schemas import (
 )
 from ..services import flow_store as flow_store_service
 from .flow_routes import FlowRoutesState
+from .flow_routes import definitions as _definitions
 from .flow_routes.dependencies import build_default_flow_route_dependencies
 from .flow_routes.runtime_service import (
-    evict_cached_controller,
     recover_flow_store_if_possible,
     resolve_flow_run_record,
 )
@@ -246,112 +245,41 @@ def _safe_list_flow_runs(
 def _build_flow_definition(
     repo_root: Path, flow_type: str, state: FlowRoutesState
 ) -> FlowDefinition:
-    repo_root = repo_root.resolve()
-    key = (repo_root, flow_type)
-    with state.lock:
-        cached_definition = cast(
-            Optional[FlowDefinition], state.definition_cache.get(key)
-        )
-        if cached_definition is not None:
-            return cached_definition
+    """Build (and cache) a flow definition.
 
-    if flow_type == "ticket_flow":
-        config = load_repo_config(repo_root)
-        engine = RuntimeContext(
-            repo_root=repo_root,
-            config=config,
-        )
-        agent_pool = build_agent_pool(engine.config)
-        definition = build_ticket_flow_definition(
-            agent_pool=agent_pool,
-            auto_commit_default=engine.config.git_auto_commit,
-            require_commit_default=load_state(
-                engine.state_path
-            ).ticket_flow_require_commit,
-            include_previous_ticket_context_default=(
-                engine.config.ticket_flow.include_previous_ticket_context
-            ),
-            max_total_turns_default=(
-                engine.config.ticket_flow.max_total_turns
-                if engine.config.ticket_flow.max_total_turns is not None
-                else DEFAULT_MAX_TOTAL_TURNS
-            ),
-        )
-    else:
-        raise HTTPException(status_code=404, detail=f"Unknown flow type: {flow_type}")
+    Delegates to flow_routes.definitions, which is the single builder. This
+    module used to carry a near-identical copy that differed only in validating
+    before caching; the copies have been collapsed onto the validating one.
+    """
+    return _definitions.build_flow_definition(repo_root, flow_type, state)
 
-    definition.validate()
-    with state.lock:
-        state.definition_cache[key] = definition
-    return definition
+
+def _controller_provider_for(state: FlowRoutesState) -> FlowControllerProvider:
+    """Return this app's controller provider.
+
+    Delegates so there is exactly one lazy constructor bound to a given state:
+    two constructors meant the race winner's definition factory was the one all
+    later callers used.
+    """
+    return _definitions.controller_provider_for(state)
 
 
 def _get_flow_controller(
     repo_root: Path, flow_type: str, state: FlowRoutesState
 ) -> FlowController:
-    repo_root = repo_root.resolve()
-    key = (repo_root, flow_type)
-    with state.lock:
-        cached = cast(Optional[FlowController], state.controller_cache.get(key))
-    if cached is not None:
-        try:
-            cached.initialize()
-            return cached
-        except (
-            sqlite3.Error,
-            OSError,
-            RuntimeError,
-        ) as exc:  # intentional: init with recovery fallback
-            if not recover_flow_store_if_possible(repo_root, flow_type, state, exc):
-                evict_cached_controller(repo_root, flow_type, state)
-                _logger.warning("Failed to initialize cached flow controller: %s", exc)
-                raise HTTPException(
-                    status_code=503,
-                    detail="Flows unavailable; initialize the repo first.",
-                ) from exc
+    """Resolve a flow controller, translating unavailability into HTTP 503.
 
-    db_path, artifacts_root = _flow_paths(repo_root)
-    definition = _build_flow_definition(repo_root, flow_type, state)
-
-    def _new_controller() -> FlowController:
-        return FlowController(
-            definition=definition,
-            db_path=db_path,
-            artifacts_root=artifacts_root,
-        )
-
-    controller = _new_controller()
+    Controller construction, caching, and corrupt-store recovery are owned by
+    ``flows.controller_provider``. This surface only maps the domain failure
+    onto the transport.
+    """
+    provider = _controller_provider_for(state)
     try:
-        controller.initialize()
-    except (
-        sqlite3.Error,
-        OSError,
-        RuntimeError,
-    ) as exc:  # intentional: init with recovery fallback
-        if recover_flow_store_if_possible(repo_root, flow_type, state, exc):
-            controller = _new_controller()
-            try:
-                controller.initialize()
-            except (
-                sqlite3.Error,
-                OSError,
-                RuntimeError,
-            ) as retry_exc:  # intentional: retry after DB recovery
-                _logger.warning(
-                    "Failed to initialize flow controller after recovery: %s", retry_exc
-                )
-                raise HTTPException(
-                    status_code=503,
-                    detail="Flows unavailable; initialize the repo first.",
-                ) from retry_exc
-        else:
-            _logger.warning("Failed to initialize flow controller: %s", exc)
-            raise HTTPException(
-                status_code=503, detail="Flows unavailable; initialize the repo first."
-            ) from exc
-    with state.lock:
-        state.controller_cache[key] = controller
-    return controller
+        return provider.get(repo_root, flow_type)
+    except FlowControllerUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail="Flows unavailable; initialize the repo first."
+        ) from exc
 
 
 def _get_flow_record(repo_root: Path, run_id: str) -> FlowRunRecord:

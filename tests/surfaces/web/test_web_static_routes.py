@@ -1,5 +1,8 @@
 import base64
 import hashlib
+import importlib.util
+import re
+import sys
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -15,6 +18,57 @@ from codex_autorunner.surfaces.web.static_assets import (
     _inline_script_hashes,
     render_web_index_html,
 )
+
+# Reuse the SvelteKit-segment-to-Starlette-path translation from the drift
+# checker (scripts/check_web_hub_spa_shell.py) instead of reimplementing it
+# here. That script recomputes the expected route templates directly from
+# web_frontend/src/routes/ on disk, independent of any built manifest.
+_CHECK_SCRIPT_PATH = (
+    Path(__file__).resolve().parents[3] / "scripts" / "check_web_hub_spa_shell.py"
+)
+_CHECK_SPEC = importlib.util.spec_from_file_location(
+    "check_web_hub_spa_shell", _CHECK_SCRIPT_PATH
+)
+assert _CHECK_SPEC is not None
+check_web_hub_spa_shell = importlib.util.module_from_spec(_CHECK_SPEC)
+sys.modules[_CHECK_SPEC.name] = check_web_hub_spa_shell
+assert _CHECK_SPEC.loader is not None
+_CHECK_SPEC.loader.exec_module(check_web_hub_spa_shell)
+
+# Sample values substituted for each SvelteKit dynamic segment when walking
+# the route templates below. repoId/worktreeId match the fixture repo seeded
+# by _seed_manifest_worktree so worktree-scope validation succeeds.
+_MANIFEST_PARAM_SAMPLES = {
+    "repoId": "smoke-repo",
+    "worktreeId": "smoke-repo--review",
+    "ticketId": "TICKET-350-smoke-fixture",
+    "workspaceId": "local",
+    "chatId": "00000000-0000-4000-8000-000000000001",
+    "ruleId": "weekly-sweep",
+    "sectionId": "general",
+}
+
+_TEMPLATE_PARAM_RE = re.compile(r"\{([^}]+)\}")
+
+
+def _fill_route_template(template: str) -> str:
+    """Substitute a concrete sample value for each {param} / {param:path} slot."""
+
+    def _sub(match: "re.Match[str]") -> str:
+        name = match.group(1)
+        if name.endswith(":path"):
+            base_name = name.split(":", 1)[0]
+            sample = _MANIFEST_PARAM_SAMPLES.get(base_name, base_name)
+            return f"{sample}/nested/segment"
+        return _MANIFEST_PARAM_SAMPLES.get(name, f"sample-{name}")
+
+    return _TEMPLATE_PARAM_RE.sub(_sub, template)
+
+
+def _is_legacy_worktrees_path(path: str) -> bool:
+    segments = path.strip("/").split("/")
+    return bool(segments) and segments[0] == "worktrees"
+
 
 PMA_MANUAL_SCREENSHOT_ROUTES = (
     "/chats",
@@ -161,6 +215,42 @@ def test_worktree_frontend_route_rejects_missing_parent_scope(tmp_path):
         mismatched.json()["detail"]
         == "Worktree not found in repo scope: other/base--review"
     )
+
+
+def test_worktree_scope_validation_survives_a_missing_spa_manifest(
+    tmp_path, monkeypatch
+):
+    """A missing route manifest must not shadow scope-validated handlers.
+
+    Without a manifest the hub falls back to broad per-section catch-alls
+    including `/repos/{rest:path}`. Starlette matches in registration order, so
+    if those are registered before the worktree handlers the catch-all answers
+    first and a mismatched scope silently renders the shell instead of 404ing.
+    """
+    from codex_autorunner.surfaces.web import app as web_app_module
+
+    monkeypatch.setattr(
+        web_app_module, "_load_spa_route_manifest", lambda _static_dir: None
+    )
+
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    _seed_manifest_worktree(hub_root, base_id="base", worktree_id="base--review")
+    client = TestClient(create_hub_app(hub_root), follow_redirects=False)
+
+    mismatched = client.get("/repos/other/worktrees/base--review")
+
+    assert (
+        mismatched.status_code == 404
+    ), "scope validation was shadowed by the fallback SPA catch-all"
+    assert (
+        mismatched.json()["detail"]
+        == "Worktree not found in repo scope: other/base--review"
+    )
+
+    # The fallback must still serve the shell for ordinary repo deep links.
+    ordinary = client.get("/repos/base")
+    assert ordinary.status_code == 200
 
 
 def test_worktree_frontend_route_rejects_orphaned_manifest_worktree(tmp_path):
@@ -353,3 +443,55 @@ async def test_removed_repo_mount_debug_query_redirects_without_building_repo_ap
     assert sent[0]["status"] == 307
     assert sent[0]["headers"] == [(b"location", f"/repos/{repo_id}".encode())]
     assert sent[1]["body"] == b""
+
+
+def test_every_filesystem_spa_route_serves_shell_or_legacy_redirect(tmp_path):
+    """Collapsed-route-authority correctness check.
+
+    Recomputes the expected Starlette route templates directly from
+    ``web_frontend/src/routes/**/+page.svelte`` on disk (independent of any
+    already-built manifest) and walks every one of them through a live
+    ``TestClient``. Each must resolve to the SPA shell (200 + Web Hub HTML
+    markers) or, for the deprecated top-level ``/worktrees/**`` paths, a
+    legacy redirect (307/308).
+
+    A route that instead returns FastAPI's bare JSON 404 is a blank tab for
+    the user on refresh/deep-link -- the exact bug this whole manifest
+    machinery (frontend build step + app.py consumer) exists to prevent.
+    """
+    repo_root = Path(__file__).resolve().parents[3]
+    routes = check_web_hub_spa_shell.routes_dir(repo_root)
+    templates = check_web_hub_spa_shell.expected_route_templates(routes)
+
+    # 24 non-root +page.svelte routes, with automations/[[ruleId]] and
+    # settings/[[sectionId]] each expanding into 2 templates (with/without
+    # the optional segment) -> 26. If this count drifts, either a route was
+    # added/removed (update the expectation) or the translation regressed.
+    assert len(templates) == 26, sorted(templates)
+
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    _seed_manifest_worktree(
+        hub_root, base_id="smoke-repo", worktree_id="smoke-repo--review"
+    )
+    client = TestClient(create_hub_app(hub_root), follow_redirects=False)
+
+    checked = 0
+    for template in templates:
+        path = _fill_route_template(template)
+        response = client.get(path)
+        checked += 1
+        if _is_legacy_worktrees_path(path):
+            assert response.status_code in (307, 308), (
+                f"{template} -> {path}: expected legacy redirect (307/308), "
+                f"got {response.status_code}: {response.text[:200]!r}"
+            )
+        else:
+            assert response.status_code == 200, (
+                f"{template} -> {path}: expected 200 SPA shell, got "
+                f"{response.status_code}: {response.text[:200]!r}"
+            )
+            assert "<title>Web Hub</title>" in response.text, template
+            assert "/_app/immutable/entry/app." in response.text, template
+
+    assert checked == len(templates)

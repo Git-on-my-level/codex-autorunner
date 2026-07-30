@@ -1629,6 +1629,29 @@ def test_chat_doctor_checks_use_parity_contract_group(monkeypatch):
     assert check.check_id == "chat.parity_contract"
 
 
+def test_chat_doctor_checks_report_skipped_parity_as_warning(monkeypatch):
+    # A skipped check verified nothing; it must not be reported under the same
+    # id and severity as a check that actually confirmed parity.
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.chat.doctor.run_parity_checks",
+        lambda repo_root=None: (
+            ParityCheckResult(
+                id="contract.registry_entries_cataloged",
+                passed=True,
+                message="Skipped parity check: sources unavailable.",
+                metadata={"skipped": True},
+                skipped=True,
+            ),
+        ),
+    )
+
+    checks = chat_doctor_checks()
+    assert len(checks) == 1
+    check = checks[0]
+    assert check.severity == "warning"
+    assert check.check_id == "chat.parity_contract.skipped"
+
+
 @pytest.mark.parametrize(
     ("result", "message_snippet", "fix_snippet"),
     [

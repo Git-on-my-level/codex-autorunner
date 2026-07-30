@@ -52,6 +52,7 @@ class TurnContext:
     reply_to_message_id: Optional[int]
     placeholder_message_id: Optional[int] = None
     placeholder_reused: bool = False
+    user_id: Optional[str] = None
 
 
 @dataclass

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Optional, TypeVar
 
 from .types import (
     CompactState,
@@ -12,6 +12,8 @@ from .types import (
     SelectionState,
     UpdateConfirmState,
 )
+
+_V = TypeVar("_V")
 
 
 class TelegramUiState:
@@ -36,7 +38,7 @@ class TelegramUiState:
 
     @staticmethod
     def owner_matches(state: Any, actor_id: Optional[str]) -> bool:
-        expected = getattr(state, "requester_user_id", None)
+        expected: object = getattr(state, "requester_user_id", None)
         if expected is None:
             return True
         if actor_id is None:
@@ -44,8 +46,8 @@ class TelegramUiState:
         return expected == actor_id
 
     def pop_if_owned(
-        self, state_map: dict[str, Any], key: str, actor_id: Optional[str]
-    ) -> Any:
+        self, state_map: dict[str, _V], key: str, actor_id: Optional[str]
+    ) -> _V | None:
         state = state_map.get(key)
         if not self.owner_matches(state, actor_id):
             return None

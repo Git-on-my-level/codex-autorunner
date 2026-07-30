@@ -7,7 +7,7 @@ import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, TypeVar
 
 from ...core.sqlite_utils import (
     SqliteMigrationStep,
@@ -33,6 +33,8 @@ from .state_types import (
     parse_topic_key,
     topic_key,
 )
+
+_T = TypeVar("_T")
 
 logger = logging.getLogger("codex_autorunner.adapters.telegram.state")
 
@@ -278,7 +280,7 @@ class TelegramStateStore:
     async def update_last_update_id_global(self, update_id: int) -> Optional[int]:
         return await self._run(self._update_last_update_id_global_sync, update_id)
 
-    async def _run(self, func: Callable[..., Any], *args: Any) -> Any:
+    async def _run(self, func: Callable[..., _T], *args: Any) -> _T:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._executor, func, *args)
 
@@ -524,11 +526,11 @@ class TelegramStateStore:
             for key, record_payload in topics_payload.items():
                 if not isinstance(key, str) or not key:
                     continue
-                record = TelegramTopicRecord.from_dict(
+                topic_record = TelegramTopicRecord.from_dict(
                     record_payload, default_approval_mode=self._default_approval_mode
                 )
-                if record is not None:
-                    topics[key] = record
+                if topic_record is not None:
+                    topics[key] = topic_record
         topic_scopes: dict[str, str] = {}
         scopes_payload = payload.get("topic_scopes")
         if isinstance(scopes_payload, dict):
@@ -541,32 +543,32 @@ class TelegramStateStore:
         approvals_payload = payload.get("pending_approvals")
         if isinstance(approvals_payload, dict):
             for request_id, record_payload in approvals_payload.items():
-                record = PendingApprovalRecord.from_dict(record_payload)
-                if record is None:
+                approval_record = PendingApprovalRecord.from_dict(record_payload)
+                if approval_record is None:
                     continue
-                key = record.request_id or request_id
+                key = approval_record.request_id or request_id
                 if key:
-                    pending_approvals[key] = record
+                    pending_approvals[key] = approval_record
         outbox: dict[str, OutboxRecord] = {}
         outbox_payload = payload.get("outbox")
         if isinstance(outbox_payload, dict):
             for record_id, record_payload in outbox_payload.items():
-                record = OutboxRecord.from_dict(record_payload)
-                if record is None:
+                outbox_record = OutboxRecord.from_dict(record_payload)
+                if outbox_record is None:
                     continue
-                key = record.record_id or record_id
+                key = outbox_record.record_id or record_id
                 if key:
-                    outbox[key] = record
+                    outbox[key] = outbox_record
         pending_voice: dict[str, PendingVoiceRecord] = {}
         voice_payload = payload.get("pending_voice")
         if isinstance(voice_payload, dict):
             for record_id, record_payload in voice_payload.items():
-                record = PendingVoiceRecord.from_dict(record_payload)
-                if record is None:
+                voice_record = PendingVoiceRecord.from_dict(record_payload)
+                if voice_record is None:
                     continue
-                key = record.record_id or record_id
+                key = voice_record.record_id or record_id
                 if key:
-                    pending_voice[key] = record
+                    pending_voice[key] = voice_record
         last_update_id_global = None
         raw_update_id = payload.get("last_update_id_global")
         if isinstance(raw_update_id, int) and not isinstance(raw_update_id, bool):
@@ -792,11 +794,11 @@ class TelegramStateStore:
                     (chat_id, thread_id, scope, now),
                 )
             conn.execute("DELETE FROM telegram_topics")
-            for key, record in state.topics.items():
-                self._upsert_topic(conn, key, record, now, now)
+            for key, topic_record in state.topics.items():
+                self._upsert_topic(conn, key, topic_record, now, now)
             conn.execute("DELETE FROM telegram_pending_approvals")
-            for record in state.pending_approvals.values():
-                payload_json = json.dumps(record.to_dict(), ensure_ascii=True)
+            for approval_record in state.pending_approvals.values():
+                payload_json = json.dumps(approval_record.to_dict(), ensure_ascii=True)
                 conn.execute(
                     """
                     INSERT INTO telegram_pending_approvals (
@@ -811,18 +813,18 @@ class TelegramStateStore:
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        record.request_id,
-                        record.topic_key,
-                        record.chat_id,
-                        record.thread_id,
-                        record.created_at,
+                        approval_record.request_id,
+                        approval_record.topic_key,
+                        approval_record.chat_id,
+                        approval_record.thread_id,
+                        approval_record.created_at,
                         None,
                         payload_json,
                     ),
                 )
             conn.execute("DELETE FROM telegram_outbox")
-            for record in state.outbox.values():
-                payload_json = json.dumps(record.to_dict(), ensure_ascii=True)
+            for outbox_record in state.outbox.values():
+                payload_json = json.dumps(outbox_record.to_dict(), ensure_ascii=True)
                 conn.execute(
                     """
                     INSERT INTO telegram_outbox (
@@ -836,17 +838,17 @@ class TelegramStateStore:
                     VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        record.record_id,
-                        record.chat_id,
-                        record.thread_id,
-                        record.created_at,
+                        outbox_record.record_id,
+                        outbox_record.chat_id,
+                        outbox_record.thread_id,
+                        outbox_record.created_at,
                         now,
                         payload_json,
                     ),
                 )
             conn.execute("DELETE FROM telegram_pending_voice")
-            for record in state.pending_voice.values():
-                payload_json = json.dumps(record.to_dict(), ensure_ascii=True)
+            for voice_record in state.pending_voice.values():
+                payload_json = json.dumps(voice_record.to_dict(), ensure_ascii=True)
                 conn.execute(
                     """
                     INSERT INTO telegram_pending_voice (
@@ -861,12 +863,12 @@ class TelegramStateStore:
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        record.record_id,
-                        record.chat_id,
-                        record.thread_id,
-                        record.created_at,
+                        voice_record.record_id,
+                        voice_record.chat_id,
+                        voice_record.thread_id,
+                        voice_record.created_at,
                         now,
-                        record.next_attempt_at,
+                        voice_record.next_attempt_at,
                         payload_json,
                     ),
                 )
@@ -1059,7 +1061,7 @@ class TelegramStateStore:
             """,
             (thread_id,),
         ):
-            key = row["topic_key"]
+            key = str(row["topic_key"])
             if exclude_key and key == exclude_key:
                 continue
             base_key = topic_key(row["chat_id"], row["thread_id"])

@@ -86,6 +86,34 @@ Surfaces → Adapters → Control Plane → Engine
 - Control Plane importing Adapters or Surfaces
 - Adapters importing Surfaces
 
+### Ownership is not expressible as an import rule
+
+The table above intentionally lets Surfaces import from every inner layer, so
+`scripts/check_import_boundaries.py` cannot express the Surfaces
+non-responsibility ("do not become state owners"). That constraint is about
+**call sites**, and is enforced separately by
+`scripts/check_flow_lifecycle_ownership.py`:
+
+- No surface may call `rotate_corrupt_flow_db`. Replacing a user's durable flow
+  database is an engine decision; surfaces route through
+  `flows.controller_provider.recover_flow_store`, the single place that decision
+  is made.
+- No module under `surfaces/web/` may construct `FlowController`. HTTP handlers
+  resolve one via `flows.controller_provider.FlowControllerProvider`, which owns
+  construction, caching, and corrupt-store recovery.
+
+`surfaces/cli/` may construct a controller: `car flow worker` is the process that
+hosts a flow run, which makes it a composition root rather than a rendering
+surface.
+
+The check has no allowlist. Adding a violation should mean editing the check and
+recording why.
+
+Known remaining scope (not yet enforced): surfaces still open `FlowStore`
+directly in ~11 modules. Most of those are reads, and separating read access
+from lifetime ownership needs more than an import or call-site rule, so it is
+deliberately left out rather than papered over with an allowlist.
+
 ## Chat Turn Authority
 
 Ordinary Telegram and Discord chat turns have one lifecycle authority:

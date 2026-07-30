@@ -80,6 +80,20 @@ def chat_doctor_checks(repo_root: Path | None = None) -> list[DoctorCheck]:
 
     for result in run_parity_checks(repo_root=repo_root):
         check_id = _CHECK_GROUP
+        if result.skipped:
+            # A skipped check verified nothing. Report it as a warning under a
+            # distinct id so it cannot be mistaken for a parity guarantee in
+            # doctor output or in any pass/fail tally built from these checks.
+            checks.append(
+                DoctorCheck(
+                    name=f"Chat parity contract ({result.id})",
+                    passed=True,
+                    message=result.message,
+                    severity="warning",
+                    check_id=f"{_CHECK_GROUP}.skipped",
+                )
+            )
+            continue
         if result.passed:
             checks.append(
                 DoctorCheck(

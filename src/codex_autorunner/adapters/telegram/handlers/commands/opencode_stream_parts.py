@@ -185,12 +185,7 @@ class OpenCodeStreamPartHandler:
             detail_parts.append(summary.strip())
         if not detail_parts:
             return base_label
-        seen: set[str] = set()
-        unique_parts = [
-            part_text
-            for part_text in detail_parts
-            if part_text not in seen and not seen.add(part_text)
-        ]
+        unique_parts = list(dict.fromkeys(detail_parts))
         detail_text = " / ".join(unique_parts)
         return f"{base_label} - {_compact_preview(detail_text, limit=160)}"
 

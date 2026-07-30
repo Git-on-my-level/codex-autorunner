@@ -95,7 +95,7 @@ def reattach_running_telegram_managed_thread_execution(
         thread_id=thread_id,
         topic_key=surface_key,
         public_execution_error=public_execution_error,
-        workspace_path=started.workspace_root,
+        workspace_path=str(started.workspace_root),
         pma_enabled=True,
     ).queue_worker_hooks()
     task_map = _telegram_queue_task_map(service)

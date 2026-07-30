@@ -17,6 +17,7 @@ from ..chat.managed_thread_progress import progress_item_id_for_log_line
 from ..chat.managed_thread_progress_projector import (
     ManagedThreadProgressProjector,
 )
+from ._service_attrs import _TelegramServiceAttrs
 from .constants import (
     PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
     PROGRESS_HEARTBEAT_MAX_SECONDS,
@@ -50,14 +51,18 @@ _PROGRESS_EDIT_FAILURE_INITIAL_BACKOFF_SECONDS = 15.0
 _PROGRESS_EDIT_FAILURE_MAX_BACKOFF_SECONDS = 120.0
 
 
-def _turn_log_fields(turn_key: tuple[str, str]) -> dict[str, str]:
+def _turn_log_fields(turn_key: tuple[str, str]) -> dict[str, Any]:
     return {
         "backend_thread_id": turn_key[0],
         "turn_id": turn_key[1],
     }
 
 
-class TelegramNotificationHandlers:
+class TelegramNotificationHandlers(_TelegramServiceAttrs):
+    # Provided by ``TelegramCommandSupportMixin``; declared here for static analysis.
+    def _interrupt_keyboard(self) -> dict[str, Any]:
+        raise NotImplementedError
+
     def _ensure_turn_progress_projectors(
         self,
     ) -> dict[tuple[str, str], ManagedThreadProgressProjector]:
@@ -633,7 +638,7 @@ class TelegramNotificationHandlers:
             return
         tracker = self._turn_progress_trackers.get(turn_key)
         if tracker is None:
-            pending_context_usage: dict[tuple[str, str], int] = getattr(
+            pending_context_usage: Optional[dict[tuple[str, str], int]] = getattr(
                 self, "_pending_context_usage", None
             )
             if pending_context_usage is None:
@@ -1055,8 +1060,9 @@ def _extract_error_message(params: dict[str, Any]) -> str:
         return message or details
     if isinstance(err, str):
         return err
-    if isinstance(params.get("message"), str):
-        return params["message"]
+    message_value = params.get("message")
+    if isinstance(message_value, str):
+        return message_value
     return ""
 
 

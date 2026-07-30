@@ -6,7 +6,7 @@ import dataclasses
 import logging
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Deque, Optional, TypeVar, cast
+from typing import Any, Awaitable, Callable, Coroutine, Deque, Optional, TypeVar, cast
 
 logger = logging.getLogger("codex_autorunner.adapters.telegram.topic_queue")
 
@@ -227,7 +227,9 @@ class TopicQueue:
                 if future is not None and future.cancelled():
                     continue
                 try:
-                    self._current_task = asyncio.create_task(entry.work())
+                    self._current_task = asyncio.create_task(
+                        cast("Coroutine[Any, Any, Any]", entry.work())
+                    )
                     result: Any = await self._current_task
                 except asyncio.CancelledError:
                     if self._cancel_active_requested:

@@ -5,8 +5,9 @@ import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional, Sequence
 
+from ...core.apps.artifacts import AppArtifactCandidate
 from ...core.chat_bindings import (
     preferred_non_pma_chat_notification_source_for_workspace,
     preferred_non_pma_chat_notification_sources_by_workspace,
@@ -44,6 +45,7 @@ from ..chat.ticket_flow_artifacts import (
 from .client import chunk_message
 from .constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from .state import parse_topic_key
+from .state_types import TelegramTopicRecord
 
 
 class TelegramTicketFlowBridge:
@@ -84,7 +86,7 @@ class TelegramTicketFlowBridge:
 
     @staticmethod
     def _select_ticket_flow_topic(
-        entries: list[tuple[str, object]],
+        entries: Sequence[tuple[str, object]],
     ) -> Optional[tuple[str, object]]:
         if not entries:
             return None
@@ -234,7 +236,7 @@ class TelegramTicketFlowBridge:
     async def _notify_ticket_flow_pause(
         self,
         workspace_root: Path,
-        entries: list[tuple[str, object]],
+        entries: Sequence[tuple[str, object]],
         *,
         preferred_source: Optional[str] = None,
     ) -> None:
@@ -337,9 +339,9 @@ class TelegramTicketFlowBridge:
         return apply
 
     def _get_all_workspaces(
-        self, topics: dict[str, object]
-    ) -> dict[Path, list[tuple[str, object]]]:
-        workspace_topics: dict[Path, list[tuple[str, object]]] = {}
+        self, topics: dict[str, TelegramTopicRecord]
+    ) -> dict[Path, list[tuple[str, TelegramTopicRecord]]]:
+        workspace_topics: dict[Path, list[tuple[str, TelegramTopicRecord]]] = {}
         for key, record in topics.items():
             if not isinstance(record.workspace_path, str) or not record.workspace_path:
                 continue
@@ -771,7 +773,7 @@ class TelegramTicketFlowBridge:
     async def _notify_recovery_for_workspace(
         self,
         workspace_root: Path,
-        entries: list[tuple[str, object]],
+        entries: Sequence[tuple[str, object]],
         *,
         preferred_source: Optional[str] = None,
     ) -> None:
@@ -814,11 +816,11 @@ class TelegramTicketFlowBridge:
                 return
             channel_id = primary_key
         else:
+            if self._default_notification_chat_id is None:
+                return
             chat_id = self._default_notification_chat_id
             thread_id = None
             channel_id = f"{chat_id}:root"
-            if chat_id is None:
-                return
 
         transport_key = recovery_notification_transport_key(
             transport="telegram", channel_id=channel_id
@@ -899,7 +901,7 @@ class TelegramTicketFlowBridge:
     async def _notify_terminal_for_workspace(
         self,
         workspace_root: Path,
-        entries: list[tuple[str, object]],
+        entries: Sequence[tuple[str, object]],
     ) -> None:
         try:
             terminal_run = await asyncio.to_thread(
@@ -1068,7 +1070,7 @@ class TelegramTicketFlowBridge:
 
     def _load_terminal_wrapup_artifacts(
         self, workspace_root: Path
-    ) -> tuple[object, ...]:
+    ) -> tuple[AppArtifactCandidate, ...]:
         return collect_terminal_wrapup_artifacts(
             workspace_root,
             max_file_size_bytes=self._pause_config.max_file_size_bytes,
@@ -1079,7 +1081,7 @@ class TelegramTicketFlowBridge:
         chat_id: int,
         thread_id: Optional[int],
         *,
-        artifacts: tuple[object, ...],
+        artifacts: tuple[AppArtifactCandidate, ...],
     ) -> None:
         for artifact in artifacts:
             path = getattr(artifact, "absolute_path", None)
@@ -1125,7 +1127,7 @@ class TelegramTicketFlowBridge:
     async def _notify_scan_failure(
         self,
         workspace_root: Path,
-        entries: list[tuple[str, object]],
+        entries: Sequence[tuple[str, object]],
         *,
         error: Exception,
         failure_kind: str,
@@ -1179,7 +1181,7 @@ class TelegramTicketFlowBridge:
         self,
         *,
         workspace_root: Path,
-        entries: list[tuple[str, object]],
+        entries: Sequence[tuple[str, object]],
         message: str,
     ) -> bool:
         primary = self._select_ticket_flow_topic(entries)

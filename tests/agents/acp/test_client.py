@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from contextlib import suppress
 from pathlib import Path
@@ -187,6 +188,92 @@ def test_prompt_state_session_update_chunks_preserve_exact_whitespace() -> None:
         "| pma_file_inbox | 5 | 5 |\n\n"
         "Bottom line: No active work blocking."
     )
+
+
+class _FakeProcess:
+    def __init__(self, *, pid: object, returncode: object) -> None:
+        self.pid = pid
+        self.returncode = returncode
+
+
+def test_client_diagnostics_reports_defaults_before_process_starts() -> None:
+    client = ACPClient(fixture_command("official"))
+
+    diagnostics = client.diagnostics()
+
+    assert diagnostics.pid is None
+    assert diagnostics.pgid is None
+    assert diagnostics.returncode is None
+    assert diagnostics.active_prompts == 0
+
+
+def test_client_diagnostics_reports_pid_pgid_and_active_prompts() -> None:
+    client = ACPClient(fixture_command("official"))
+    client._process = _FakeProcess(pid=os.getpid(), returncode=None)  # type: ignore[assignment]
+    client._prompts = {"turn-1": object(), "turn-2": object()}  # type: ignore[dict-item]
+
+    diagnostics = client.diagnostics()
+
+    assert diagnostics.pid == os.getpid()
+    assert diagnostics.pgid == os.getpgid(os.getpid())
+    assert diagnostics.returncode is None
+    assert diagnostics.active_prompts == 2
+
+
+def test_client_diagnostics_reports_exited_process_returncode() -> None:
+    client = ACPClient(fixture_command("official"))
+    client._process = _FakeProcess(pid=os.getpid(), returncode=1)  # type: ignore[assignment]
+
+    diagnostics = client.diagnostics()
+
+    assert diagnostics.returncode == 1
+
+
+def test_client_diagnostics_treats_non_int_pid_as_missing() -> None:
+    client = ACPClient(fixture_command("official"))
+    client._process = _FakeProcess(pid="not-an-int", returncode=None)  # type: ignore[assignment]
+
+    diagnostics = client.diagnostics()
+
+    assert diagnostics.pid is None
+    assert diagnostics.pgid is None
+
+
+def test_client_diagnostics_returns_none_pgid_when_getpgid_raises_oserror() -> None:
+    client = ACPClient(fixture_command("official"))
+    # A pid that (almost certainly) does not correspond to a live process
+    # group triggers ProcessLookupError, a subclass of OSError.
+    client._process = _FakeProcess(pid=999_999_999, returncode=None)  # type: ignore[assignment]
+
+    diagnostics = client.diagnostics()
+
+    assert diagnostics.pid == 999_999_999
+    assert diagnostics.pgid is None
+
+
+def test_client_diagnostics_reports_none_pgid_on_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = ACPClient(fixture_command("official"))
+    client._process = _FakeProcess(pid=os.getpid(), returncode=None)  # type: ignore[assignment]
+    monkeypatch.setattr(
+        "codex_autorunner.agents.acp.client.os.name",
+        "nt",
+    )
+
+    diagnostics = client.diagnostics()
+
+    assert diagnostics.pid == os.getpid()
+    assert diagnostics.pgid is None
+
+
+def test_client_diagnostics_treats_non_dict_prompts_as_zero_active() -> None:
+    client = ACPClient(fixture_command("official"))
+    client._prompts = None  # type: ignore[assignment]
+
+    diagnostics = client.diagnostics()
+
+    assert diagnostics.active_prompts == 0
 
 
 @pytest.mark.parametrize(("method"), ("session/update", "session/request_permission"))

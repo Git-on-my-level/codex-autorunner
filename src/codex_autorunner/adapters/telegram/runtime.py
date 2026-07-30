@@ -11,6 +11,7 @@ from ...core.utils import canonicalize_path
 from ...workspace import canonical_workspace_root, workspace_id_for_path
 from ..app_server.client import CodexAppServerClient
 from ..app_server.env import build_app_server_env
+from ._service_attrs import _TelegramServiceAttrs
 from .config import AppServerUnavailableError
 from .constants import (
     APP_SERVER_START_BACKOFF_INITIAL_SECONDS,
@@ -20,11 +21,11 @@ from .constants import (
 from .rendering import prepare_telegram_message, render_telegram_message
 from .state import parse_topic_key
 from .state import topic_key as build_topic_key
-from .state_types import TOPIC_ROOT
+from .state_types import TOPIC_ROOT, TelegramTopicRecord
 from .types import TurnContext
 
 
-class TelegramWorkspaceAndTurnMixin:
+class TelegramWorkspaceAndTurnMixin(_TelegramServiceAttrs):
     """Mixin providing workspace client management and turn context utilities.
 
     This mixin consolidates runtime helpers for:
@@ -57,7 +58,9 @@ class TelegramWorkspaceAndTurnMixin:
             return None
         return workspace_id_for_path(root)
 
-    async def _refresh_workspace_id(self, key: str, record) -> Optional[str]:
+    async def _refresh_workspace_id(
+        self, key: str, record: TelegramTopicRecord
+    ) -> Optional[str]:
         if record.workspace_id or not record.workspace_path:
             return record.workspace_id
         workspace_id = self._workspace_id_for_path(record.workspace_path)
@@ -191,7 +194,7 @@ class TelegramWorkspaceAndTurnMixin:
         return None
 
     def _resolve_turn_context(
-        self, turn_id: Optional[str], *, thread_id: Optional[str] = None
+        self, turn_id: Optional[str], thread_id: Optional[str] = None
     ) -> Optional[TurnContext]:
         key = self._resolve_turn_key(turn_id, thread_id=thread_id)
         if key is None:

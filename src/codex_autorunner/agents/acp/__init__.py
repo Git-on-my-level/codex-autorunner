@@ -1,5 +1,6 @@
 from .client import (
     ACPClient,
+    ACPClientDiagnostics,
     ACPPromptHandle,
     ACPPromptResult,
     MissingSessionMatcher,
@@ -49,6 +50,7 @@ from .supervisor import ACPSubprocessSupervisor, ACPSupervisorHandleSnapshot
 __all__ = [
     "ACPAdvertisedCommand",
     "ACPClient",
+    "ACPClientDiagnostics",
     "ACPError",
     "ACPEvent",
     "ACPEventEnvelope",

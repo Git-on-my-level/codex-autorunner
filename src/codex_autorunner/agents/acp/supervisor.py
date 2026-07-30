@@ -230,24 +230,27 @@ class ACPSubprocessSupervisor:
 
     async def lifecycle_snapshot(self) -> tuple[ACPSupervisorHandleSnapshot, ...]:
         async with self._lock:
-            return tuple(
-                ACPSupervisorHandleSnapshot(
-                    runtime_kind="acp",
-                    server_scope="workspace",
-                    handle_id=workspace_root,
-                    workspace_root=workspace_root,
-                    pid=_client_pid(client),
-                    pgid=_client_pgid(client),
-                    base_url=None,
-                    active_prompts=_client_active_prompts(client),
-                    started=client.initialize_result is not None,
-                    healthy=client.initialize_result is not None
-                    and _client_returncode(client) is None,
-                    last_used_at=self._last_used_at.get(workspace_root, 0.0),
-                    state_dir=None,
+            snapshots = []
+            for workspace_root, client in sorted(self._clients.items()):
+                diagnostics = client.diagnostics()
+                snapshots.append(
+                    ACPSupervisorHandleSnapshot(
+                        runtime_kind="acp",
+                        server_scope="workspace",
+                        handle_id=workspace_root,
+                        workspace_root=workspace_root,
+                        pid=diagnostics.pid,
+                        pgid=diagnostics.pgid,
+                        base_url=None,
+                        active_prompts=diagnostics.active_prompts,
+                        started=client.initialize_result is not None,
+                        healthy=client.initialize_result is not None
+                        and diagnostics.returncode is None,
+                        last_used_at=self._last_used_at.get(workspace_root, 0.0),
+                        state_dir=None,
+                    )
                 )
-                for workspace_root, client in sorted(self._clients.items())
-            )
+            return tuple(snapshots)
 
 
 def _workspace_notification_handler(
@@ -268,39 +271,6 @@ def _workspace_permission_handler(
         return await handler(workspace_root, event)
 
     return _wrapped
-
-
-def _client_process(client: ACPClient) -> Any:
-    return getattr(client, "_process", None)
-
-
-def _client_pid(client: ACPClient) -> Optional[int]:
-    process = _client_process(client)
-    pid = getattr(process, "pid", None)
-    return pid if isinstance(pid, int) else None
-
-
-def _client_pgid(client: ACPClient) -> Optional[int]:
-    pid = _client_pid(client)
-    if pid is None:
-        return None
-    try:
-        import os
-
-        return os.getpgid(pid) if os.name != "nt" else None
-    except OSError:
-        return None
-
-
-def _client_returncode(client: ACPClient) -> Optional[int]:
-    process = _client_process(client)
-    returncode = getattr(process, "returncode", None)
-    return returncode if isinstance(returncode, int) else None
-
-
-def _client_active_prompts(client: ACPClient) -> int:
-    prompts = getattr(client, "_prompts", None)
-    return len(prompts) if isinstance(prompts, dict) else 0
 
 
 __all__ = [

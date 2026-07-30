@@ -10,7 +10,7 @@ import time
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import httpx
 
@@ -548,11 +548,15 @@ class GitHubCommands(TelegramCommandSupportMixin):
     def _get_review_intermediate_response(self, turn_key: Optional[TurnKey]) -> str:
         if turn_key is None:
             return ""
-        render_summary = getattr(self, "_render_turn_progress_summary", None)
-        if callable(render_summary):
+        render_summary: Optional[Callable[[TurnKey], str]] = getattr(
+            self, "_render_turn_progress_summary", None
+        )
+        if render_summary is not None:
             return render_summary(turn_key)
-        render_fn = getattr(self, "_render_final_turn_progress", None)
-        if callable(render_fn):
+        render_fn: Optional[Callable[[TurnKey], str]] = getattr(
+            self, "_render_final_turn_progress", None
+        )
+        if render_fn is not None:
             return render_fn(turn_key)
         return ""
 
@@ -801,8 +805,8 @@ class GitHubCommands(TelegramCommandSupportMixin):
                     reply_to=message.message_id,
                 )
                 return None
-            review_session_id = extract_session_id(session, allow_fallback_id=True)
-            if not review_session_id:
+            extracted_session_id = extract_session_id(session, allow_fallback_id=True)
+            if not extracted_session_id:
                 await self._send_message(
                     message.chat_id,
                     "Failed to start a new OpenCode thread.",
@@ -810,6 +814,7 @@ class GitHubCommands(TelegramCommandSupportMixin):
                     reply_to=message.message_id,
                 )
                 return None
+            review_session_id = extracted_session_id
 
             def apply(record: "TelegramTopicRecord") -> None:
                 if review_session_id in record.thread_ids:
@@ -1025,7 +1030,7 @@ class GitHubCommands(TelegramCommandSupportMixin):
                             },
                         }
                     )
-                    return decision
+                    return decision if isinstance(decision, str) else ""
 
                 harness.configure_turn_handlers(
                     setup.review_session_id,

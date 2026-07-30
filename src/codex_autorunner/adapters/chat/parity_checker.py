@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .action_ux_contract import (
     CHAT_ACTION_UX_CONTRACT,
@@ -104,6 +104,15 @@ class ParityCheckResult:
     passed: bool
     message: str
     metadata: dict[str, Any]
+    skipped: bool = False
+    """True when the check could not run at all (sources absent from disk).
+
+    A skipped check is not a passing check. It carries ``passed=True`` so that
+    running ``car doctor`` against a packaged install does not hard-fail on
+    something it structurally cannot verify, but surfaces must render it
+    distinctly from a genuine pass. Source that is *present but uninspectable*
+    is a failure, not a skip: that is checker-vs-code drift.
+    """
 
 
 def run_parity_checks(
@@ -129,6 +138,7 @@ def run_parity_checks(
         return _source_unavailable_results(missing=missing)
 
     a = {name: _parse_module(_read_text(path)) for name, path in source_paths.items()}
+    source_available = {name: path is not None for name, path in source_paths.items()}
 
     return (
         _check_contract_discord_metadata_complete(contract=contract),
@@ -142,6 +152,7 @@ def run_parity_checks(
             discord_commands_ast=a["discord_commands"],
             discord_interaction_registry_ast=a["discord_interaction_registry"],
             telegram_commands_spec_ast=a["telegram_commands_spec"],
+            source_available=source_available,
         ),
         _check_discord_contract_commands_routed(
             contract=contract,
@@ -260,7 +271,13 @@ def _source_unavailable_results(
         "missing_sources": list(missing),
     }
     return tuple(
-        ParityCheckResult(id=check_id, passed=True, message=message, metadata=metadata)
+        ParityCheckResult(
+            id=check_id,
+            passed=True,
+            message=message,
+            metadata=metadata,
+            skipped=True,
+        )
         for check_id in _SKIPPED_CHECK_IDS
     )
 
@@ -490,7 +507,9 @@ def _check_contract_registry_entries_cataloged(
     discord_commands_ast: ast.Module | None,
     discord_interaction_registry_ast: ast.Module | None = None,
     telegram_commands_spec_ast: ast.Module | None,
+    source_available: Mapping[str, bool] | None = None,
 ) -> ParityCheckResult:
+    available = dict(source_available or {})
     discord_registered_paths = _extract_discord_registered_command_paths(
         discord_commands_ast
     ) or _extract_discord_registered_paths_from_registry(
@@ -501,14 +520,53 @@ def _check_contract_registry_entries_cataloged(
     )
 
     if discord_registered_paths is None or telegram_registered_commands is None:
-        skipped_sources: list[str] = []
+        # Two very different situations reach this branch, and conflating them is
+        # how this check silently went green for refactors it was meant to catch:
+        #
+        #   * the source file is not on disk (packaged install, no checkout) ->
+        #     genuinely unverifiable, skip.
+        #   * the source file is present but no longer matches the shape the
+        #     extractor understands (renamed builder, dict built in a loop rather
+        #     than returned as a literal) -> the checker has drifted from the code
+        #     it polices, and it must fail loudly instead of reporting parity.
+        unavailable: list[str] = []
+        uninspectable: list[str] = []
         if discord_registered_paths is None:
-            skipped_sources.append("discord.commands")
+            discord_present = available.get("discord_commands", True) or available.get(
+                "discord_interaction_registry", True
+            )
+            (uninspectable if discord_present else unavailable).append(
+                "discord.commands"
+            )
         if telegram_registered_commands is None:
-            skipped_sources.append("telegram.commands_spec")
+            telegram_present = available.get("telegram_commands_spec", True)
+            (uninspectable if telegram_present else unavailable).append(
+                "telegram.commands_spec"
+            )
+
+        if uninspectable:
+            return ParityCheckResult(
+                id="contract.registry_entries_cataloged",
+                passed=False,
+                message=(
+                    "Command registries are present but could not be statically "
+                    "extracted, so contract coverage was not verified. Restore a "
+                    "statically-analyzable registry shape (Discord: "
+                    "`build_application_commands()` returning a list literal; "
+                    "Telegram: `build_command_specs()` returning a dict literal) "
+                    "or update the extractor in parity_checker.py to match."
+                ),
+                metadata={
+                    "reason": "registry_sources_uninspectable",
+                    "uninspectable_sources": uninspectable,
+                    "unavailable_sources": unavailable,
+                },
+            )
+
         return ParityCheckResult(
             id="contract.registry_entries_cataloged",
             passed=True,
+            skipped=True,
             message=(
                 "Skipped contract registry coverage check: command registries are "
                 "unavailable for static extraction."
@@ -516,7 +574,7 @@ def _check_contract_registry_entries_cataloged(
             metadata={
                 "skipped": True,
                 "reason": "registry_sources_unavailable",
-                "missing_sources": skipped_sources,
+                "missing_sources": unavailable,
             },
         )
 

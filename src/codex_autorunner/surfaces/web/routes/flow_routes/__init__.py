@@ -32,9 +32,14 @@ class FlowRoutesState:
     controller_cache: Dict[tuple[Path, str], object]
     definition_cache: Dict[tuple[Path, str], object]
     lock: threading.Lock
+    # Provisioning/recovery logic lives in flows.controller_provider; this holds
+    # the per-app instance bound to the caches above. Built lazily by the route
+    # module, which supplies the definition/path factories.
+    controller_provider: Optional[object]
 
     def __init__(self) -> None:
         self.active_workers = {}
         self.controller_cache = {}
         self.definition_cache = {}
         self.lock = threading.Lock()
+        self.controller_provider = None
