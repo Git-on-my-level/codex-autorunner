@@ -374,6 +374,7 @@ def _resolve_notify_message(
     payload: dict[str, Any],
     journal: PublishJournalStore,
     thread_store: ManagedThreadStore,
+    queue_worker_starter_fn: Optional[Callable[[str], None]] = None,
 ) -> tuple[str, Optional[tuple[str, str, dict[str, Any]]]]:
     dependency = _normalize_mapping(payload.get("managed_turn_dependency"))
     if not dependency:
@@ -466,6 +467,8 @@ def _resolve_notify_message(
             (thread_target_id, managed_turn_id, turn),
         )
     if turn_status == "queued":
+        if queue_worker_starter_fn is not None:
+            queue_worker_starter_fn(thread_target_id)
         blocking_turn = _running_turn_blocking_queue(
             thread_store,
             thread_target_id=thread_target_id,
@@ -1236,6 +1239,7 @@ def build_notify_chat_executor(
     run_coroutine: Optional[Callable[[Coroutine[Any, Any, Any]], Any]] = None,
     thread_store: Optional[ManagedThreadStore] = None,
     journal_store: Optional[PublishJournalStore] = None,
+    queue_worker_starter_fn: Optional[Callable[[str], None]] = None,
 ) -> PublishActionExecutor:
     store = thread_store or ManagedThreadStore(hub_root)
     journal = journal_store or PublishJournalStore(hub_root)
@@ -1267,6 +1271,7 @@ def build_notify_chat_executor(
             payload=payload,
             journal=journal,
             thread_store=store,
+            queue_worker_starter_fn=queue_worker_starter_fn,
         )
         message = _normalize_optional_text(raw_message)
         if message is None:

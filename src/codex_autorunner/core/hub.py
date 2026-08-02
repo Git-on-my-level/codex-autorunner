@@ -296,9 +296,17 @@ class HubSupervisor:
         publish_registry = PublishExecutorRegistry(
             {
                 "enqueue_managed_turn": build_enqueue_managed_turn_executor(
-                    hub_root=hub_config.root
+                    hub_root=hub_config.root,
+                    queue_worker_starter_fn=(
+                        self._request_managed_thread_queue_worker_start
+                    ),
                 ),
-                "notify_chat": build_notify_chat_executor(hub_root=hub_config.root),
+                "notify_chat": build_notify_chat_executor(
+                    hub_root=hub_config.root,
+                    queue_worker_starter_fn=(
+                        self._request_managed_thread_queue_worker_start
+                    ),
+                ),
             },
             mutation_policy_config=hub_config.raw,
         )
