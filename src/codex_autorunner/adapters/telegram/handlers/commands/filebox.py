@@ -65,6 +65,37 @@ class FileBoxCommandsMixin(_TelegramServiceAttrs):
             return f"chat:{chat_id}"
         return f"chat:{chat_id}/thread:{thread_id}"
 
+    async def _reject_oversized_artifact_deliveries(
+        self,
+        *,
+        service: ArtifactDeliveryService,
+        target_surface: str,
+        target_conversation_key: str,
+        max_bytes: int,
+        chat_id: int,
+        thread_id: Optional[int],
+        reply_to: Optional[int],
+    ) -> None:
+        for intent in service.list_deliveries(
+            states=ACTIVE_DELIVERY_STATES,
+            target_surface=target_surface,
+            target_conversation_key=target_conversation_key,
+        ):
+            inspected = service.inspect_with_artifact(intent.delivery_id)
+            if inspected is None:
+                continue
+            delivery_intent, artifact = inspected
+            if artifact is None or artifact.size <= max_bytes:
+                continue
+            filename = delivery_filename(delivery_intent, artifact)
+            service.cancel(delivery_intent.delivery_id)
+            await self._send_message(
+                chat_id,
+                f"Outbox file too large: {filename} (max {max_bytes} bytes).",
+                thread_id=thread_id,
+                reply_to=reply_to,
+            )
+
     def _files_usage(self, *, pma: bool) -> str:
         header = "Usage:"
         lines = [
@@ -239,13 +270,14 @@ class FileBoxCommandsMixin(_TelegramServiceAttrs):
                 hub_root = getattr(self, "_hub_root", None)
                 if hub_root is not None:
                     service_root = Path(hub_root)
-        if not pending_dir.exists():
-            return
+
+        # The durable artifact queue is independent of the legacy FileBox
+        # directories.  Always drain it, even when there are no legacy files to
+        # import; direct `car artifacts send` records only exist in this queue.
+        service = ArtifactDeliveryService(service_root)
         files = self._list_files(pending_dir)
         if pma_enabled:
             files.extend(self._list_files(pending_dir / "pending"))
-        if not files:
-            return
         sent_dir = self._files_outbox_sent_dir(record.workspace_path, key)
         max_bytes = self._config.media.max_file_bytes
         deliverable: list[Path] = []
@@ -268,27 +300,35 @@ class FileBoxCommandsMixin(_TelegramServiceAttrs):
                 )
                 continue
             deliverable.append(path)
-        if not deliverable:
-            return
-        service = ArtifactDeliveryService(service_root)
         target_key = self._artifact_target_key(chat_id=chat_id, thread_id=thread_id)
-        enqueue_legacy_paths(
+        if deliverable:
+            enqueue_legacy_paths(
+                service=service,
+                paths=deliverable,
+                target_surface="telegram",
+                target_conversation_key=target_key,
+                workspace_scope=f"repo:{record.workspace_path}",
+                legacy_source="pma-outbox" if pma_enabled else "outbox/pending",
+            )
+        transport = _TelegramArtifactTransport(
+            bot=self._bot,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            reply_to=reply_to,
+        )
+        await self._reject_oversized_artifact_deliveries(
             service=service,
-            paths=deliverable,
             target_surface="telegram",
             target_conversation_key=target_key,
-            workspace_scope=f"repo:{record.workspace_path}",
-            legacy_source="pma-outbox" if pma_enabled else "outbox/pending",
+            max_bytes=max_bytes,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            reply_to=reply_to,
         )
         if pma_enabled:
             await drain_artifact_deliveries(
                 service=service,
-                transport=_TelegramArtifactTransport(
-                    bot=self._bot,
-                    chat_id=chat_id,
-                    thread_id=thread_id,
-                    reply_to=reply_to,
-                ),
+                transport=transport,
                 target_surface="telegram",
                 target_conversation_key=target_key,
                 archive_policy=LegacyArchivePolicy(mode="delete"),
@@ -297,12 +337,7 @@ class FileBoxCommandsMixin(_TelegramServiceAttrs):
             return
         await drain_artifact_deliveries(
             service=service,
-            transport=_TelegramArtifactTransport(
-                bot=self._bot,
-                chat_id=chat_id,
-                thread_id=thread_id,
-                reply_to=reply_to,
-            ),
+            transport=transport,
             target_surface="telegram",
             target_conversation_key=target_key,
             archive_policy=LegacyArchivePolicy(

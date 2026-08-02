@@ -129,7 +129,7 @@ def test_pma_upload_help():
     assert result.exit_code == 0
     output = result.stdout
     assert "|".join(BOXES) in output, "PMA upload should require box argument"
-    assert "{files}" in output or "files..." in output, "PMA upload should accept files"
+    assert "{files}" in output, "PMA upload should accept files"
     assert "--json" in output, "PMA upload should support --json output mode"
 
 
