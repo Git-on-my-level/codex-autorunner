@@ -162,6 +162,43 @@ async def test_flushes_direct_artifact_without_legacy_outbox_directory(
     ]
 
 
+@pytest.mark.anyio
+async def test_rejects_oversized_durable_artifact_without_retrying(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "large.bin"
+    source.write_bytes(b"x" * 32)
+    target_key = "chat:10/thread:20"
+    service = ArtifactDeliveryService(tmp_path)
+    intent = service.enqueue_file(
+        source,
+        target_surface="telegram",
+        target_conversation_key=target_key,
+        workspace_scope=f"repo:{tmp_path}",
+    )
+    bot = _BotStub()
+    handler = _FilesHandlerStub(
+        tmp_path,
+        TelegramTopicRecord(workspace_path=str(tmp_path), pma_enabled=False),
+    )
+    handler._config.media.max_file_bytes = 16
+    handler._bot = bot
+
+    await handler._flush_outbox_files(
+        TelegramTopicRecord(workspace_path=str(tmp_path), pma_enabled=False),
+        chat_id=10,
+        thread_id=20,
+        reply_to=99,
+        topic_key="10:20",
+    )
+
+    delivered = ArtifactDeliveryService(tmp_path).inspect(intent.delivery_id)
+    assert delivered is not None
+    assert delivered.state == "cancelled"
+    assert bot.documents == []
+    assert handler._sent == ["Outbox file too large: large.bin (max 16 bytes)."]
+
+
 def test_build_media_prompt_includes_forwarded_caption(tmp_path: Path) -> None:
     handler = FilesCommands.__new__(FilesCommands)
     handler._config = SimpleNamespace(

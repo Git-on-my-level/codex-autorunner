@@ -65,6 +65,37 @@ class FileBoxCommandsMixin(_TelegramServiceAttrs):
             return f"chat:{chat_id}"
         return f"chat:{chat_id}/thread:{thread_id}"
 
+    async def _reject_oversized_artifact_deliveries(
+        self,
+        *,
+        service: ArtifactDeliveryService,
+        target_surface: str,
+        target_conversation_key: str,
+        max_bytes: int,
+        chat_id: int,
+        thread_id: Optional[int],
+        reply_to: Optional[int],
+    ) -> None:
+        for intent in service.list_deliveries(
+            states=ACTIVE_DELIVERY_STATES,
+            target_surface=target_surface,
+            target_conversation_key=target_conversation_key,
+        ):
+            inspected = service.inspect_with_artifact(intent.delivery_id)
+            if inspected is None:
+                continue
+            delivery_intent, artifact = inspected
+            if artifact is None or artifact.size <= max_bytes:
+                continue
+            filename = delivery_filename(delivery_intent, artifact)
+            service.cancel(delivery_intent.delivery_id)
+            await self._send_message(
+                chat_id,
+                f"Outbox file too large: {filename} (max {max_bytes} bytes).",
+                thread_id=thread_id,
+                reply_to=reply_to,
+            )
+
     def _files_usage(self, *, pma: bool) -> str:
         header = "Usage:"
         lines = [
@@ -281,6 +312,15 @@ class FileBoxCommandsMixin(_TelegramServiceAttrs):
             )
         transport = _TelegramArtifactTransport(
             bot=self._bot,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            reply_to=reply_to,
+        )
+        await self._reject_oversized_artifact_deliveries(
+            service=service,
+            target_surface="telegram",
+            target_conversation_key=target_key,
+            max_bytes=max_bytes,
             chat_id=chat_id,
             thread_id=thread_id,
             reply_to=reply_to,

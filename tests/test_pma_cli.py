@@ -58,7 +58,7 @@ def test_pma_cli_targets_commands_removed() -> None:
         ("files", {"--json"}),
         ("active", {"--json"}),
         ("agents", {"--json"}),
-        ("models", {"--json", "AGENT"}),
+        ("models", {"--json", "{agent}"}),
     ],
 )
 def test_pma_help_shows_json_option(subcommand, expected_options):
@@ -129,7 +129,7 @@ def test_pma_upload_help():
     assert result.exit_code == 0
     output = result.stdout
     assert "|".join(BOXES) in output, "PMA upload should require box argument"
-    assert "FILES" in output, "PMA upload should accept files"
+    assert "{files}" in output, "PMA upload should accept files"
     assert "--json" in output, "PMA upload should support --json output mode"
 
 
