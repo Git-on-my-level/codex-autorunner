@@ -460,14 +460,12 @@ def create_hub_app(
         _require_worktree_scope(repo_id, worktree_id)
         return _web_index_response()
 
-    # Registered LAST, deliberately. Starlette matches routes in registration
-    # order, and these templates include per-section catch-alls. Registering
-    # them earlier let a catch-all such as `/repos/{rest:path}` shadow the
-    # bespoke worktree-scope and legacy-redirect handlers above, which is how a
-    # scope-validated URL could quietly return the generic shell instead.
-    _register_spa_shell_routes(app, web_static_dir, _web_index_response)
-
+    # Register the remaining API routes before the SPA shell, so a shell
+    # catch-all cannot shadow an API endpoint. Keep the shell before repo
+    # mounts, though: a mounted repo may return its own 404 for a frontend
+    # deep link before the hub can serve the shell.
     app.include_router(build_system_routes())
+    _register_spa_shell_routes(app, web_static_dir, _web_index_response)
     mount_manager.mount_initial(initial_snapshots)
 
     allowed_hosts = resolve_allowed_hosts(

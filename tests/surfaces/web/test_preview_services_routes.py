@@ -1404,7 +1404,6 @@ def test_preview_services_port_conflict_returns_409(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     seed_hub_files(hub_root, force=True)
     client = TestClient(create_hub_app(hub_root))
-    port = _find_available_port()
 
     first = client.post(
         "/hub/services/managed",
@@ -1412,7 +1411,7 @@ def test_preview_services_port_conflict_returns_409(tmp_path: Path) -> None:
             "name": "First",
             "argv": _server_command(),
             "cwd": str(tmp_path),
-            "port_policy": {"mode": "exact", "port": port},
+            "port_policy": {"mode": "auto"},
         },
     )
     assert first.status_code == 200
@@ -1420,6 +1419,7 @@ def test_preview_services_port_conflict_returns_409(tmp_path: Path) -> None:
 
     started = client.post(f"/hub/services/{first_id}/start")
     assert started.status_code == 200
+    port = started.json()["service"]["target"]["port"]
     try:
         second = client.post(
             "/hub/services/managed",
