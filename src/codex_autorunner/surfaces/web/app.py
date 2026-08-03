@@ -183,6 +183,14 @@ def _register_spa_shell_routes(
     web_static_dir: Path,
     index_response: Callable[[], HTMLResponse],
 ) -> None:
+    if not (web_static_dir / "index.html").is_file():
+        logger.warning(
+            "Web Hub UI assets missing at %s; skipping SPA shell routes so API "
+            "routes remain available. Run `pnpm web:build` to generate them.",
+            web_static_dir,
+        )
+        return
+
     manifest_routes = _load_spa_route_manifest(web_static_dir)
     templates = _spa_shell_route_templates(manifest_routes)
 
