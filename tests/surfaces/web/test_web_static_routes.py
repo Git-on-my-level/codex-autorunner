@@ -253,6 +253,35 @@ def test_worktree_scope_validation_survives_a_missing_spa_manifest(
     assert ordinary.status_code == 200
 
 
+def test_missing_web_assets_do_not_shadow_repo_api_routes(tmp_path, monkeypatch):
+    """A source checkout without a frontend build must keep APIs routable."""
+    from codex_autorunner.surfaces.web import app as web_app_module
+
+    missing_static_dir = tmp_path / "web-static-not-built"
+    monkeypatch.setattr(
+        web_app_module,
+        "resolve_web_static_dir",
+        lambda: (missing_static_dir, None),
+    )
+
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    repo_id = "repo-1"
+    repo_root = hub_root / "worktrees" / repo_id
+    repo_root.mkdir(parents=True)
+    (repo_root / ".git").mkdir()
+    seed_repo_files(repo_root, git_required=False)
+    hub_config = load_hub_config(hub_root)
+    manifest = load_manifest(hub_config.manifest_path, hub_root)
+    manifest.ensure_repo(hub_root, repo_root, repo_id=repo_id, display_name=repo_id)
+    save_manifest(hub_config.manifest_path, manifest, hub_root)
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.get(f"/repos/{repo_id}/api/filebox")
+
+    assert response.status_code == 200
+
+
 def test_worktree_frontend_route_rejects_orphaned_manifest_worktree(tmp_path):
     hub_root = tmp_path / "hub"
     seed_hub_files(hub_root, force=True)

@@ -1901,6 +1901,7 @@ def test_notify_chat_does_not_exhaust_start_timer_while_turn_is_queued(
         _fake_notify_primary_pma_chat_for_repo,
     )
 
+    started_threads: list[str] = []
     processor = PublishOperationProcessor(
         journal,
         executors=PublishExecutorRegistry(
@@ -1908,11 +1909,13 @@ def test_notify_chat_does_not_exhaust_start_timer_while_turn_is_queued(
                 "enqueue_managed_turn": build_enqueue_managed_turn_executor(
                     hub_root=hub_root,
                     thread_store=thread_store,
+                    queue_worker_starter_fn=started_threads.append,
                 ),
                 "notify_chat": build_notify_chat_executor(
                     hub_root=hub_root,
                     thread_store=thread_store,
                     journal_store=journal,
+                    queue_worker_starter_fn=started_threads.append,
                 ),
             }
         ),
@@ -1926,6 +1929,7 @@ def test_notify_chat_does_not_exhaust_start_timer_while_turn_is_queued(
         by_id = {operation.operation_id: operation for operation in first}
         assert by_id[enqueue_operation.operation_id].state == "succeeded"
         assert by_id[notify_operation.operation_id].state == "pending"
+        assert started_threads == [thread["managed_thread_id"]] * 2
         queued_turn_id = by_id[enqueue_operation.operation_id].response[
             "managed_turn_id"
         ]
@@ -1941,6 +1945,8 @@ def test_notify_chat_does_not_exhaust_start_timer_while_turn_is_queued(
             ]
             assert processed[0].state == "pending"
             assert calls == []
+
+        assert started_threads == [thread["managed_thread_id"]] * 16
 
     queued_turn = thread_store.get_turn(thread["managed_thread_id"], queued_turn_id)
     assert queued_turn is not None

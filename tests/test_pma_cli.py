@@ -1,6 +1,7 @@
 """Tests for PMA CLI commands."""
 
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,6 +13,33 @@ from codex_autorunner.core.filebox import BOXES
 from codex_autorunner.surfaces.cli import pma_cli
 from codex_autorunner.surfaces.cli.hub_control_plane_client import resolve_hub_path
 from codex_autorunner.surfaces.cli.pma_cli import pma_app
+
+
+def _help_usage_contains_argument(output: str, argument: str) -> bool:
+    """Accept Click/Typer's supported spellings for positional arguments."""
+    usage_lines: list[str] = []
+    lines = output.splitlines()
+    for index, line in enumerate(lines):
+        if line.casefold().startswith("usage:"):
+            usage_lines.append(line)
+            for continuation in lines[index + 1 :]:
+                if not continuation.strip():
+                    break
+                if not continuation[:1].isspace():
+                    break
+                usage_lines.append(continuation)
+            break
+
+    usage = " ".join(usage_lines)
+    token = re.escape(argument)
+    return (
+        re.search(
+            rf"(?:\{{\s*{token}\s*\}}|(?<![\w]){token}(?:\.\.\.)?(?![\w]))",
+            usage,
+            flags=re.IGNORECASE,
+        )
+        is not None
+    )
 
 
 def test_pma_cli_has_required_commands():
@@ -50,23 +78,27 @@ def test_pma_cli_targets_commands_removed() -> None:
 
 
 @pytest.mark.parametrize(
-    "subcommand,expected_options",
+    "subcommand,expected_options,expected_arguments",
     [
-        ("chat", {"--json", "--stream"}),
-        ("interrupt", {"--json"}),
-        ("reset", {"--json"}),
-        ("files", {"--json"}),
-        ("active", {"--json"}),
-        ("agents", {"--json"}),
-        ("models", {"--json", "{agent}"}),
+        ("chat", {"--json", "--stream"}, set()),
+        ("interrupt", {"--json"}, set()),
+        ("reset", {"--json"}, set()),
+        ("files", {"--json"}, set()),
+        ("active", {"--json"}, set()),
+        ("agents", {"--json"}, set()),
+        ("models", {"--json"}, {"agent"}),
     ],
 )
-def test_pma_help_shows_json_option(subcommand, expected_options):
+def test_pma_help_shows_json_option(subcommand, expected_options, expected_arguments):
     runner = CliRunner()
     result = runner.invoke(pma_app, [subcommand, "--help"])
     assert result.exit_code == 0
     for opt in expected_options:
         assert opt in result.stdout, f"PMA {subcommand} should show {opt}"
+    for argument in expected_arguments:
+        assert _help_usage_contains_argument(
+            result.stdout, argument
+        ), f"PMA {subcommand} should show {argument}"
 
 
 def test_pma_file_group_has_required_commands() -> None:
@@ -129,7 +161,9 @@ def test_pma_upload_help():
     assert result.exit_code == 0
     output = result.stdout
     assert "|".join(BOXES) in output, "PMA upload should require box argument"
-    assert "{files}" in output, "PMA upload should accept files"
+    assert _help_usage_contains_argument(
+        output, "files"
+    ), "PMA upload should accept files"
     assert "--json" in output, "PMA upload should support --json output mode"
 
 

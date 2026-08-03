@@ -1314,7 +1314,10 @@ def _default_publish_processor(
             hub_root=hub_root,
             queue_worker_starter_fn=queue_worker_starter_fn,
         ),
-        "notify_chat": build_notify_chat_executor(hub_root=hub_root),
+        "notify_chat": build_notify_chat_executor(
+            hub_root=hub_root,
+            queue_worker_starter_fn=queue_worker_starter_fn,
+        ),
     }
     if publish_executor_factory is not None:
         executors.update(
