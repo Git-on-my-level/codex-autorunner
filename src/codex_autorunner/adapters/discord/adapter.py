@@ -530,12 +530,6 @@ class DiscordChatAdapter(ChatAdapter):
                     payload["components"] = self._build_action_components(
                         request.actions
                     )
-                if request.reply_to and idx == 0:
-                    payload["message_reference"] = {
-                        "message_id": request.reply_to.message_id,
-                        "channel_id": channel_id,
-                    }
-
                 response = await self._rest.create_channel_message(
                     channel_id=channel_id, payload=payload
                 )

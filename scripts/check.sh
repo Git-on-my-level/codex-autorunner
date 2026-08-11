@@ -98,6 +98,11 @@ _AUTO_WORKERS="$("$PYTHON_BIN" -c 'import os;print(os.cpu_count() or 4)' 2>/dev/
 FAST_TEST_WORKERS="${CODEX_FAST_TEST_WORKERS:-$_AUTO_WORKERS}"
 export CAR_PYTEST_RUN_TOKEN="${CAR_PYTEST_RUN_TOKEN:-check-$("$PYTHON_BIN" -c 'import uuid; print(uuid.uuid4().hex[:8])')}"
 FAST_TEST_BASETEMP="$("$PYTHON_BIN" scripts/pytest_basetemp.py --repo-root "$REPO_ROOT")"
+CHAT_APPS_PYTEST_RUN_TOKEN="${CAR_PYTEST_RUN_TOKEN}-chat-apps"
+CHAT_APPS_PYTEST_BASETEMP="$(
+  CAR_PYTEST_RUN_TOKEN="$CHAT_APPS_PYTEST_RUN_TOKEN" \
+    "$PYTHON_BIN" scripts/pytest_basetemp.py --repo-root "$REPO_ROOT"
+)"
 STAGED_FILES="$(git diff --cached --name-only --diff-filter=ACMRD 2>/dev/null || true)"
 
 # --- Lane detection (if not explicitly set) ----------------------------------
@@ -373,7 +378,10 @@ _run_chat_apps_lane() {
     echo "Run 'make test-chat-surface-lab' or set CODEX_CHECK_RUN_CHAT_SURFACE_LAB=1 to include it."
   else
     echo "Running chat-surface lab deterministic checks..."
-    make test-chat-surface-lab PYTHON="$PYTHON_BIN"
+    make test-chat-surface-lab \
+      PYTHON="$PYTHON_BIN" \
+      CAR_PYTEST_RUN_TOKEN="$CHAT_APPS_PYTEST_RUN_TOKEN" \
+      PYTEST_BASETEMP="$CHAT_APPS_PYTEST_BASETEMP"
   fi
 }
 
