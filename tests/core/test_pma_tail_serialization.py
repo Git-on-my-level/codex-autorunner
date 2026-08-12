@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import time
-
 from codex_autorunner.core.orchestration.progress_projection import (
     ProgressProjectionItem,
 )
@@ -12,6 +10,26 @@ from codex_autorunner.core.pma.tail_serialization import (
     build_live_activity_projection,
 )
 from codex_autorunner.core.ports.run_event import Interrupted
+
+
+class _CountingId(str):
+    comparisons = 0
+
+    def __eq__(self, other: object) -> bool:
+        type(self).comparisons += 1
+        return super().__eq__(other)
+
+    __hash__ = str.__hash__
+
+
+class _CountingEventId(int):
+    comparisons = 0
+
+    def __eq__(self, other: object) -> bool:
+        type(self).comparisons += 1
+        return super().__eq__(other)
+
+    __hash__ = int.__hash__
 
 
 def test_live_activity_coalesces_only_assistant_updates() -> None:
@@ -106,14 +124,16 @@ def test_persisted_tail_serializes_turn_interrupted_as_interrupted_event() -> No
 
 
 def test_grouped_progress_tail_event_collects_ids_linearly() -> None:
+    _CountingId.comparisons = 0
+    _CountingEventId.comparisons = 0
     grouped_items = [
         ProgressProjectionItem(
-            item_id=f"tool:{idx % 700}",
+            item_id=_CountingId(f"tool:{idx % 700}"),
             kind="tool",
             state="completed",
             title="Tool completed",
             summary=f"Tool {idx}",
-            event_ids=(idx, idx + 1),
+            event_ids=(_CountingEventId(idx), _CountingEventId(idx + 1)),
             timestamp="2026-06-25T00:00:00+00:00",
             group_id="group-1",
             group_kind="tool",
@@ -122,16 +142,15 @@ def test_grouped_progress_tail_event_collects_ids_linearly() -> None:
         for idx in range(1, 5001)
     ]
 
-    started = time.perf_counter()
     payload = _tail_event_from_progress_item(
         grouped_items[-1],
         received_at="2026-06-25T00:00:00+00:00",
         progress_items=grouped_items,
     )
-    elapsed = time.perf_counter() - started
 
     assert payload["progress_item_ids"][:3] == ["tool:1", "tool:2", "tool:3"]
     assert len(payload["progress_item_ids"]) == 700
     assert payload["progress_event_ids"][:3] == [1, 2, 3]
     assert payload["progress_event_ids"][-1] == 5001
-    assert elapsed < 1.0
+    assert _CountingId.comparisons < len(grouped_items) * 4
+    assert _CountingEventId.comparisons < len(grouped_items) * 4
