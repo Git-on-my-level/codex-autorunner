@@ -932,11 +932,26 @@ def _build_systemd_run_spawn(
         "--unit",
         unit,
         "--same-dir",
-        f"--setenv=PYTHONPATH={scope_env.get('PYTHONPATH', '')}",
-        f"--property=StandardOutput=append:{log_path}",
-        f"--property=StandardError=append:{log_path}",
-        *cmd,
     ]
+    if sudo_prefix:
+        # The unit is created as root to escape the service cgroup, but the
+        # worker must keep running as the invoking user so staged venvs and
+        # update caches keep their ownership.
+        argv.extend(
+            [
+                f"--uid={scope_env.get('UID', os.getuid())}",
+                f"--gid={scope_env.get('GID', os.getgid())}",
+            ]
+        )
+    argv.extend(
+        [
+            f"--setenv=HOME={scope_env.get('HOME', os.path.expanduser('~'))}",
+            f"--setenv=PYTHONPATH={scope_env.get('PYTHONPATH', '')}",
+            f"--property=StandardOutput=append:{log_path}",
+            f"--property=StandardError=append:{log_path}",
+            *cmd,
+        ]
+    )
     return argv, scope_env
 
 
@@ -1056,7 +1071,11 @@ def _spawn_update_process(
             logger.info(
                 "Spawning update worker via systemd-run to escape the hub cgroup"
             )
-            subprocess.run(spawn_argv, env=spawn_env, check=False, timeout=60)
+            subprocess.Popen(
+                spawn_argv,
+                env=spawn_env,
+                start_new_session=True,
+            )
             return
         with log_path.open("a", encoding="utf-8") as log_file:
             subprocess.Popen(
