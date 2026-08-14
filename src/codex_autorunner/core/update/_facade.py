@@ -9,7 +9,7 @@ import sys
 import time
 from collections import deque
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Optional, Sequence, Union
 from urllib.parse import unquote, urlparse
 
 from ..git_utils import GitError, run_git
@@ -23,6 +23,7 @@ from ..update_targets import (
 )
 from ..utils import resolve_executable
 from .source import prepare_update_source
+from .supervisors import resolve_systemctl_sudo_prefix
 
 
 class UpdateInProgressError(RuntimeError):
@@ -895,6 +896,50 @@ def _system_update_worker(
     UpdateEngine(config, logger=logger).run()
 
 
+def _build_systemd_run_spawn(
+    *,
+    cmd: Sequence[str],
+    log_path: Path,
+    env: dict[str, str],
+    sudo_prefix: Sequence[str] | None,
+) -> tuple[list[str], dict[str, str]] | None:
+    """Build a systemd-run transient-unit spawn for the update worker.
+
+    When the hub runs under a systemd service (KillMode=control-group by
+    default), a worker spawned with start_new_session=True still shares the
+    service cgroup. The worker later restarts the hub service as part of the
+    update cutover, and systemd's stop kills every process in the cgroup —
+    including the worker itself, before it can run health checks or write the
+    terminal update status. The hub then reconciles the stale "running"
+    status into "Update not running; last update may have crashed."
+
+    Running the worker in its own transient scope unit via systemd-run
+    escapes the hub's cgroup so it survives the service restart.
+    Returns None when systemd-run is unavailable or we are not on Linux.
+    """
+    if platform.system() != "Linux":
+        return None
+    systemd_run = shutil.which("systemd-run")
+    if not systemd_run:
+        return None
+    scope_env = {key: value for key, value in env.items() if key != "INVOCATION_ID"}
+    unit = f"codex-autorunner-update-{int(time.time())}"
+    prefix = list(sudo_prefix) if sudo_prefix else []
+    argv = [
+        *prefix,
+        systemd_run,
+        "--collect",
+        "--unit",
+        unit,
+        "--same-dir",
+        f"--setenv=PYTHONPATH={scope_env.get('PYTHONPATH', '')}",
+        f"--property=StandardOutput=append:{log_path}",
+        f"--property=StandardError=append:{log_path}",
+        *cmd,
+    ]
+    return argv, scope_env
+
+
 def _spawn_update_process(
     *,
     repo_url: str,
@@ -998,6 +1043,21 @@ def _spawn_update_process(
         prepare_update_source(update_dir, repo_url, repo_ref, logger)
         _release_update_lock()
         env = _env_with_source_pythonpath(update_dir)
+        systemd_spawn = _build_systemd_run_spawn(
+            cmd=cmd,
+            log_path=log_path,
+            env=env,
+            sudo_prefix=resolve_systemctl_sudo_prefix(
+                scope="system", configured=systemctl_sudo
+            ),
+        )
+        if systemd_spawn is not None:
+            spawn_argv, spawn_env = systemd_spawn
+            logger.info(
+                "Spawning update worker via systemd-run to escape the hub cgroup"
+            )
+            subprocess.run(spawn_argv, env=spawn_env, check=False, timeout=60)
+            return
         with log_path.open("a", encoding="utf-8") as log_file:
             subprocess.Popen(
                 cmd,
