@@ -1548,6 +1548,7 @@ class OpenCodeSupervisor:
             self._logger,
             "opencode",
             last_used_at_getter=lambda h: h.last_used_at or 0.0,
+            active_getter=lambda h: h.active_turns > 0,
         )
 
     def _handle_mode(self, handle: OpenCodeHandle) -> str:
