@@ -22,7 +22,7 @@ from codex_autorunner.core.update import _facade
 
 def _linux_with_systemd_run(monkeypatch, path: str = "/usr/bin/systemd-run") -> None:
     monkeypatch.setattr(_facade.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(_facade.shutil, "which", lambda name: path)
+    monkeypatch.setattr(_facade, "resolve_executable", lambda name, env=None: path)
 
 
 def test_systemd_run_spawn_builds_transient_unit_command(monkeypatch) -> None:
@@ -96,7 +96,7 @@ def test_systemd_run_spawn_returns_none_on_non_linux(monkeypatch) -> None:
 
 def test_systemd_run_spawn_returns_none_without_binary(monkeypatch) -> None:
     monkeypatch.setattr(_facade.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(_facade.shutil, "which", lambda name: None)
+    monkeypatch.setattr(_facade, "resolve_executable", lambda name, env=None: None)
 
     result = _facade._build_systemd_run_spawn(
         cmd=["python3", "-m", "codex_autorunner.core.update.runner"],

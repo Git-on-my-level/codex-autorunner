@@ -919,7 +919,7 @@ def _build_systemd_run_spawn(
     """
     if platform.system() != "Linux":
         return None
-    systemd_run = shutil.which("systemd-run")
+    systemd_run = resolve_executable("systemd-run")
     if not systemd_run:
         return None
     scope_env = {key: value for key, value in env.items() if key != "INVOCATION_ID"}
