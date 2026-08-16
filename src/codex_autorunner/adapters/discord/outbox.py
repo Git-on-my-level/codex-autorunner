@@ -77,6 +77,7 @@ def _discord_send_payload(payload_json: dict[str, Any]) -> dict[str, Any]:
     send_payload = dict(payload_json)
     send_payload.pop(_OUTBOX_PROGRESS_KEY, None)
     send_payload.pop(_OUTBOX_CLEANUP_KEY, None)
+    send_payload.pop("message_reference", None)
     return send_payload
 
 

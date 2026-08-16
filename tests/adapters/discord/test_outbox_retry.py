@@ -312,6 +312,52 @@ async def test_outbox_retry_resumes_from_first_unsent_chunk(tmp_path: Path) -> N
 
 
 @pytest.mark.anyio
+async def test_outbox_replay_drops_stale_reference_from_every_chunk(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    clock = _Clock()
+    sent_payloads: list[dict] = []
+
+    async def send_message(_channel_id: str, payload: dict) -> dict:
+        sent_payloads.append(payload)
+        return {"id": f"msg-{len(sent_payloads)}"}
+
+    manager = DiscordOutboxManager(
+        store,
+        send_message=send_message,
+        logger=logging.getLogger("test"),
+        now_fn=clock.now,
+        sleep_fn=clock.sleep,
+    )
+
+    try:
+        await store.initialize()
+        content = ("a" * 1500) + "\n" + ("b" * 1500)
+        await store.enqueue_outbox(
+            OutboxRecord(
+                record_id="stale-reply-1",
+                channel_id="chan-1",
+                message_id=None,
+                operation="send",
+                payload_json={
+                    "content": content,
+                    "message_reference": {"message_id": "origin-1"},
+                },
+                created_at=now_iso(),
+            )
+        )
+
+        await manager._flush(await store.list_outbox())
+
+        assert len(sent_payloads) == 2
+        assert all("message_reference" not in payload for payload in sent_payloads)
+        assert await store.get_outbox("stale-reply-1") is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_flush_drops_previously_exhausted_record(tmp_path: Path) -> None:
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     clock = _Clock()

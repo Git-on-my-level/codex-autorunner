@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
-from codex_autorunner.adapters.chat.models import ChatMessageEvent
+from codex_autorunner.adapters.chat.adapter import SendTextRequest
+from codex_autorunner.adapters.chat.models import (
+    ChatMessageEvent,
+    ChatMessageRef,
+    ChatThreadRef,
+)
 from codex_autorunner.adapters.chat.renderer import RenderedText
 from codex_autorunner.adapters.discord import adapter as discord_adapter_module
 from codex_autorunner.adapters.discord.adapter import (
     DiscordChatAdapter,
     DiscordTextRenderer,
 )
+from codex_autorunner.adapters.discord.channel_messaging import send_channel_message
 
 
 class _UnusedRestClient:
@@ -29,6 +36,17 @@ class _FollowupRestClient:
         _ = (application_id, interaction_token, payload)
         self.calls += 1
         return {"id": f"message-{self.calls}", "channel_id": "channel-1"}
+
+
+class _ChannelMessageRestClient:
+    def __init__(self) -> None:
+        self.payloads: list[dict[str, object]] = []
+
+    async def create_channel_message(
+        self, *, channel_id: str, payload: dict[str, object]
+    ) -> dict[str, object]:
+        self.payloads.append({"channel_id": channel_id, **payload})
+        return {"id": f"message-{len(self.payloads)}"}
 
 
 def _message_payload(
@@ -305,6 +323,52 @@ def test_discord_text_renderer_split_text_has_no_part_prefix() -> None:
 
     assert len(chunks) > 1
     assert all(not chunk.text.startswith("Part ") for chunk in chunks)
+
+
+def test_adapter_sends_text_without_message_reference() -> None:
+    rest = _ChannelMessageRestClient()
+    adapter = DiscordChatAdapter(
+        rest_client=rest,  # type: ignore[arg-type]
+        application_id="app-1",
+    )
+    thread = ChatThreadRef(platform="discord", chat_id="channel-1")
+    reply_ref = ChatMessageRef(thread=thread, message_id="origin-1")
+
+    async def _send() -> None:
+        await adapter.send_text(
+            SendTextRequest(
+                thread=thread,
+                text="standalone response",
+                reply_to=reply_ref,
+            )
+        )
+
+    asyncio.run(_send())
+
+    assert rest.payloads == [
+        {"channel_id": "channel-1", "content": "standalone response"}
+    ]
+
+
+def test_channel_sender_drops_stale_message_reference() -> None:
+    rest = _ChannelMessageRestClient()
+
+    async def _send() -> None:
+        await send_channel_message(
+            rest,
+            logging.getLogger("test"),
+            "channel-1",
+            {
+                "content": "standalone response",
+                "message_reference": {"message_id": "origin-1"},
+            },
+        )
+
+    asyncio.run(_send())
+
+    assert rest.payloads == [
+        {"channel_id": "channel-1", "content": "standalone response"}
+    ]
 
 
 def test_adapter_prunes_interaction_token_cache(monkeypatch) -> None:

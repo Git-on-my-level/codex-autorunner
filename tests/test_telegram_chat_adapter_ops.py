@@ -31,11 +31,13 @@ class _DummyPoller:
 @pytest.mark.anyio
 async def test_adapter_ops_call_expected_telegram_methods(tmp_path: Path) -> None:
     calls: list[tuple[str, dict[str, Any]]] = []
+    multipart_bodies: list[bytes] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
         method = request.url.path.rsplit("/", 1)[-1]
         if method == "sendDocument":
             payload = {"_multipart": True}
+            multipart_bodies.append(request.content)
         elif request.content:
             payload = json.loads(request.content.decode("utf-8"))
         else:
@@ -93,13 +95,17 @@ async def test_adapter_ops_call_expected_telegram_methods(tmp_path: Path) -> Non
     send_payload = calls[0][1]
     assert send_payload["chat_id"] == 123
     assert send_payload["message_thread_id"] == 45
-    assert send_payload["reply_to_message_id"] == 12
+    assert "reply_to_message_id" not in send_payload
     assert send_payload["parse_mode"] == "Markdown"
     assert send_payload["reply_markup"]["inline_keyboard"][0][0]["text"] == "Resume"
     assert (
         send_payload["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
         == "resume:1"
     )
+
+    document_payload = calls[3][1]
+    assert "reply_to_message_id" not in document_payload
+    assert b"reply_to_message_id" not in multipart_bodies[0]
 
     edit_payload = calls[1][1]
     assert edit_payload["chat_id"] == 123
