@@ -118,4 +118,4 @@ The shim tries `PYTHONPATH=src` first and bootstraps a local `.venv` if dependen
 
 ## ⭐ Star history
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Git-on-my-level/codex-autorunner&type=Date)](https://star-history.com/#Git-on-my-level/codex-autorunner&Date)
+[![Star History Chart](https://star-history.dera.page/svg?repos=Git-on-my-level/codex-autorunner&type=Date)](https://star-history.dera.page/#Git-on-my-level/codex-autorunner&Date)
