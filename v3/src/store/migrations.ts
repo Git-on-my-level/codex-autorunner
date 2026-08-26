@@ -154,7 +154,7 @@ export const MIGRATIONS: string[] = [
     channel TEXT NOT NULL,                         -- telegram|webhook
     target_json TEXT NOT NULL DEFAULT '{}',
     body_json TEXT NOT NULL,
-    state TEXT NOT NULL DEFAULT 'pending',         -- pending|sent|failed|dead
+    state TEXT NOT NULL DEFAULT 'pending',         -- pending|sent|failed|dead|deferred (held for the digest)
     attempts INTEGER NOT NULL DEFAULT 0,
     next_attempt_at TEXT NOT NULL,
     sent_message_id TEXT,

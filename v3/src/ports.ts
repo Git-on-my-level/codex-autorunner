@@ -28,8 +28,11 @@ export type PolicyVerdict = "auto" | "escalate" | "forbid";
 export interface PolicyPort {
   /** Verdict for an action class + args; enforces class enablement, allowlists, guards. */
   check(actionClass: string, args: Record<string, unknown>): PolicyVerdict;
-  /** Rate/dedupe/breaker/budget gates; returns null when clear, else a block reason. */
-  gate(actionClass: string, dedupeHash: string): string | null;
+  /**
+   * Rate/dedupe/breaker/budget gates; returns null when clear, else a block reason.
+   * carSessionId enables per-session rate limits (max_per_session_per_hour).
+   */
+  gate(actionClass: string, dedupeHash: string, carSessionId?: string | null): string | null;
   /** True when the circuit breaker or budget stop has flipped CAR to escalate-only. */
   escalateOnly(): boolean;
 }
@@ -51,11 +54,16 @@ export interface ActionBus {
     channel: ResponseChannel | null,
     payload: ReplyPayload,
   ): Promise<DeliveryResult>;
-  /** Execute an allowlisted probe/action template. Executor enforces policy. */
+  /**
+   * Execute an allowlisted probe/action template. Executor enforces policy.
+   * recordedByCaller: the caller (triage tools) writes the `actions` row for
+   * this attempt, so the bus must not — the policy rails count each attempt
+   * exactly once. Audit entries are still written by the bus either way.
+   */
   runTemplate(
     templateId: string,
     args: Record<string, unknown>,
-    opts: { decisionId: string; mutating: boolean },
+    opts: { decisionId: string; mutating: boolean; recordedByCaller?: boolean },
   ): Promise<{ ok: boolean; output: string }>;
 }
 

@@ -17,6 +17,19 @@ CAR is a meta-harness for coding agents (Codex, Hermes, OpenCode, OMP, anything 
 
 ---
 
+## 🚧 CAR v3 — the attention control plane (new direction)
+
+CAR is pivoting: v3 is a cross-vendor attention & escalation control plane that ingests
+lifecycle/attention events from *any* agent (Claude Code, Codex, Hermes, OMP, agentctl,
+Multica, CI, cron), triages them autonomously, and escalates to you in Telegram only
+when it can't unblock itself — one inbox for "what needs me," not a per-tool ticket queue.
+**Status: alpha, actively under construction, lives entirely under [`v3/`](./v3/).**
+Start here: [`v3/README.md`](./v3/README.md) (quickstart) and [`v3/DESIGN.md`](./v3/DESIGN.md)
+(binding spec). The v2 runner/ticket product documented below remains fully functional
+and is now in maintenance mode — it isn't going away, but new investment is going to v3.
+
+---
+
 ## 🚀 Quickstart
 
 ### Option 1 — Let your agent install it (recommended)

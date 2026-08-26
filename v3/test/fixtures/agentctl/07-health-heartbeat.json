@@ -1,0 +1,28 @@
+{
+  "name": "health event becomes a heartbeat, and no event id falls back to (exec, sequence)",
+  "note": "Verbatim health row from the live journal, with `id` removed to exercise the idempotency fallback.",
+  "input": {
+    "schema_version": 1,
+    "origin_host_id": "host-foster-bitter-palace-talent-gown-glass",
+    "execution_id": "exec-area-cargo-tornado-symptom-comfort-parrot",
+    "sequence": 2,
+    "ordering": "source",
+    "kind": "health",
+    "state": "running",
+    "source_state": "stderr",
+    "authority": "native",
+    "adapter": "codex",
+    "observed_at": "2026-08-24T15:36:54.901544Z",
+    "payload": {}
+  },
+  "expect": [
+    {
+      "type": "heartbeat",
+      "severity": "info",
+      "requires_response": false,
+      "idempotency_key": "agentctl:exec-area-cargo-tornado-symptom-comfort-parrot:2",
+      "session_key": "agentctl\u0000host-foster-bitter-palace-talent-gown-glass\u0000exec-area-cargo-tornado-symptom-comfort-parrot",
+      "response_channel": null
+    }
+  ]
+}
