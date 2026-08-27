@@ -373,7 +373,14 @@ _run_chat_apps_lane() {
     echo "Run 'make test-chat-surface-lab' or set CODEX_CHECK_RUN_CHAT_SURFACE_LAB=1 to include it."
   else
     echo "Running chat-surface lab deterministic checks..."
-    make test-chat-surface-lab PYTHON="$PYTHON_BIN"
+    # Every lane derives its --basetemp from CAR_PYTEST_RUN_TOKEN, and pytest
+    # wipes an explicit --basetemp at session start. When this lane runs beside
+    # the core lane -- which it does for any single-lane diff that touches a
+    # chat adapter -- sharing the run-wide token points both pytest sessions at
+    # the same basetemp, so whichever starts second deletes the other's live
+    # xdist worker dirs mid-run. Give this lane a basetemp of its own.
+    CAR_PYTEST_RUN_TOKEN="${CAR_PYTEST_RUN_TOKEN}-chat-apps" \
+      make test-chat-surface-lab PYTHON="$PYTHON_BIN"
   fi
 }
 
