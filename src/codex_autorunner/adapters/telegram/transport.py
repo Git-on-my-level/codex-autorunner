@@ -442,11 +442,18 @@ class TelegramMessageTransport(_TelegramServiceAttrs):
                     if used_mode == "HTML":
                         split_renderer: RenderFn = _format_telegram_html
                     else:
+                        # Bind the narrowed mode to a local: mypy widens
+                        # `used_mode` back to `str | None` inside a nested
+                        # function's default, since it is assigned more than
+                        # once in this scope.
+                        split_markdown_mode = used_mode
 
-                        def _render_markdown(value: str, mode: str = used_mode) -> str:
+                        def _render_split_markdown(
+                            value: str, mode: str = split_markdown_mode
+                        ) -> str:
                             return _format_telegram_markdown(value, mode)
 
-                        split_renderer = _render_markdown
+                        split_renderer = _render_split_markdown
                     chunks = split_markdown_message(
                         text,
                         max_len=TELEGRAM_MAX_MESSAGE_LENGTH,
@@ -476,11 +483,16 @@ class TelegramMessageTransport(_TelegramServiceAttrs):
                     if used_mode == "HTML":
                         renderer: RenderFn = _format_telegram_html
                     elif used_mode in ("Markdown", "MarkdownV2"):
+                        # See the note above: narrow into a local before it is
+                        # captured as a nested function default.
+                        trim_markdown_mode = used_mode
 
-                        def _render_markdown(value: str, mode: str = used_mode) -> str:
+                        def _render_trim_markdown(
+                            value: str, mode: str = trim_markdown_mode
+                        ) -> str:
                             return _format_telegram_markdown(value, mode)
 
-                        renderer = _render_markdown
+                        renderer = _render_trim_markdown
                     else:
 
                         def _render_text(value: str) -> str:
