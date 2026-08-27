@@ -85,7 +85,7 @@ export function normalizeClaude(
       vendor: "claude-code",
       native_id: sessionId,
       host,
-      ...(cwd ? { cwd } : {}),
+      ...(cwd ? { cwd, repo: repoFromCwd(cwd) } : {}),
       ...(mapped.sessionTitle ? { title: mapped.sessionTitle } : {}),
     },
     type: mapped.type,
@@ -126,6 +126,22 @@ interface HookMapping {
   sessionTitle?: string;
 }
 
+/**
+ * Claude's hooks report a `cwd`, never a repo name, but every repo-scoped
+ * memory (rules, notes, the "this repo only" grant) matches on `session.repo` —
+ * and scopeMatches treats an empty repo as "no match", so leaving it unset
+ * silently disables repo scoping for the vendor we care about most.
+ *
+ * The last path segment is the pragmatic identity: it is what `title` already
+ * uses, it needs no filesystem access (normalizers stay pure), and memory
+ * scopes glob-match, so `omi` and `omi-*` both work. A session started inside a
+ * subdirectory reports that subdirectory — acceptable, since the alternative is
+ * no repo scope at all.
+ */
+export function repoFromCwd(cwd: string): string {
+  return cwd.split("/").filter(Boolean).slice(-1)[0] ?? cwd;
+}
+
 function mapHook(
   hook: string,
   raw: Record<string, unknown>,
@@ -134,7 +150,7 @@ function mapHook(
   hookTimeoutMs: number,
 ): HookMapping {
   const cwd = str(raw, "cwd");
-  const shortCwd = cwd ? cwd.split("/").filter(Boolean).slice(-1)[0] ?? cwd : undefined;
+  const shortCwd = cwd ? repoFromCwd(cwd) : undefined;
 
   switch (hook) {
     case "SessionStart": {

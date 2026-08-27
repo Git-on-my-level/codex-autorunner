@@ -245,6 +245,7 @@ and terminals: `resolve(summary)`, `keep_informed(summary)`,
 [guards]
 never_touch_branches = ["main", "master"]
 quiet_hours = "23:00-08:00"      # only 'urgent' pushes; rest queue for digest
+never_auto_approve = []          # extra regexes, ADDED to the built-in rail below
 [budget]
 triage_daily_usd = 2.00          # 80% → digest warning; 100% → escalate-only mode
 [providers]
@@ -259,7 +260,15 @@ escalate-only mode until David clears it via button; (d) **self-event suppressio
 events with `actor='car'` (CAR's own labeled actions) attach to the originating
 incident and never open fresh LLM triage; (e) budget caps; (f) max 2 LLM runs per
 incident lineage — recurrence of the same dedupe class thereafter escalates
-unconditionally. All enforced in the executor, tested explicitly.
+unconditionally; (g) **the never-auto-approve rail** — an approval is matched
+against `NEVER_AUTO_APPROVE` (force push, `reset --hard`, `rm -rf`, sudo,
+curl-piped-to-shell, `gh pr merge`, package publish, terraform apply, kubectl
+delete, DROP TABLE, prod changes, credential paths) plus any `[guards]
+never_auto_approve` extras, and escalates instead. Autonomy is scoped to a repo
+or a request lineage, but what makes a request dangerous is inside its text,
+which no class verdict can see; the built-ins cannot be disabled from config,
+because the rail costs a notification and never an outcome. All enforced in the
+executor, tested explicitly.
 
 **Providers** via Vercel AI SDK; `fake` provider (record/replay canned tool-call
 scripts) is a first-class registry entry — all triage tests run against it, $0.

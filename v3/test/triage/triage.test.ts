@@ -271,6 +271,43 @@ describe("granted rules", () => {
     expect(h.actionRows()[0]!.state).toBe("ok");
   });
 
+  /*
+   * The grant model's weak point: autonomy is scoped to a repo or a request
+   * lineage, so a rule minted from "auto-approve read-only greps here" matches
+   * anything else in that scope too. The content rail is what stops one tap from
+   * meaning more than it looked like it meant.
+   */
+  test("a granted rule still cannot auto-approve a force push", async () => {
+    const h = harness({ memory: new StubMemoryReader([grantedRule()]) });
+    h.emit({
+      type: "attention.permission",
+      title: "Permission: Bash: git push --force origin main",
+      body: "git push --force origin main",
+      response_channel: { kind: "claude-hook-http", hint: { tool_use_id: "toolu_force" } },
+    });
+
+    expect(await h.triage.tick()).toBe(1);
+
+    expect(h.actions.delivered).toHaveLength(0);
+    expect(h.channel.escalations).toHaveLength(1);
+    expect(h.actionRows()[0]!.state).toBe("failed");
+    expect(h.actionRows()[0]!.result_json).toContain("force push");
+  });
+
+  test("the rail does not stand between a grant and an ordinary command", async () => {
+    const h = harness({ memory: new StubMemoryReader([grantedRule()]) });
+    h.emit({
+      type: "attention.permission",
+      title: "Permission: Bash: git push origin car-v3",
+      body: "git push origin car-v3",
+      response_channel: { kind: "claude-hook-http", hint: { tool_use_id: "toolu_ok" } },
+    });
+
+    expect(await h.triage.tick()).toBe(1);
+    expect(h.actions.delivered).toHaveLength(1);
+    expect(h.channel.escalations).toHaveLength(0);
+  });
+
   test("first use of a fresh grant notifies once, then goes quiet", async () => {
     const h = harness({ memory: new StubMemoryReader([grantedRule()]) });
     h.emit({ type: "attention.permission", idempotency_key: "claude-code:sess-1:Perm:1" });
@@ -291,7 +328,9 @@ describe("granted rules", () => {
       config: { state_dir: dir },
       policyFactory: createPolicy,
     });
-    h.emit({ type: "attention.permission", title: "Permission: rm -rf" });
+    // An innocuous command on purpose: the allowlist miss must be the only
+    // reason this is blocked, not the content rail.
+    h.emit({ type: "attention.permission", title: "Permission: bun install" });
 
     expect(await h.triage.tick()).toBe(1);
     expect(h.actions.delivered).toHaveLength(0);
@@ -321,7 +360,7 @@ describe("granted rules", () => {
     const blocking = {
       check: () => "auto" as const,
       gate: () => "rate_limit: reply max_per_hour=10",
-      escalateOnly: () => false,
+      escalateOnly: () => false, autoApprovalBlock: () => null,
     };
     const h = harness({ memory: new StubMemoryReader([grantedRule()]), policy: blocking });
     h.emit({ type: "attention.permission" });
@@ -338,7 +377,7 @@ describe("granted rules", () => {
     const panicked = {
       check: () => "auto" as const,
       gate: () => null,
-      escalateOnly: () => true,
+      escalateOnly: () => true, autoApprovalBlock: () => null,
     };
     const h = harness({ memory: new StubMemoryReader([grantedRule()]), policy: panicked });
     h.emit({ type: "attention.permission" });
@@ -364,7 +403,7 @@ describe("escalate-only mode", () => {
     const panicked = {
       check: () => "auto" as const,
       gate: () => null,
-      escalateOnly: () => true,
+      escalateOnly: () => true, autoApprovalBlock: () => null,
     };
     const h = harness({ script: resolveScript(), policy: panicked });
     h.emit({ type: "attention.error", title: "build failed" });

@@ -319,6 +319,24 @@ export async function executeTool(
         const target = pickPermissionEvent(ctx, args.event_id);
         if (!target) return { ok: false, output: { error: "no permission event in this batch" } };
         const gateArgs = { event_id: target.id, decision: approve ? "allow" : "deny" };
+        /*
+         * Content rail, checked before the class gates and only for approvals:
+         * a grant is scoped to a repo or a request lineage, but what makes a
+         * request dangerous is inside its text. Denying is always safe, so this
+         * never stands between CAR and a "no".
+         */
+        if (approve) {
+          const forbidden = ctx.policy.autoApprovalBlock(`${target.title}\n${target.body}`);
+          if (forbidden) {
+            const reason = `never auto-approved: ${forbidden}`;
+            recordAttempt(ctx, "approve_permission", gateArgs, actionDedupeHash("approve_permission", gateArgs), reason);
+            ctx.store.audit("daemon", "permission.auto_approval_blocked", "event", target.id, {
+              matched: forbidden,
+              incident_id: ctx.incidentId,
+            });
+            return { ok: false, output: { blocked: reason } };
+          }
+        }
         const { hash, blocked } = gate(ctx, "approve_permission", gateArgs);
         if (blocked) {
           recordAttempt(ctx, "approve_permission", gateArgs, hash, blocked);

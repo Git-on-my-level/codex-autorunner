@@ -387,18 +387,30 @@ function scopeLabel(row: MemoryRow): string {
   }
 }
 
+/**
+ * One human-readable line per memory. This is the page David audits his grants
+ * on, so it leads with the sentence a person wrote or was asked — a rule minted
+ * from a Telegram tap carries the original question, and showing only its match
+ * key (a dedupe-class hash) would make a granted rule unreviewable.
+ */
 function contentSummary(row: MemoryRow): string {
   try {
     const content = JSON.parse(row.content_json) as Record<string, unknown>;
-    if (typeof content.text === "string") return truncate(content.text, 140);
+    const prose = ["text", "statement", "question"]
+      .map((key) => content[key])
+      .find((v): v is string => typeof v === "string" && v.trim().length > 0);
+    const actionClass = typeof content.action_class === "string" ? content.action_class : null;
+
+    if (prose) return truncate(actionClass ? `${prose} → ${actionClass}` : prose, 160);
+
     const parts: string[] = [];
     if (content.match !== undefined) parts.push(`if ${JSON.stringify(content.match)}`);
     if (typeof content.disposition === "string") parts.push(`then ${content.disposition}`);
-    if (typeof content.action_class === "string") parts.push(`(${content.action_class})`);
-    if (parts.length) return parts.join(" ");
-    return truncate(JSON.stringify(content), 140);
+    if (actionClass) parts.push(`(${actionClass})`);
+    if (parts.length) return truncate(parts.join(" "), 160);
+    return truncate(JSON.stringify(content), 160);
   } catch {
-    return truncate(row.content_json, 140);
+    return truncate(row.content_json, 160);
   }
 }
 

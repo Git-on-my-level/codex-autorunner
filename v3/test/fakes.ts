@@ -3,6 +3,7 @@
  */
 import { Store, openDb, type Clock } from "../src/store/db.ts";
 import { CarConfig } from "../src/config/config.ts";
+import { matchNeverAutoApprove } from "../src/policy/index.ts";
 import type {
   ActionBus,
   ChannelPort,
@@ -71,6 +72,15 @@ export class AllowAllPolicy implements PolicyPort {
   }
   escalateOnly(): boolean {
     return false;
+  }
+  /**
+   * Deliberately *not* permissive: this fake exists to take class-level policy
+   * out of a test's way, and the content rail is not class-level policy. Using
+   * the real matcher here means no test can accidentally assert that CAR
+   * auto-approves a force push.
+   */
+  autoApprovalBlock(text: string): string | null {
+    return matchNeverAutoApprove(text);
   }
 }
 

@@ -38,6 +38,58 @@ export const BREAKER_CLEARED_AT_KEY = "escalate_only_cleared_at";
 /** Digest warning threshold as a fraction of the daily triage budget. */
 export const BUDGET_WARN_FRACTION = 0.8;
 
+/**
+ * Requests CAR may never approve on its own, whatever a grant says.
+ *
+ * Autonomy is scoped to a repo or a request lineage, but what makes a request
+ * dangerous lives in its text — so class-level policy cannot see it. Without
+ * this rail, one tap on "auto-approve read-only greps in omi" would also cover
+ * `git push --force origin main` the moment it appeared in the same scope.
+ *
+ * These are deliberately not configurable off: each names an action that cannot
+ * be undone from a Telegram tap. CAR still *escalates* every one of them — the
+ * rail costs a notification, never an outcome.
+ */
+export const NEVER_AUTO_APPROVE: { pattern: RegExp; label: string }[] = [
+  { pattern: /\bgit\b[^\n]*\bpush\b[^\n]*(--force\b|--force-with-lease\b|\s-f\b)/i, label: "force push" },
+  { pattern: /\bgit\b[^\n]*\breset\b[^\n]*--hard/i, label: "git reset --hard" },
+  { pattern: /\bgit\b[^\n]*\bclean\b[^\n]*-[a-z]*f/i, label: "git clean -f" },
+  { pattern: /\brm\b[^\n]*-[a-z]*r[a-z]*f|\brm\b[^\n]*-[a-z]*f[a-z]*r/i, label: "recursive force delete" },
+  { pattern: /\bsudo\b/i, label: "sudo" },
+  { pattern: /\bcurl\b[^\n]*\|[^\n]*\b(sh|bash|zsh)\b/i, label: "curl piped to a shell" },
+  { pattern: /\bwget\b[^\n]*\|[^\n]*\b(sh|bash|zsh)\b/i, label: "wget piped to a shell" },
+  { pattern: /\bchmod\b[^\n]*\b777\b/i, label: "chmod 777" },
+  { pattern: /\bgh\b[^\n]*\bpr\b[^\n]*\bmerge\b/i, label: "merging a pull request" },
+  { pattern: /\b(npm|bun|yarn|pnpm)\b[^\n]*\bpublish\b/i, label: "publishing a package" },
+  { pattern: /\bterraform\b[^\n]*\b(apply|destroy)\b/i, label: "terraform apply/destroy" },
+  { pattern: /\bkubectl\b[^\n]*\bdelete\b/i, label: "kubectl delete" },
+  { pattern: /\bdrop\s+(table|database)\b/i, label: "dropping a table or database" },
+  { pattern: /\b(prod|production)\b[^\n]*\b(deploy|restart|delete|drop)\b/i, label: "a production change" },
+  { pattern: /(^|[\s/'"])\.env(\.[\w-]+)?([\s/'"]|$)|\bid_rsa\b|\bcredentials\b|\bsecrets?\.(json|ya?ml|toml)\b/i, label: "credentials or secrets" },
+];
+
+/**
+ * Match `text` against the built-in rail plus any configured extras. Invalid
+ * user regexes are matched literally rather than thrown away, so a typo in
+ * policy.toml can never quietly widen what CAR will approve.
+ */
+export function matchNeverAutoApprove(text: string, extraPatterns: string[] = []): string | null {
+  for (const { pattern, label } of NEVER_AUTO_APPROVE) {
+    if (pattern.test(text)) return label;
+  }
+  for (const raw of extraPatterns) {
+    let re: RegExp;
+    try {
+      re = new RegExp(raw, "i");
+    } catch {
+      if (text.toLowerCase().includes(raw.toLowerCase())) return raw;
+      continue;
+    }
+    if (re.test(text)) return raw;
+  }
+  return null;
+}
+
 /* -------------------------------------------------------------------- schema */
 
 const ClassPolicySchema = z.object({
@@ -55,6 +107,12 @@ const GuardsSchema = z
     never_touch_branches: z.array(z.string()).default([]),
     /** "HH:MM-HH:MM" local time; empty disables. Only `urgent` pushes inside it. */
     quiet_hours: z.string().default(""),
+    /**
+     * Extra case-insensitive regexes that must never be auto-approved. These are
+     * *added* to {@link NEVER_AUTO_APPROVE}; the built-ins cannot be switched off
+     * from config, because the failure they prevent is unrecoverable.
+     */
+    never_auto_approve: z.array(z.string()).default([]),
   })
   .prefault({});
 
@@ -73,7 +131,7 @@ const PolicyFileSchema = z.object({
 
 export interface PolicyDoc {
   classes: Record<string, ClassPolicy>;
-  guards: { never_touch_branches: string[]; quiet_hours: string };
+  guards: { never_touch_branches: string[]; quiet_hours: string; never_auto_approve: string[] };
   budget: { triage_daily_usd: number };
   /** Non-empty when the file failed to parse/validate — we then run fully closed. */
   error: string | null;
@@ -81,7 +139,7 @@ export interface PolicyDoc {
 
 export const EMPTY_POLICY: PolicyDoc = {
   classes: {},
-  guards: { never_touch_branches: [], quiet_hours: "" },
+  guards: { never_touch_branches: [], quiet_hours: "", never_auto_approve: [] },
   budget: { triage_daily_usd: 0 },
   error: null,
 };
@@ -320,6 +378,11 @@ export function createPolicy(store: Store, config: CarConfig): PolicyEngine {
         if (!target || !cls.allowlist.some((p) => globMatch(p, target))) return "forbid";
       }
       return "auto";
+    },
+
+    autoApprovalBlock(text: string): string | null {
+      reloadIfChanged();
+      return matchNeverAutoApprove(text, doc.guards.never_auto_approve);
     },
 
     gate(actionClass: string, dedupeHash: string, carSessionId?: string | null): string | null {

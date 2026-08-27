@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
 import type { CarConfig } from "../config/config.ts";
+import { HASH_SEP } from "../contract/events.ts";
 
 export const ArgSpec = z.object({
   type: z.enum(["string", "path", "int", "bool", "enum"]).default("string"),
@@ -258,5 +259,5 @@ export function dedupeHash(templateId: string, args: Record<string, unknown>): s
       .sort()
       .map((k) => [k, args[k]]),
   );
-  return new Bun.CryptoHasher("sha256").update(`${templateId} ${canonical}`).digest("hex");
+  return new Bun.CryptoHasher("sha256").update([templateId, canonical].join(HASH_SEP)).digest("hex");
 }

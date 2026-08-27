@@ -10,8 +10,12 @@ const ev = (idempotency_key: string, type = "attention.permission", title = "Per
 
 describe("dedupeClassFor", () => {
   test("strips the per-occurrence segment from a source-scoped key", () => {
-    expect(dedupeClassFor(ev("claude-code:sess-abc:PermissionRequest:toolu_01X"))).toBe(
-      "claude-code:sess-abc:PermissionRequest",
+    expect(dedupeClassFor(ev("claude-code:sess-abc:Stop:1", "progress"))).toBe("claude-code:sess-abc:Stop");
+  });
+
+  test("permission classes keep the stripped prefix and add a request signature", () => {
+    expect(dedupeClassFor(ev("claude-code:sess-abc:PermissionRequest:toolu_01X"))).toStartWith(
+      "claude-code:sess-abc:PermissionRequest:",
     );
   });
 
@@ -19,6 +23,44 @@ describe("dedupeClassFor", () => {
     const a = dedupeClassFor(ev("claude-code:sess-abc:PermissionRequest:toolu_01X"));
     const b = dedupeClassFor(ev("claude-code:sess-abc:PermissionRequest:toolu_02Y"));
     expect(a).toBe(b);
+  });
+
+  /*
+   * The lineage carries the LLM budget and can carry a grant, so two different
+   * commands in one session must not share one. Regression: they used to.
+   */
+  test("different commands in one session get different lineages", () => {
+    const readOnly = dedupeClassFor(
+      ev("claude-code:sess-abc:PermissionRequest:toolu_01X", "attention.permission", "Permission: Bash: rg -n TODO"),
+    );
+    const forcePush = dedupeClassFor(
+      ev(
+        "claude-code:sess-abc:PermissionRequest:toolu_02Y",
+        "attention.permission",
+        "Permission: Bash: git push --force origin main",
+      ),
+    );
+    expect(readOnly).not.toBe(forcePush);
+  });
+
+  test("the same command re-asked after a hook timeout stays one lineage", () => {
+    const first = dedupeClassFor(
+      ev("claude-code:sess-abc:PermissionRequest:toolu_01X", "attention.permission", "Permission: Bash: bun test"),
+    );
+    const retry = dedupeClassFor(
+      ev("claude-code:sess-abc:PermissionRequest:toolu_09Z", "attention.permission", "Permission:  Bash:  bun test  "),
+    );
+    expect(first).toBe(retry);
+  });
+
+  test("the same command in a different session is a different lineage", () => {
+    const here = dedupeClassFor(
+      ev("claude-code:sess-abc:PermissionRequest:toolu_01X", "attention.permission", "Permission: Bash: bun test"),
+    );
+    const there = dedupeClassFor(
+      ev("claude-code:sess-def:PermissionRequest:toolu_01X", "attention.permission", "Permission: Bash: bun test"),
+    );
+    expect(here).not.toBe(there);
   });
 
   test("different hook types do not collide", () => {

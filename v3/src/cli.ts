@@ -94,6 +94,19 @@ switch (cmd) {
       !cfg.telegram.enabled || Boolean(process.env[cfg.telegram.token_env]),
       cfg.telegram.enabled ? `token via $${cfg.telegram.token_env}` : "disabled",
     ]);
+    /*
+     * Without a provider key CAR still runs, and still fails safe — but every
+     * event the rules pass cannot settle escalates, which looks like a busy day
+     * rather than a broken install. Name it here instead.
+     */
+    const providerEnv = cfg.providers.triage.startsWith("openai/") ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+    checks.push([
+      "triage llm",
+      Boolean(process.env[providerEnv]),
+      process.env[providerEnv]
+        ? `${cfg.providers.triage} via $${providerEnv}`
+        : `$${providerEnv} not set — triage escalates everything the rules pass cannot settle`,
+    ]);
     for (const [name, ok, detail] of checks) console.log(`${ok ? "ok " : "FAIL"} ${name}: ${detail}`);
     process.exit(checks.every(([, ok]) => ok) ? 0 : 1);
   }

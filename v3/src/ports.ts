@@ -35,6 +35,13 @@ export interface PolicyPort {
   gate(actionClass: string, dedupeHash: string, carSessionId?: string | null): string | null;
   /** True when the circuit breaker or budget stop has flipped CAR to escalate-only. */
   escalateOnly(): boolean;
+  /**
+   * Content rail for approvals: returns the matched pattern when this request is
+   * one CAR must never approve on its own, else null. Class-level policy cannot
+   * express this — a grant is scoped to a repo or a request lineage, while the
+   * thing that makes a request dangerous is inside its text.
+   */
+  autoApprovalBlock(text: string): string | null;
 }
 
 /* ----------------------------------------------------------------- actions */

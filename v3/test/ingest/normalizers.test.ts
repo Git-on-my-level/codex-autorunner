@@ -259,6 +259,24 @@ describe("claude normalizer", () => {
     expect(event.session!.cwd).toBe("/Users/dazheng/omi");
     expect(event.session!.title).toBe("omi");
   });
+
+  /*
+   * Every repo-scoped memory matches on session.repo, and scopeMatches treats an
+   * empty repo as "no match" — so a Claude session without one silently opts out
+   * of repo-scoped rules, notes and the "this repo only" grant.
+   */
+  test("the session ref carries a repo derived from cwd", () => {
+    const { event } = normalizeClaude(
+      { session_id: "s", hook_event_name: "SessionStart", cwd: "/Users/dazheng/car-workspace/codex-autorunner" },
+      ctx(),
+    );
+    expect(event.session!.repo).toBe("codex-autorunner");
+  });
+
+  test("a session with no cwd reports no repo rather than a guess", () => {
+    const { event } = normalizeClaude({ session_id: "s", hook_event_name: "SessionStart" }, ctx());
+    expect(event.session!.repo).toBeUndefined();
+  });
 });
 
 describe("multica normalizer", () => {

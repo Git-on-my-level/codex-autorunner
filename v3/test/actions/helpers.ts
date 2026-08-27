@@ -10,6 +10,7 @@ import type { Store } from "../../src/store/db.ts";
 import type { RunOpts, RunResult, Runner } from "../../src/actions/runner.ts";
 import type { FetchLike, HttpRequestInit } from "../../src/actions/adapters/types.ts";
 import type { PolicyPort, PolicyVerdict } from "../../src/ports.ts";
+import { matchNeverAutoApprove } from "../../src/policy/index.ts";
 import type { Vendor } from "../../src/contract/events.ts";
 
 export interface RunCall {
@@ -99,6 +100,10 @@ export class StubPolicy implements PolicyPort {
   }
   escalateOnly(): boolean {
     return this.escalateOnlyFlag;
+  }
+  /** Real matcher, not a stub: the content rail is never what a test wants out of the way. */
+  autoApprovalBlock(text: string): string | null {
+    return matchNeverAutoApprove(text);
   }
 }
 

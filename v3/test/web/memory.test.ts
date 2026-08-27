@@ -30,6 +30,30 @@ describe("web memory", () => {
     expect(body).not.toContain('value="promote"');
   });
 
+  /*
+   * A rule minted by the Telegram "always" tap stores the original question
+   * alongside a dedupe-class match key. Rendering only the match key would show
+   * a hash on the one page where David reviews what he has granted.
+   */
+  test("a granted rule shows the question it came from, not just its match key", async () => {
+    const clock = new FakeClock();
+    const deps = buildDeps({ store: memoryStore(clock) });
+    seedMemory(deps.store.db, clock, {
+      tier: "rule",
+      autonomy: "granted",
+      content: {
+        match: "claude-code:sess-abc:PermissionRequest:a24c750eeb79",
+        disposition: "auto_resolve",
+        action_class: "approve_permission",
+        question: "Permission: Bash: bun test",
+      },
+    });
+
+    const body = await (await mountApp(deps).request("/ui/memory")).text();
+    expect(body).toContain("Permission: Bash: bun test");
+    expect(body).toContain("approve_permission");
+  });
+
   test("archive POST sets status=archived and writes an audit row", async () => {
     const clock = new FakeClock();
     const deps = buildDeps({ store: memoryStore(clock) });
