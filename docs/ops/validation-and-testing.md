@@ -75,6 +75,21 @@ executes core + Web checks without chat-app validation.
 
 All tests use isolated temp directories via pytest fixtures (`tmp_path`, `tmp_path_factory`) rather than writing to shared `/tmp` paths.
 
+### Where the Temp Tree Lives
+
+`tests/support/hermetic_roots.py` builds a per-run, per-worker tree (basetemp,
+`HOME`, XDG dirs) under `<base>/cp-<repo-hash>/t/<run-token>/`, and
+`src/codex_autorunner/core/pytest_temp_cleanup.py` prunes it. `<base>` is the OS
+temp dir by default, chosen while ignoring `TMPDIR`/`TMP`/`TEMP` so an ambient
+per-process temp dir cannot fragment the roots cleanup has to find again.
+
+Set `CAR_PYTEST_TEMP_BASE` to an absolute path to place that tree on another
+volume — useful when the system disk is small, or when host policy forbids
+creating Git worktrees under the OS temp dir (several suites create real
+worktrees inside their basetemp). Cleanup keeps sweeping the OS temp dir too, so
+switching bases does not orphan existing roots. See
+[env-and-defaults.md](env-and-defaults.md) for the full variable table.
+
 ### Anti-Regression Guard
 
 `scripts/check_test_tmp_usage.py` scans test files for non-hermetic `/tmp` patterns:
@@ -129,6 +144,8 @@ The following modules were migrated from timing-based sync to deterministic wait
 | `scripts/check.sh` | Lane-aware validation runner (local pre-commit) |
 | `scripts/chat_surface_latency_budgets.py` | Deterministic chat-surface budget suite writer |
 | `scripts/check_test_tmp_usage.py` | Hermetic /tmp usage guard |
+| `tests/support/hermetic_roots.py` | Per-run/per-worker temp, `HOME`, and state roots |
+| `src/codex_autorunner/core/pytest_temp_cleanup.py` | Temp-root discovery and cleanup |
 | `scripts/test_tmp_usage_allowlist.json` | Allowlist for known /tmp exceptions |
 | `tests/support/waits.py` | Deterministic wait helpers for tests |
 | `.github/workflows/ci.yml` | CI pipeline with lane-based job routing |
