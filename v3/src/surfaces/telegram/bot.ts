@@ -8,7 +8,13 @@
  * outbound traffic arrives as a `TelegramSendFn` handed to the deliverer.
  */
 import { Bot } from "grammy";
-import { handleCallback, handleCommand, routeIncomingMessage, type HandlerDeps } from "./handlers.ts";
+import {
+  handleCallback,
+  handleCommand,
+  isAllowedTelegramUpdate,
+  routeIncomingMessage,
+  type HandlerDeps,
+} from "./handlers.ts";
 import { editMarkup, toReplyMarkup } from "./render.ts";
 import type { MessageSpec, TelegramSendFn, TelegramTarget } from "./types.ts";
 
@@ -18,17 +24,32 @@ export interface BotHandle {
   send: TelegramSendFn;
 }
 
+/** Bot-boundary auth check; handlers repeat this check for defense in depth. */
+export function authorizeTelegramUpdate(
+  deps: HandlerDeps,
+  chatId: string | number | undefined | null,
+  actorId: string | number | undefined | null,
+): boolean {
+  return isAllowedTelegramUpdate(deps.config, chatId, actorId);
+}
+
 export function createBot(token: string, deps: HandlerDeps): BotHandle {
   const bot = new Bot(token);
   const defaultChat = deps.config.telegram.chat_id;
 
-  /** Only the configured chat may drive CAR. Everything else is dropped. */
-  const allowed = (chatId: string | number | undefined): boolean =>
-    !defaultChat || String(chatId ?? "") === defaultChat;
+  const reject = (objectType: string, objectId: string, chatId: string | number | undefined, actorId: string | number | undefined): void => {
+    deps.store.audit("telegram", "telegram.actor_rejected", objectType, objectId, {
+      chat_id: chatId === undefined ? null : String(chatId),
+      actor_id: actorId === undefined ? null : String(actorId),
+    });
+  };
 
   bot.on("callback_query:data", async (ctx) => {
-    if (!allowed(ctx.chat?.id)) {
-      await ctx.answerCallbackQuery({ text: "not your bot" });
+    const actorId = ctx.from?.id;
+    const chatId = ctx.chat?.id;
+    if (!authorizeTelegramUpdate(deps, chatId, actorId)) {
+      reject("callback", ctx.callbackQuery.data, chatId, actorId);
+      await ctx.answerCallbackQuery({ text: "not authorized", show_alert: true });
       return;
     }
     const message = ctx.callbackQuery.message as { message_id?: number; text?: string } | undefined;
@@ -49,15 +70,19 @@ export function createBot(token: string, deps: HandlerDeps): BotHandle {
   });
 
   bot.on("message:text", async (ctx) => {
-    if (!allowed(ctx.chat.id)) return;
+    const actorId = ctx.from?.id;
+    if (!authorizeTelegramUpdate(deps, ctx.chat.id, actorId)) {
+      reject("message", String(ctx.message.message_id), ctx.chat.id, actorId);
+      return;
+    }
     const text = ctx.message.text;
     try {
       if (text.startsWith("/")) {
         const space = text.indexOf(" ");
         const command = space < 0 ? text : text.slice(0, space);
         const args = space < 0 ? "" : text.slice(space + 1);
-        const from = ctx.from?.id !== undefined ? String(ctx.from.id) : undefined;
-        const reply = await handleCommand(deps, from ? { command, args, from } : { command, args });
+        const from = String(actorId);
+        const reply = await handleCommand(deps, { command, args, from });
         await ctx.reply(reply);
         return;
       }
@@ -71,7 +96,7 @@ export function createBot(token: string, deps: HandlerDeps): BotHandle {
       if (ctx.message.message_thread_id !== undefined) {
         msg.threadId = String(ctx.message.message_thread_id);
       }
-      if (ctx.from?.id !== undefined) msg.from = String(ctx.from.id);
+      msg.from = String(actorId);
       const outcome = await routeIncomingMessage(deps, msg);
       if (outcome.kind === "delivered") await ctx.reply("→ delivered to the agent.");
       else if (outcome.kind === "queued") await ctx.reply("→ queued for the agent.");

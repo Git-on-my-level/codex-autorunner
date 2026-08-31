@@ -9,7 +9,7 @@ import {
   type HandlerDeps,
 } from "../../src/surfaces/telegram/handlers.ts";
 import { encodeCallback, CB } from "../../src/surfaces/telegram/render.ts";
-import { FakeMemoryWriter, auditVerbs, markDelivered, outboxRows, seedEscalation } from "./helpers.ts";
+import { FakeMemoryWriter, auditVerbs, markDelivered, outboxRows, seedEscalation, testSafety } from "./helpers.ts";
 
 let clock: FakeClock;
 let store: Store;
@@ -26,8 +26,11 @@ beforeEach(() => {
     store,
     actions,
     memoryWriter: memory,
+    safety: testSafety(store),
     host: "mac-studio",
-    config: testConfig({ telegram: { enabled: true, chat_id: "-100", digest_time: "08:30" } }),
+    config: testConfig({
+      telegram: { enabled: true, chat_id: "-100", allowed_user_ids: ["david"], digest_time: "08:30" },
+    }),
   };
 });
 
@@ -38,6 +41,7 @@ const tap = (op: string, id: string, messageText?: string) =>
     messageId: "555",
     ...(messageText ? { messageText } : {}),
   });
+const command = (name: string, args = "") => handleCommand(deps, { command: name, args, from: "david" });
 
 describe("approve / deny", () => {
   test("approve writes the answer, delivers, records the outcome and edits in place", async () => {
@@ -141,6 +145,67 @@ describe("approve / deny", () => {
   });
 });
 
+describe("Telegram actor and card binding", () => {
+  test("missing or unauthorized actors cannot mutate an escalation", async () => {
+    const seeded = seedEscalation(store);
+    markDelivered(store, seeded);
+
+    const missing = await handleCallback(deps, {
+      data: encodeCallback(CB.deny, seeded.escalationId),
+      messageId: "555",
+    });
+    const unauthorized = await handleCallback(deps, {
+      data: encodeCallback(CB.deny, seeded.escalationId),
+      from: "attacker",
+      messageId: "555",
+    });
+
+    expect(missing.alert).toBe(true);
+    expect(unauthorized.alert).toBe(true);
+    expect(store.db.query("SELECT state FROM escalations WHERE id = ?").get(seeded.escalationId)).toMatchObject({
+      state: "pending",
+    });
+    expect(actions.delivered).toHaveLength(0);
+    expect(store.listGrants()).toHaveLength(0);
+    expect(auditVerbs(store).filter((verb) => verb === "telegram.actor_rejected")).toHaveLength(2);
+  });
+
+  test("lifecycle callbacks reject missing, wrong, and tampered durable card bindings", async () => {
+    const seeded = seedEscalation(store);
+    markDelivered(store, seeded, "555");
+
+    // A callback from a different Telegram message is stale even when its
+    // opaque escalation id is otherwise valid.
+    const stale = await handleCallback(deps, {
+      data: encodeCallback(CB.snooze1h, seeded.escalationId),
+      from: "david",
+      messageId: "999",
+    });
+    expect(stale.alert).toBe(true);
+
+    store.kvSet("tg.msg.555", {
+      escalation_id: "esc_other",
+      incident_id: seeded.incidentId,
+      car_session_id: seeded.carSessionId,
+    });
+    const tampered = await tap(CB.alwaysAll, seeded.escalationId);
+    expect(tampered.alert).toBe(true);
+    expect(store.listGrants()).toHaveLength(0);
+    expect(store.db.query("SELECT state FROM escalations WHERE id = ?").get(seeded.escalationId)).toMatchObject({
+      state: "pending",
+    });
+  });
+
+  test("unauthenticated messages and commands are inert, including read-only status", async () => {
+    const beforeEvents = store.db.query("SELECT COUNT(*) AS n FROM events").get() as { n: number };
+    const beforeOutbox = store.db.query("SELECT COUNT(*) AS n FROM outbox").get() as { n: number };
+    expect(await handleCommand(deps, { command: "/status", args: "" })).toBe("not authorized");
+    expect((await routeIncomingMessage(deps, { text: "remember this", messageId: "no-actor" })).kind).toBe("ignored");
+    expect((store.db.query("SELECT COUNT(*) AS n FROM events").get() as { n: number }).n).toBe(beforeEvents.n);
+    expect((store.db.query("SELECT COUNT(*) AS n FROM outbox").get() as { n: number }).n).toBe(beforeOutbox.n);
+  });
+});
+
 describe("💬 reply", () => {
   test("enqueues a force-reply prompt naming the session", async () => {
     const seeded = seedEscalation(store, { title: "fix BLE reconnect" });
@@ -208,7 +273,7 @@ describe("😴 snooze", () => {
 });
 
 describe("🧠 Always…", () => {
-  test("only an explicit tap grants autonomy, and it creates the rule first", async () => {
+  test("only an explicit tap creates a core grant; memory remains a suggestion", async () => {
     const seeded = seedEscalation(store, { repo: "github.com/x/omi-desktop", suggested: { approval: false } });
     markDelivered(store, seeded);
 
@@ -224,20 +289,23 @@ describe("🧠 Always…", () => {
     expect(rule.tier).toBe("rule");
     expect(rule.content.match).toBe("force_push");
     expect(rule.content.action_class).toBe("deny_permission");
-    expect(rule.scope).toEqual({
-      vendor: "claude-code",
-      event_type: "attention.permission",
-      dedupe_class: "force_push",
-    });
-    expect(memory.autonomy).toEqual([{ memoryId: rule.id, autonomy: "granted", by: "david" }]);
-    expect(auditVerbs(store)).toContain("memory.autonomy_granted_from_escalation");
+    expect(rule.scope).toEqual({ vendor: "claude-code", event_type: "attention.permission" });
+    expect(memory.autonomy).toHaveLength(0);
+    expect(store.listGrants()).toHaveLength(1);
+    expect(store.listGrants()[0]!.lineage_id).toBeNull();
+    expect(auditVerbs(store)).toContain("telegram.grant_created");
   });
 
   test("'this repo only' narrows the scope", async () => {
     const seeded = seedEscalation(store, { repo: "github.com/x/omi-desktop" });
     markDelivered(store, seeded);
     await tap(CB.alwaysRepo, seeded.escalationId);
-    expect(memory.added[0]!.scope.repo).toBe("github.com/x/omi-desktop");
+    expect(memory.added[0]!.scope).toEqual({
+      vendor: "claude-code",
+      event_type: "attention.permission",
+      repo: "github.com/x/omi-desktop",
+      repo_verified: true,
+    });
   });
 
   test("keep-asking grants nothing and restores the main keyboard", async () => {
@@ -258,6 +326,31 @@ describe("🧠 Always…", () => {
     };
     expect(esc.state).toBe("pending");
   });
+
+  test("Always fails visibly when the card has no canonical blocked effect", async () => {
+    const seeded = seedEscalation(store);
+    markDelivered(store, seeded);
+    store.db.query("UPDATE escalations SET suggested_action_json = ? WHERE id = ?")
+      .run(JSON.stringify({ approval: false }), seeded.escalationId);
+
+    const ack = await tap(CB.alwaysAll, seeded.escalationId);
+    expect(ack.alert).toBe(true);
+    expect(ack.text).toContain("no canonical blocked effect");
+    expect(store.listGrants()).toHaveLength(0);
+  });
+
+  test("repo-only Always fails closed for an unverified repository label", async () => {
+    const seeded = seedEscalation(store);
+    markDelivered(store, seeded);
+    store.db.query("UPDATE sessions SET cwd = ?, repo = NULL, repo_verified = 0 WHERE car_session_id = ?")
+      .run("/tmp/look-alike-repo", seeded.carSessionId);
+
+    const ack = await tap(CB.alwaysRepo, seeded.escalationId);
+    expect(ack.alert).toBe(true);
+    expect(ack.text).toContain("no verified repository identity");
+    expect(store.listGrants()).toHaveLength(0);
+    expect(memory.autonomy).toHaveLength(0);
+  });
 });
 
 describe("digest feedback + promotion", () => {
@@ -268,7 +361,18 @@ describe("digest feedback + promotion", () => {
     expect(memory.outcomes.map((o) => o.verdict)).toEqual(["confirmed", "overridden"]);
   });
 
-  test("a promotion offer grants only on the Yes tap", async () => {
+  test("replayed digest feedback is an idempotent human interaction", async () => {
+    const seeded = seedEscalation(store);
+    const callback = { data: encodeCallback(CB.digestUp, seeded.decisionId), from: "david" };
+
+    expect((await handleCallback(deps, callback)).text).toBe("👍 noted");
+    expect((await handleCallback(deps, callback)).text).toBe("👍 already noted");
+
+    expect(memory.outcomes.map((o) => o.verdict)).toEqual(["confirmed"]);
+    expect((store.db.query("SELECT COUNT(*) AS n FROM interactions WHERE target_id = ?").get(seeded.decisionId) as { n: number }).n).toBe(1);
+  });
+
+  test("a promotion offer records a suggestion but never creates autonomy", async () => {
     const now = clock.current.toISOString();
     store.db
       .query(
@@ -277,15 +381,15 @@ describe("digest feedback + promotion", () => {
       )
       .run(now, now);
 
-    expect((await handleCallback(deps, { data: "pmk:mem_1" })).text).toContain("Keeping ask-first");
+    expect((await handleCallback(deps, { data: "pmk:mem_1", from: "david" })).text).toContain("Keeping ask-first");
     expect(memory.autonomy).toHaveLength(0);
 
-    await handleCallback(deps, { data: "pmy:mem_1" });
-    expect(memory.autonomy).toEqual([{ memoryId: "mem_1", autonomy: "granted", by: "david" }]);
+    await handleCallback(deps, { data: "pmy:mem_1", from: "david" });
+    expect(memory.autonomy).toHaveLength(0);
   });
 
   test("unknown callback data is inert", async () => {
-    expect((await handleCallback(deps, { data: "garbage" })).text).toBe("unknown button");
+    expect((await handleCallback(deps, { data: "garbage", from: "david" })).text).toBe("unknown button");
   });
 });
 
@@ -296,7 +400,7 @@ describe("digest stuck-session buttons", () => {
       .query("UPDATE sessions SET cwd = '/Users/dazheng/omi' WHERE car_session_id = ?")
       .run(seeded.carSessionId);
 
-    const ack = await handleCallback(deps, { data: `pb:${seeded.carSessionId}` });
+    const ack = await handleCallback(deps, { data: `pb:${seeded.carSessionId}`, from: "david" });
     expect(ack.text).toContain("probing");
     expect(actions.templates).toEqual([{ templateId: "git.status", args: { repo: "/Users/dazheng/omi" } }]);
 
@@ -308,7 +412,7 @@ describe("digest stuck-session buttons", () => {
   test("a session with no cwd falls back to an agentctl probe", async () => {
     const seeded = seedEscalation(store);
     store.db.query("UPDATE sessions SET cwd = NULL WHERE car_session_id = ?").run(seeded.carSessionId);
-    await handleCallback(deps, { data: `pb:${seeded.carSessionId}` });
+    await handleCallback(deps, { data: `pb:${seeded.carSessionId}`, from: "david" });
     expect(actions.templates[0]!.templateId).toBe("agentctl.recent");
   });
 
@@ -318,7 +422,7 @@ describe("digest stuck-session buttons", () => {
       .query("UPDATE incidents SET state = 'snoozed', snooze_until = '2099-01-01T00:00:00Z' WHERE id = ?")
       .run(seeded.incidentId);
 
-    const ack = await handleCallback(deps, { data: `es:${seeded.carSessionId}` });
+    const ack = await handleCallback(deps, { data: `es:${seeded.carSessionId}`, from: "david" });
     expect(ack.text).toBe("Escalated.");
     const inc = store.db.query("SELECT state, snooze_until FROM incidents WHERE id = ?").get(seeded.incidentId) as {
       state: string;
@@ -330,8 +434,8 @@ describe("digest stuck-session buttons", () => {
   });
 
   test("buttons for a vanished session are inert", async () => {
-    expect((await handleCallback(deps, { data: "pb:sess_gone" })).text).toBe("Session not found.");
-    expect((await handleCallback(deps, { data: "es:sess_gone" })).text).toBe("Session not found.");
+    expect((await handleCallback(deps, { data: "pb:sess_gone", from: "david" })).text).toBe("Session not found.");
+    expect((await handleCallback(deps, { data: "es:sess_gone", from: "david" })).text).toBe("Session not found.");
   });
 });
 
@@ -344,6 +448,7 @@ describe("inbound replies", () => {
       text: "rebase instead, do not force-push",
       messageId: "901",
       replyToMessageId: "900",
+      from: "david",
     });
 
     expect(outcome).toEqual({
@@ -369,13 +474,13 @@ describe("inbound replies", () => {
       .query("UPDATE sessions SET telegram_thread_id = '42' WHERE car_session_id = ?")
       .run(seeded.carSessionId);
 
-    const outcome = await routeIncomingMessage(deps, { text: "carry on", messageId: "5", threadId: "42" });
+    const outcome = await routeIncomingMessage(deps, { text: "carry on", messageId: "5", threadId: "42", from: "david" });
     expect(outcome.kind).toBe("delivered");
     expect(actions.delivered[0]!.carSessionId).toBe(seeded.carSessionId);
   });
 
   test("an unrouteable message becomes a note event", async () => {
-    const outcome = await routeIncomingMessage(deps, { text: "remember the milk", messageId: "77" });
+    const outcome = await routeIncomingMessage(deps, { text: "remember the milk", messageId: "77", from: "david" });
     expect(outcome.kind).toBe("note");
 
     const event = store.db
@@ -391,13 +496,13 @@ describe("inbound replies", () => {
     const seeded = seedEscalation(store);
     markDelivered(store, seeded, "900");
     actions.deliverResult = "failed";
-    const outcome = await routeIncomingMessage(deps, { text: "hi", messageId: "1", replyToMessageId: "900" });
+    const outcome = await routeIncomingMessage(deps, { text: "hi", messageId: "1", replyToMessageId: "900", from: "david" });
     expect(outcome.kind).toBe("failed");
     expect(outboxRows(store).some((r) => r.body.text.includes("Could not deliver"))).toBe(true);
   });
 
   test("empty messages are ignored", async () => {
-    expect((await routeIncomingMessage(deps, { text: "   ", messageId: "2" })).kind).toBe("ignored");
+    expect((await routeIncomingMessage(deps, { text: "   ", messageId: "2", from: "david" })).kind).toBe("ignored");
   });
 });
 
@@ -405,7 +510,7 @@ describe("commands", () => {
   test("/status counts what needs David", async () => {
     const seeded = seedEscalation(store);
     store.recordSpend("anthropic", "claude-haiku-4-5", 100, 20, 0.41);
-    const out = await handleCommand(deps, { command: "/status", args: "" });
+    const out = await command("/status");
     expect(out).toContain("escalations pending: 1");
     expect(out).toContain("$0.41");
     expect(out).toContain("mode: normal");
@@ -413,34 +518,34 @@ describe("commands", () => {
   });
 
   test("/remember stores a David-authored note", async () => {
-    const out = await handleCommand(deps, { command: "/remember", args: "never force-push omi-desktop" });
+    const out = await command("/remember", "never force-push omi-desktop");
     expect(out).toContain("Remembered");
     expect(memory.added[0]).toMatchObject({
       tier: "note",
       kind: "fact",
       content: { text: "never force-push omi-desktop" },
     });
-    expect(await handleCommand(deps, { command: "/remember", args: "" })).toContain("Usage");
+    expect(await command("/remember")).toContain("Usage");
   });
 
   test("/mute silences a session for a duration", async () => {
     const seeded = seedEscalation(store);
-    const out = await handleCommand(deps, { command: "/mute", args: `${seeded.carSessionId} 2h` });
+    const out = await command("/mute", `${seeded.carSessionId} 2h`);
     expect(out).toContain("Muted");
     const row = store.db
       .query("SELECT muted_until FROM sessions WHERE car_session_id = ?")
       .get(seeded.carSessionId) as { muted_until: string };
     expect(Date.parse(row.muted_until) - clock.current.getTime()).toBe(2 * 3_600_000);
 
-    expect(await handleCommand(deps, { command: "/mute", args: "sess_nope 2h" })).toContain("No session");
-    expect(await handleCommand(deps, { command: "/mute", args: `${seeded.carSessionId} banana` })).toContain(
+    expect(await command("/mute", "sess_nope 2h")).toContain("No session");
+    expect(await command("/mute", `${seeded.carSessionId} banana`)).toContain(
       "Cannot parse duration",
     );
   });
 
   test("/mute also resolves a session by title", async () => {
     const seeded = seedEscalation(store, { title: "fix BLE reconnect" });
-    await handleCommand(deps, { command: "/mute", args: "BLE 1d" });
+    await command("/mute", "BLE 1d");
     const row = store.db
       .query("SELECT muted_until FROM sessions WHERE car_session_id = ?")
       .get(seeded.carSessionId) as { muted_until: string | null };
@@ -453,26 +558,33 @@ describe("commands", () => {
         "INSERT INTO actions (id, decision_id, class, policy_verdict, dedupe_hash, state) VALUES ('act_1','dec_1','reply','auto','h','running')",
       )
       .run();
-    const out = await handleCommand(deps, { command: "/panic", args: "" });
+    const out = await command("/panic");
     expect(out).toContain("ESCALATE-ONLY");
-    // policy reads this as a strict boolean — an object here would silently disarm the breaker.
-    expect(store.kvGet<boolean>("escalate_only")).toBe(true);
+    expect(deps.safety.snapshot().panic).toBe(true);
     expect(
       (store.db.query("SELECT state FROM actions WHERE id = 'act_1'").get() as { state: string }).state,
     ).toBe("failed");
     expect(auditVerbs(store)).toContain("panic.engaged");
 
-    const cleared = await handleCommand(deps, { command: "/panic", args: "off" });
+    const cleared = await command("/panic", "off");
     expect(cleared).toContain("cleared");
-    expect(store.kvGet<unknown>("escalate_only")).toBe(false);
+    expect(deps.safety.snapshot().panic).toBe(false);
     expect(auditVerbs(store)).toContain("panic.cleared");
+  });
+
+  test("/panic survives a recreated SQLite-backed safety kernel", async () => {
+    await command("/panic");
+    const restarted = testSafety(store);
+    expect(restarted.snapshot()).toMatchObject({ panic: true, panic_reason: "telegram /panic" });
+    restarted.clearPanic();
+    expect(testSafety(store).snapshot().panic).toBe(false);
   });
 
   test("/ticker toggles the kv flag and gates ticker updates", async () => {
     const seeded = seedEscalation(store);
     expect(updateTicker(deps, seeded.carSessionId, "running tests")).toBe(false);
 
-    expect(await handleCommand(deps, { command: "/ticker", args: "on" })).toBe("Ticker on.");
+    expect(await command("/ticker", "on")).toBe("Ticker on.");
     expect(store.kvGet<boolean>("telegram.ticker")).toBe(true);
     expect(updateTicker(deps, seeded.carSessionId, "running tests")).toBe(true);
 
@@ -480,27 +592,27 @@ describe("commands", () => {
     expect(row.target.kind).toBe("ticker");
     expect(row.body.disable_notification).toBe(true);
 
-    expect(await handleCommand(deps, { command: "/ticker", args: "sideways" })).toContain("Usage");
+    expect(await command("/ticker", "sideways")).toContain("Usage");
   });
 
   test("/digest resends the latest stored digest", async () => {
-    expect(await handleCommand(deps, { command: "/digest", args: "" })).toContain("No digest");
+    expect(await command("/digest")).toContain("No digest");
     store.db
       .query("INSERT INTO digests (day, rendered_md, sent_at) VALUES ('2026-08-25','☀️ yesterday', '2026-08-25T08:30:00Z')")
       .run();
-    const out = await handleCommand(deps, { command: "/digest", args: "" });
+    const out = await command("/digest");
     expect(out).toContain("2026-08-25");
     expect(outboxRows(store).at(-1)!.target.kind).toBe("digest");
   });
 
   test("commands are audited and unknown ones are safe", async () => {
-    expect(await handleCommand(deps, { command: "/nope", args: "" })).toContain("Unknown command");
-    expect(await handleCommand(deps, { command: "/help", args: "" })).toContain("/status");
-    expect(await handleCommand(deps, { command: "/policy", args: "" })).toContain("mode:");
+    expect(await command("/nope")).toContain("Unknown command");
+    expect(await command("/help")).toContain("/status");
+    expect(await command("/policy")).toContain("mode:");
     expect(auditVerbs(store).filter((v) => v === "telegram.command")).toHaveLength(3);
   });
 
   test("group-suffixed commands still resolve", async () => {
-    expect(await handleCommand(deps, { command: "/status@car_bot", args: "" })).toContain("CAR status");
+    expect(await command("/status@car_bot")).toContain("CAR status");
   });
 });

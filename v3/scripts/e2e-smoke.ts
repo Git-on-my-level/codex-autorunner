@@ -6,14 +6,9 @@
  * throwaway config (random free-ish port, temp state_dir), replays a small battery
  * of events over real HTTP, asserts against /healthz and the web UI's brief
  * endpoint, then re-opens the SQLite file read-only and asserts directly on the
- * store: event count, idempotency dedupe, session creation, audit completeness.
- *
- * Deliberately scoped to only the generic `POST /v1/events` path and the scaffold
- * `/healthz` route plus the store's own tables — all guaranteed present from the
- * Phase 0 scaffold regardless of whether the other workstreams' modules (triage,
- * memory, telegram, actions, web UI) are still no-op stubs or fully implemented.
- * It does NOT assert on triage decisions, escalations, or Telegram delivery — those
- * are each workstream's own test suites' job.
+ * store: event count, idempotency dedupe, session creation, router completion,
+ * provider terminals, escalation, daemon ownership, and audit completeness.
+ * Transport-specific delivery remains covered by the surface suites.
  *
  * Not wired into package.json (package.json is frozen for this build). Run directly:
  *   bun run scripts/e2e-smoke.ts
@@ -45,7 +40,7 @@ function randomPort(): number {
 async function post(base: string, ev: CarEvent): Promise<{ ok: boolean; status: number; body: unknown }> {
   const res = await fetch(`${base}/v1/events`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", authorization: "Bearer e2e-secret" },
     body: JSON.stringify(ev),
   });
   const body = await res.json().catch(() => null);
@@ -59,7 +54,17 @@ async function main(): Promise<void> {
   const port = randomPort();
   writeFileSync(
     configPath,
-    [`state_dir = ${JSON.stringify(stateDir)}`, "", "[http]", 'host = "127.0.0.1"', `port = ${port}`, ""].join("\n"),
+    [
+      `state_dir = ${JSON.stringify(stateDir)}`,
+      "",
+      "[http]",
+      'host = "127.0.0.1"',
+      `port = ${port}`,
+      "",
+      "[http.ingest_tokens]",
+      'generic = "e2e-secret"',
+      "",
+    ].join("\n"),
   );
   console.log(`e2e-smoke: state_dir=${stateDir} port=${port}`);
 
@@ -100,6 +105,7 @@ async function main(): Promise<void> {
         vendor: "other",
         native_id: sessionNativeId,
         host: "e2e-host",
+        repo_verified: false,
         cwd: "/tmp/e2e",
         title: "e2e smoke session",
       },
@@ -121,6 +127,7 @@ async function main(): Promise<void> {
         vendor: "other",
         native_id: sessionNativeId,
         host: "e2e-host",
+        repo_verified: false,
       },
       type: "heartbeat",
       severity: "info",
@@ -156,9 +163,7 @@ async function main(): Promise<void> {
       JSON.stringify(r1dup),
     );
 
-    // brief.md: DESIGN.md specifies GET /brief.md at the daemon root; the current
-    // scaffold web-UI stub mounts it under /ui. Try both so this test survives
-    // whichever mount point WS-F ships.
+    // Keep the documented root endpoint primary while accepting the UI mount alias.
     let briefRes = await fetch(`${base}/brief.md`);
     if (!briefRes.ok) briefRes = await fetch(`${base}/ui/brief.md`);
     const briefText = await briefRes.text().catch(() => "");
@@ -168,9 +173,7 @@ async function main(): Promise<void> {
       `url=${briefRes.url} status=${briefRes.status} len=${briefText.length}`,
     );
 
-    // Let the triage loop tick at least once before we stop the daemon (it polls
-    // every 2s per daemon.ts); not asserted on directly, just gives any real
-    // (non-stub) triage/outbox implementation a chance to run before we snapshot.
+    // Let the attention-router loop durably finish before snapshotting the store.
     await Bun.sleep(2200);
   } finally {
     await daemon.stop();
@@ -219,6 +222,15 @@ async function main(): Promise<void> {
       (db.query("SELECT verb FROM audit WHERE object_type = 'daemon'").all() as { verb: string }[]).map((v) => v.verb),
     );
     check("audit records daemon.started", daemonAudit.has("daemon.started"), JSON.stringify([...daemonAudit]));
+
+    const routed = (db.query("SELECT COUNT(*) n FROM events WHERE route_state NOT IN ('pending','coalescing')").get() as { n: number }).n;
+    check("attention router durably handled all three events", routed === 3, `count=${routed}`);
+    const providerTerminals = (db.query("SELECT COUNT(*) n FROM provider_invocations WHERE state = 'terminal_recorded'").get() as { n: number }).n;
+    check("native capability invocations reached durable terminal rows", providerTerminals >= 2, `count=${providerTerminals}`);
+    const escalationCount = (db.query("SELECT COUNT(*) n FROM escalations").get() as { n: number }).n;
+    check("attention.question produced a durable escalation", escalationCount === 1, `count=${escalationCount}`);
+    const ownerCount = (db.query("SELECT COUNT(*) n FROM daemon_leases").get() as { n: number }).n;
+    check("orderly stop released the single-daemon ownership lease", ownerCount === 0, `count=${ownerCount}`);
   } finally {
     db.close();
   }

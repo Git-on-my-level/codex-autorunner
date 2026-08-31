@@ -42,6 +42,7 @@ interface SessionSummary {
   host: string;
   title: string | null;
   repo: string | null;
+  repo_verified: number;
   cwd: string | null;
   expected_heartbeat_s: number | null;
   last_heartbeat_at: string | null;
@@ -180,6 +181,7 @@ function synthesize(
       host: ref.host,
       ...(session.title ? { title: session.title } : {}),
       ...(session.repo ? { repo: session.repo } : {}),
+      repo_verified: session.repo_verified === 1,
       ...(session.cwd ? { cwd: session.cwd } : {}),
     },
     type: spec.type,

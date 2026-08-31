@@ -151,6 +151,7 @@ export interface DraftEvent {
     host: string;
     cwd?: string;
     repo?: string;
+    repo_verified?: boolean;
     title?: string;
   } | null;
   type: EventType;
@@ -184,6 +185,7 @@ export function buildEvent(draft: DraftEvent): CarEvent {
           host: clampString(draft.session.host, 128),
           ...(draft.session.cwd ? { cwd: clampString(draft.session.cwd, 1024) } : {}),
           ...(draft.session.repo ? { repo: clampString(draft.session.repo, 512) } : {}),
+          repo_verified: draft.session.repo_verified === true,
           ...(draft.session.title ? { title: clampString(draft.session.title, 512) } : {}),
         }
       : null,

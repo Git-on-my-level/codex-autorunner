@@ -63,3 +63,42 @@ export function memoryId(): string {
 export function outcomeId(): string {
   return `out_${ulid()}`;
 }
+
+/** Stable identities for v3 durable capability and effect records. */
+export function intentId(prefix = "intent"): string {
+  return `${prefix}_${ulid()}`;
+}
+export function effectId(): string {
+  return `eff_${ulid()}`;
+}
+export function providerInvocationId(): string {
+  return `pinv_${ulid()}`;
+}
+export function interactionId(): string {
+  return `interaction_${ulid()}`;
+}
+export function humanFactId(): string {
+  return `fact_${ulid()}`;
+}
+export function grantId(): string {
+  return `grant_${ulid()}`;
+}
+
+/**
+ * Deterministic JSON used as the payload of idempotency reservations. This is
+ * deliberately kept in the contract layer so every producer hashes the same
+ * semantic object rather than relying on insertion order.
+ */
+export function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+    .join(",")}}`;
+}
+
+export function payloadSha256(value: unknown): string {
+  return new Bun.CryptoHasher("sha256").update(stableJson(value)).digest("hex");
+}

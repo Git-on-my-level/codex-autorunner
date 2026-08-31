@@ -23,7 +23,11 @@ import {
   listNotes,
   listPendingMemories,
   listDigests,
+  listAgentRuns,
+  getAgentObserverHealth,
+  getAgentRunSummary,
 } from "./queries.ts";
+import type { AgentRunStateFilter } from "./queries.ts";
 import {
   InboxPage,
   IncidentsListPage,
@@ -31,10 +35,13 @@ import {
   MemoryPage,
   PolicyPage,
   DigestsPage,
+  RunsPage,
+  LoginPage,
   NotFoundPage,
 } from "./views.tsx";
 import { archiveMemory, demoteMemory, decideProposal, addNote } from "./writes.ts";
 import { buildBriefMarkdown } from "./brief.ts";
+import { authenticateWebWrite, establishWebSession, hasWebWriteSession } from "./auth.ts";
 
 const UI_PATH = "/ui";
 
@@ -56,6 +63,28 @@ function optionalQuery(value: string | undefined): string | undefined {
 export function createWebUi(deps: DaemonDeps): { path: string; app: Hono } {
   const app = new Hono();
   const db = deps.store.db;
+
+  app.use("*", async (c, next) => {
+    if (c.req.method === "GET" || c.req.method === "HEAD" || c.req.path.endsWith("/login")) {
+      return next();
+    }
+    if (authenticateWebWrite(c, deps.config)) return next();
+    deps.store.audit("web", "web.write_denied", "path", c.req.path, { reason: "unauthenticated" });
+    return c.html('Unauthorized. <a href="/ui/login">Sign in</a>.', 401);
+  });
+
+  app.get("/login", (c) => c.html(LoginPage()));
+
+  app.post("/login", async (c) => {
+    const body = await c.req.parseBody();
+    const token = typeof body.token === "string" ? body.token : "";
+    if (!establishWebSession(c, deps.config, token)) {
+      deps.store.audit("web", "web.login_denied", "session", "ui", {});
+      return c.text("Unauthorized", 401);
+    }
+    deps.store.audit("web", "web.login", "session", "ui", {});
+    return c.redirect(UI_PATH, 303);
+  });
 
   app.get("/", (c) => {
     const filters = {
@@ -85,6 +114,41 @@ export function createWebUi(deps: DaemonDeps): { path: string; app: Hono } {
     return c.html(IncidentsListPage({ rows, state }));
   });
 
+  app.get("/runs", (c) => {
+    const health = getAgentObserverHealth(db);
+    const observedAt = health.observed_at ? new Date(health.observed_at).getTime() : Number.NaN;
+    const staleAfterMs = Math.max(30_000, deps.config.agentctl_observer.interval_seconds * 3_000);
+    const visibleHealth = deps.config.agentctl_observer.enabled && health.state === "ok" &&
+      (!Number.isFinite(observedAt) || Date.now() - observedAt > staleAfterMs)
+      ? { ...health, state: "stale" as const, error: "The observer has not refreshed recently. Nonterminal states are last-seen evidence, not current liveness." }
+      : health;
+    const stateValue = optionalQuery(c.req.query("state"));
+    const state: AgentRunStateFilter = stateValue === "active" || stateValue === "attention" || stateValue === "finished"
+      ? stateValue
+      : "all";
+    const agent = optionalQuery(c.req.query("agent"));
+    const requestedPage = Number.parseInt(c.req.query("page") ?? "0", 10);
+    const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 0;
+    const observerReliable = deps.config.agentctl_observer.enabled && visibleHealth.state === "ok";
+    const list = listAgentRuns(db, { state, agent, page, observerReliable });
+    return c.html(RunsPage({
+      runs: list.rows,
+      health: visibleHealth,
+      observerEnabled: deps.config.agentctl_observer.enabled,
+      observerReliable,
+      summary: getAgentRunSummary(db, observerReliable),
+      filters: { state, agent },
+      agents: list.agents,
+      page: list.page,
+      hasNext: list.hasNext,
+      filteredTotal: list.total,
+      refreshSeconds: deps.config.agentctl_observer.enabled ? deps.config.agentctl_observer.interval_seconds : 0,
+      scopeLabel: deps.config.agentctl_observer.observe_all
+        ? "All local agentctl runs"
+        : `Runs labeled ${deps.config.agentctl_observer.required_labels.join(" + ")}`,
+    }));
+  });
+
   app.get("/incidents/:id", (c) => {
     const id = c.req.param("id");
     const chain = getIncidentChain(db, id);
@@ -105,6 +169,7 @@ export function createWebUi(deps: DaemonDeps): { path: string; app: Hono } {
         charter,
         charterPath: charterPath(deps.config),
         noteAdded: c.req.query("added") === "1",
+        canWrite: hasWebWriteSession(c, deps.config),
       }),
     );
   });

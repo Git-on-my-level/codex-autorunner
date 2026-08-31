@@ -21,9 +21,13 @@ import type { CarConfig } from "../../src/config/config.ts";
 import type { DaemonDeps, TriagePort } from "../../src/ports.ts";
 import { incidentId as newIncidentId, decisionId as newDecisionId, escalationId as newEscalationId, outcomeId as newOutcomeId, memoryId as newMemoryId, actionId as newActionId } from "../../src/contract/ids.ts";
 
+export const WEB_TEST_TOKEN = "web-test-token";
+export const WEB_AUTH_HEADERS = { authorization: `Bearer ${WEB_TEST_TOKEN}` };
+
 export function buildDeps(opts: { store?: Store; config?: CarConfig } = {}): DaemonDeps {
   const store = opts.store ?? memoryStore();
-  const config = opts.config ?? testConfig();
+  const config =
+    opts.config ?? testConfig({ http: { ingest_tokens: { web: WEB_TEST_TOKEN } } });
   const { writer } = createMemory(store, config);
   const noopTriage: TriagePort = { tick: async () => 0 };
   return {
@@ -160,6 +164,8 @@ export function seedEscalation(
     question: string;
     suggested_action_json: string | null;
     state: string;
+    telegram_message_id: string | null;
+    sent_at: string | null;
     answered_by: string | null;
     answer_json: string | null;
     answered_at: string | null;
@@ -169,8 +175,8 @@ export function seedEscalation(
   const now = clock.now().toISOString();
   db.query(
     `INSERT INTO escalations (id, incident_id, severity, question, suggested_action_json, state,
-       answered_by, answer_json, answered_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       telegram_message_id, sent_at, answered_by, answer_json, answered_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     incidentId,
@@ -178,6 +184,8 @@ export function seedEscalation(
     overrides.question ?? "What now?",
     overrides.suggested_action_json ?? null,
     overrides.state ?? "pending",
+    overrides.telegram_message_id ?? null,
+    overrides.sent_at ?? null,
     overrides.answered_by ?? null,
     overrides.answer_json ?? null,
     overrides.answered_at ?? null,

@@ -1,6 +1,6 @@
 /**
- * Ingest auth: localhost is trusted, everything else needs a per-source bearer
- * token from `config.http.ingest_tokens`.
+ * Write-path auth: every caller, including localhost, needs a per-source bearer
+ * token from config or its configured environment variable.
  *
  * Fails closed. If the peer address cannot be determined we do NOT assume
  * localhost — an ingest route is a write path into the attention control plane,
@@ -8,9 +8,10 @@
  */
 import type { Context } from "hono";
 import type { CarConfig } from "../config/config.ts";
+import { createHmac } from "node:crypto";
 
 /** Source ids used as bearer-token keys in config.http.ingest_tokens. */
-export type SourceId = "generic" | "agentctl" | "claude" | "multica";
+export type SourceId = "generic" | "agentctl" | "claude" | "multica" | "web" | "provider";
 
 /** Token key honored for every source, so an operator can issue one shared token. */
 export const WILDCARD_TOKEN_KEY = "*";
@@ -41,27 +42,43 @@ export function isLoopback(address: string | null): boolean {
   return LOOPBACK.has(address.toLowerCase());
 }
 
-export type AuthResult = { ok: true; via: "localhost" | "token" } | { ok: false; reason: string };
+export type AuthResult =
+  | { ok: true; via: "token"; source: SourceId; principal: string }
+  | { ok: false; reason: string };
 
 export function authorize(c: Context, config: CarConfig, source: SourceId): AuthResult {
   const address = peerAddress(c);
-  if (isLoopback(address)) return { ok: true, via: "localhost" };
-
   const presented = bearerToken(c.req.header("authorization") ?? c.req.header("Authorization"));
   if (presented === null) {
-    return { ok: false, reason: address === null ? "unidentified_peer" : "missing_bearer_token" };
+    return { ok: false, reason: address === null ? "unidentified_peer_and_missing_token" : "missing_bearer_token" };
   }
 
-  const tokens = config.http.ingest_tokens ?? {};
-  const candidates = [tokens[source], tokens[WILDCARD_TOKEN_KEY]].filter(
-    (t): t is string => typeof t === "string" && t.length > 0,
-  );
+  const candidates = configuredTokens(config, source);
   if (candidates.length === 0) return { ok: false, reason: "no_token_configured_for_source" };
 
   for (const expected of candidates) {
-    if (timingSafeEqual(presented, expected)) return { ok: true, via: "token" };
+    if (timingSafeEqual(presented, expected)) {
+      const credential = new Bun.CryptoHasher("sha256").update(presented).digest("hex").slice(0, 16);
+      return { ok: true, via: "token", source, principal: `${source}:${credential}` };
+    }
   }
   return { ok: false, reason: "invalid_token" };
+}
+
+/** Resolved tokens for a source. Values are never logged or returned by diagnostics. */
+export function configuredTokens(config: CarConfig, source: SourceId): string[] {
+  const tokens = config.http.ingest_tokens ?? {};
+  const tokenEnvs = config.http.ingest_token_envs ?? {};
+  const envTokens = [tokenEnvs[source], tokenEnvs[WILDCARD_TOKEN_KEY]]
+    .filter((name): name is string => typeof name === "string" && name.length > 0)
+    .map((name) => process.env[name]);
+  return Array.from(
+    new Set(
+      [tokens[source], tokens[WILDCARD_TOKEN_KEY], ...envTokens].filter(
+        (t): t is string => typeof t === "string" && t.length > 0,
+      ),
+    ),
+  );
 }
 
 export function bearerToken(header: string | undefined | null): string | null {
@@ -79,4 +96,25 @@ export function timingSafeEqual(a: string, b: string): boolean {
   let diff = 0;
   for (let i = 0; i < ab.length; i++) diff |= ab[i]! ^ bb[i]!;
   return diff === 0;
+}
+
+/** Scoped URL capability for agentctl, whose webhook CLI cannot set headers. */
+export function agentctlCallbackCapability(secret: string, executionId: string): string {
+  return createHmac("sha256", secret)
+    .update(`car-agentctl-callback-v1\0${executionId}`)
+    .digest("base64url");
+}
+
+export function authorizeAgentctlCallback(
+  config: CarConfig,
+  executionId: string,
+  presented: string,
+): { principal: string } | null {
+  for (const secret of configuredTokens(config, "agentctl")) {
+    if (timingSafeEqual(presented, agentctlCallbackCapability(secret, executionId))) {
+      const credential = new Bun.CryptoHasher("sha256").update(secret).digest("hex").slice(0, 16);
+      return { principal: `agentctl:${credential}:execution:${executionId}` };
+    }
+  }
+  return null;
 }

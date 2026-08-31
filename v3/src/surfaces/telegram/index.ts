@@ -14,8 +14,9 @@
 import type { Store } from "../../store/db.ts";
 import type { CarConfig } from "../../config/config.ts";
 import type { ActionBus, ChannelPort, EscalationMessage, Loop, MemoryWriter } from "../../ports.ts";
+import type { SafetyKernel } from "../../safety/index.ts";
 import { KV_TICKER, updateTicker, type HandlerDeps } from "./handlers.ts";
-import { deliverOutboxOnce, enqueueMessage, type DelivererStats } from "./outbox.ts";
+import { deliverOutboxOnce, digestIntentId, enqueueMessage, type DelivererStats } from "./outbox.ts";
 import { renderDigestMessage, renderEscalation } from "./render.ts";
 import { getIncident, openingEventType, type IncidentRow } from "./rows.ts";
 import { getSession, isMuted, resolveTarget, sessionLabel } from "./targets.ts";
@@ -23,6 +24,8 @@ import type { MessageSpec, TelegramSendFn, TelegramTarget } from "./types.ts";
 
 export interface TelegramChannel extends ChannelPort {
   loop: Loop;
+  /** Enqueue the scheduled digest with a durable day/held-row association. */
+  sendDigestTracked(markdown: string, day: string, heldOutboxIds: number[]): number;
   /** Drain one outbox batch. Exposed for tests and the e2e smoke. */
   deliverOnce(send?: TelegramSendFn): Promise<DelivererStats>;
   /** One edited-in-place status line per session; no-op unless /ticker is on. */
@@ -36,12 +39,14 @@ export function createTelegram(
   config: CarConfig,
   actions: ActionBus,
   memoryWriter: MemoryWriter,
+  safety: SafetyKernel,
 ): TelegramChannel {
   const handlerDeps: HandlerDeps = {
     store,
     config,
     actions,
     memoryWriter,
+    safety,
     host: process.env.CAR_HOST ?? "localhost",
   };
 
@@ -106,6 +111,26 @@ export function createTelegram(
       store.audit("daemon", "digest.enqueued", "digest", store.clock.now().toISOString().slice(0, 10), {});
     },
 
+    sendDigestTracked(markdown: string, day: string, heldOutboxIds: number[]): number {
+      // The deterministic intent makes enqueue+link crash-safe: if the daemon
+      // dies after this call and before attaching the row, the next scheduler
+      // pass can find the same canonical outbox row and reconcile it.
+      const outboxId = enqueueMessage(
+        store,
+        { kind: "digest", chat_id: config.telegram.chat_id },
+        renderDigestMessage(markdown),
+        {
+          intentId: digestIntentId(day),
+          route: { kind: "digest", day, held_outbox_ids: heldOutboxIds },
+        },
+      );
+      store.audit("daemon", "digest.enqueued", "digest", day, {
+        outbox_id: outboxId,
+        held_outbox_ids: heldOutboxIds,
+      });
+      return outboxId;
+    },
+
     async deliverOnce(send?: TelegramSendFn): Promise<DelivererStats> {
       const fn = send ?? sendFn;
       if (!fn) return { sent: 0, retried: 0, dead: 0, deferred: 0 };
@@ -124,6 +149,12 @@ export function createTelegram(
         if (!token) {
           store.audit("daemon", "telegram.disabled", "daemon", "card", {
             reason: `${config.telegram.token_env} not set`,
+          });
+          return;
+        }
+        if (!config.telegram.chat_id || config.telegram.allowed_user_ids.length === 0) {
+          store.audit("daemon", "telegram.disabled", "daemon", "card", {
+            reason: "missing chat_id or allowed_user_ids",
           });
           return;
         }

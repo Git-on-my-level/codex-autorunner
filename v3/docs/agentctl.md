@@ -1,99 +1,116 @@
 # agentctl integration
 
-CAR launches work through `agentctl` for anything it kicks off itself (triage
-`run_action` templates, reply-back continuations — DESIGN.md §8 `agentctl-run`), and
-separately wants to hear about *all* agentctl-tracked executions, including ones CAR
-didn't launch. Two mechanisms, both DESIGN.md §2:
+CAR treats agentctl as a transport and execution authority, not as the identity
+of the native agent. Cursor, OMP, Codex, and other adapters remain distinct in
+the operator UI while routing and policy continue to use the authenticated
+agentctl source identity.
 
-1. **`agentctl subscribe create`** — CAR registers a webhook subscription on each
-   execution it cares about (mainly ones it launched itself); at-least-once delivery
-   to CAR's ingest endpoint.
-2. **`agentctl recent --unreconciled`** — a periodic belt-and-braces sweep for
-   anything that fell through (execution finished, subscription never fired/was never
-   created, host-local journal still has it).
+There are two independent integration paths:
 
-## 1. Webhook subscription
+1. Callback ingest receives semantic events from explicit agentctl webhook
+   subscriptions.
+2. The optional observer builds a compact, read-only projection of selected
+   local executions for the Runs view.
 
-Exact flags below are copied from `agentctl help subscribe` on this machine (Aug
-2026) — confirm against your own `agentctl` install if it's a different version, since
-CAR relies on the vendor CLI capability probe (DESIGN.md §2) rather than trusting
-docs blindly:
+Neither path calls `agentctl result` or `agentctl await`. Reading CAR must never
+acknowledge or consume another client's agentctl result.
 
-```
-agentctl subscribe create --execution ID --destination webhook --target target
-  [--authority direct|multica] [--kind kind] [--ttl duration] [--keep-after-terminal]
-```
+## Callback ingest
 
-Defaults (per `agentctl help subscribe`): a bare `create` filters to terminal,
-attention, and artifact events; 24h TTL; expires once the terminal delivery is
-acknowledged.
+`POST /v1/ingest/agentctl` accepts authenticated callback deliveries.
+Continuation subscriptions use an execution-scoped capability URL because the
+agentctl webhook client cannot attach a bearer header.
 
-To subscribe CAR's ingest endpoint to a specific execution:
+The normalizer:
 
-```bash
-agentctl subscribe create \
-  --execution exec-01ABCDEF... \
-  --destination webhook \
-  --target http://127.0.0.1:7171/v1/ingest/agentctl
-```
+- keeps `source.vendor = "agentctl"` and the agentctl execution as the session
+  ref;
+- preserves the native adapter in `payload.agentctl.adapter` for display;
+- uses the stable journal event id, or execution and sequence fallback, for
+  at-least-once idempotency;
+- maps attention, artifact, terminal, health, and progress into the closed CAR
+  event vocabulary;
+- stores model, profile, runtime, config fingerprint, or worktree only when the
+  callback actually reports them.
 
-Add `--kind` to narrow which semantic event kinds are delivered (see
-`agentctl help events` for the current kind vocabulary — `terminal`, `attention`,
-`artifact` are the ones this integration cares about; omit `--kind` to keep the
-default filter). Add `--keep-after-terminal` if you want delivery to keep running
-past the execution's terminal event (useful if you expect follow-up artifact events).
+An agentctl callback does not contain a trustworthy native resume id. CAR must
+not turn opaque source-binding aliases into native session refs.
 
-**When CAR creates the subscription itself**: for any execution CAR launches via
-`agentctl run --label car-triage` or `agentctl run --label car-continuation`
-(DESIGN.md §5, §8), the actions layer subscribes immediately after `run` returns the
-execution id — no manual step needed. The manual invocation above is for wiring CAR
-into agentctl work you launch **outside** CAR (your own `agentctl run` calls, CI, other
-tooling) that you still want showing up in CAR's inbox.
+CAR currently creates a subscription only after it launches a bounded
+`car-continuation` execution. Subscription creation is best-effort and audited.
+External subscriptions must target an authenticated execution-scoped callback
+URL; the bare ingest URL requires a configured bearer credential.
 
-## 2. Ingest side
+## Optional local observer
 
-CAR's `/v1/ingest/agentctl` normalizer maps an agentctl callback payload onto
-`car.event.v1`:
-- `session.vendor = "agentctl"`, `session.native_id` ← the execution id.
-- `idempotency_key` includes the execution id + event sequence so at-least-once
-  webhook delivery is safe to retry (duplicate POSTs resolve to the same event row —
-  DESIGN.md §2).
-- `kind: terminal` → `session.ended` (+ `attention.error` if the execution failed).
-- `kind: attention` → `attention.question` / `attention.idle` depending on the
-  specific attention reason agentctl reports.
-- `kind: artifact` → `artifact`.
-- If the execution wraps a *nested* native id (e.g. an agentctl exec wrapping a codex
-  process), the normalizer also calls `linkSessionRef` so the codex session and the
-  agentctl execution resolve to the same `car_session_id` (DESIGN.md §2, "session
-  identity").
+The daemon-owned observer is off by default so the no-dependency native CAR
+configuration stays valid. Enable it with an explicit scope:
 
-## 3. Unreconciled sweep
-
-Belt-and-braces for subscriptions that never fired (process died before the webhook
-went out, target was unreachable, etc.). Read-only discovery, safe to run on a timer:
-
-```bash
-agentctl recent --unreconciled
+```toml
+[agentctl_observer]
+enabled = true
+required_labels = ["car-observe"]
+observe_all = false
+interval_seconds = 15
+discovery_limit = 100
+retention_days = 30
+retention_max_terminal = 2000
 ```
 
-Per `agentctl help recent`: this lists terminal executions whose result has never been
-acknowledged (older terminals that predate acknowledgement tracking are excluded, so
-this won't flood you retroactively on a fresh agentctl install). CAR's watchdog
-scheduler (DESIGN.md §4, loop 4) runs this sweep and files any execution it hasn't
-already seen an event for as a synthetic `attention.idle`/`session.ended` — the same
-path the silence watchdog uses for missed heartbeats.
+`discovery_limit` is bounded to `1..200`, matching agentctl's public `recent`
+limit. Values above 200 are rejected at configuration load instead of creating
+false confidence about discovery breadth.
 
-## Reply-back: `agentctl-run`
+To observe every host-local execution, make that breadth explicit:
 
-The other direction — CAR answering into agentctl-launched work — is a
-`response_channel.kind: "agentctl-run"`: replying to a session backed by an agentctl
-execution is a **new bounded execution**, not an injection into a live process:
-
-```bash
-agentctl run --label car-continuation -- <vendor resume argv from session_refs>
+```toml
+[agentctl_observer]
+enabled = true
+required_labels = []
+observe_all = true
 ```
 
-CAR immediately `subscribe create`s on the new execution (step 1, above) so its
-outcome flows back into the same incident. See DESIGN.md §8 for the full adapter list
-and `docs/replies-file-contract.md` for the universal fallback when no adapter can
-reach a session at all.
+Each tick reads two bounded views:
+
+- recent matching executions;
+- matching nonterminal executions, so active work cannot fall out of the recent
+  window.
+
+CAR-launched continuations carry both `car-continuation` and `car-observe`, so
+the default observer scope includes them. External work must opt in with the
+exact `car-observe` label (or another configured scope). A descriptive label
+becomes the compact Runs title; `title:<slug>` wins when callers need an
+explicit display name. Labels remain discovery metadata and must not contain
+prompts, results, or secrets.
+
+The projection records native agent, lifecycle, liveness, labels, duration, and
+only metadata agentctl reports. High-volume progress is compacted into the run
+row instead of flooding Inbox. A truncated active query becomes visible
+incomplete-coverage health. A truncated recent query means only that older
+terminal history is partial; it does not make the active count suspect. Missing
+agentctl degrades only this optional observer.
+
+Nonterminal rows are never removed by projection cleanup. Terminal rows are
+bounded by age and count because agentctl remains lifecycle authority; cleanup
+is audited and cannot erase unresolved work.
+
+`recent --unreconciled` is deliberately not used. In agentctl, unreconciled
+means a terminal result has not been collected; it is not evidence that a
+callback was missed, and another client can change that set by collecting the
+result.
+
+The Runs page is a read model. Agentctl remains lifecycle authority.
+It refreshes while visible, pins active work ahead of paginated terminal
+history, and treats missing or unrefreshed nonterminal rows as last-seen
+evidence rather than current liveness.
+
+## Reply-back honesty
+
+`response_channel.kind = "agentctl-run"` means CAR may try a new bounded native
+continuation. It does not prove that continuation is possible.
+
+Today the adapter can construct native resume commands only when the CAR
+session has a verified Codex or Claude Code ref. Cursor and OMP executions do
+not provide a verified resume ref through agentctl; their replies are recorded
+and staged through the replies-file fallback. The incident UI states this
+boundary explicitly instead of claiming Telegram resumed the agent.

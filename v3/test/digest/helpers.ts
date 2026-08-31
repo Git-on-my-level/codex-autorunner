@@ -70,6 +70,7 @@ export function seedSession(
       vendor: (opts.vendor ?? "claude-code") as never,
       native_id: opts.nativeId ?? `native-${Math.random().toString(36).slice(2, 8)}`,
       host: opts.host ?? "mac-studio",
+      repo_verified: Boolean(opts.repo),
       title: opts.title ?? "multica autopilot #12",
       ...(opts.repo ? { repo: opts.repo } : {}),
     },
@@ -81,7 +82,7 @@ export function seedSession(
     body: "",
     payload: {},
   };
-  const res = store.ingestEvent(event);
+  const res = store.ingestEvent(event, { verifiedRepo: opts.repo ?? null });
   return { carSessionId: res.car_session_id!, eventId: res.event_id };
 }
 

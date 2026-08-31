@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { createDigestScheduler, expireSnoozes } from "../../src/digest/index.ts";
 import { stripButtons } from "../../src/surfaces/telegram/render.ts";
+import { createTelegram } from "../../src/surfaces/telegram/index.ts";
+import { FakeSend, testSafety } from "../telegram/helpers.ts";
 import {
   digestRows,
   eventsOfType,
@@ -46,7 +48,9 @@ describe("daily digest scheduling", () => {
     const rows = digestRows(deps.store);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.day).toBe("2026-08-26");
-    expect(rows[0]!.sent_at).toBe(deps.clock.current.toISOString());
+    // The compatibility fake observes the enqueue request but cannot issue a
+    // canonical transport receipt. Delivery truth remains unset.
+    expect(rows[0]!.sent_at).toBeNull();
 
     for (let i = 0; i < 10; i++) {
       deps.clock.advance(60_000);
@@ -109,7 +113,7 @@ describe("daily digest scheduling", () => {
     expect(eventsOfType(deps.store, "attention.idle")).toHaveLength(1);
   });
 
-  test("messages held for the digest are folded in and not re-held tomorrow", async () => {
+  test("messages held for the digest remain eligible until a receipt", async () => {
     deps.store.enqueueOutbox("telegram", { kind: "notify" }, { text: "quiet-hours notice" });
     deps.store.db.query("UPDATE outbox SET state = 'deferred'").run();
 
@@ -118,11 +122,41 @@ describe("daily digest scheduling", () => {
     expect(stripButtons(deps.channel.digests[0]!)).toContain("quiet-hours notice");
     expect(
       (deps.store.db.query("SELECT state FROM outbox").get() as { state: string }).state,
-    ).toBe("sent");
+    ).toBe("deferred");
 
     deps.clock.advance(24 * 3_600_000);
     await sched.tick();
-    expect(deps.channel.digests[1]).not.toContain("quiet-hours notice");
+    expect(deps.channel.digests[1]).toContain("quiet-hours notice");
+  });
+
+  test("only a canonical digest receipt folds held rows and updates delivery truth", async () => {
+    const telegram = createTelegram(
+      deps.store,
+      deps.config,
+      deps.actions,
+      deps.memoryWriter,
+      testSafety(deps.store),
+    );
+    const realDeps = { ...deps, channel: telegram };
+    deps.store.enqueueOutbox("telegram", { kind: "notify" }, { text: "quiet-hours notice" });
+    deps.store.db.query("UPDATE outbox SET state = 'deferred'").run();
+
+    await createDigestScheduler(realDeps, async () => {}).tick();
+    const digestBefore = deps.store.getDigest("2026-08-26")!;
+    expect(digestBefore.sent_at).toBeNull();
+    expect((deps.store.db.query("SELECT state FROM outbox WHERE id = 1").get() as { state: string }).state).toBe(
+      "deferred",
+    );
+
+    const send = new FakeSend();
+    await telegram.deliverOnce(send.fn);
+
+    const digestAfter = deps.store.getDigest("2026-08-26")!;
+    expect(digestAfter.sent_at).toBe(deps.clock.current.toISOString());
+    expect((deps.store.db.query("SELECT state FROM outbox WHERE id = 1").get() as { state: string }).state).toBe(
+      "delivered",
+    );
+    expect(deps.store.kvGet<string>("scheduler.last_digest_day")).toBe("2026-08-26");
   });
 
   test("runDigestNow ignores the clock", async () => {

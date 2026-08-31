@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { FakeClock, memoryStore } from "../fakes.ts";
-import { buildDeps, mountApp, seedMemory } from "./helpers.ts";
+import { buildDeps, mountApp, seedMemory, WEB_AUTH_HEADERS } from "./helpers.ts";
 
 describe("web memory", () => {
   test("GET /ui/memory renders rules sorted by confidence with badges and pending/notes sections", async () => {
@@ -17,7 +17,7 @@ describe("web memory", () => {
     seedMemory(deps.store.db, clock, { status: "pending", authored_by: "triage", content: { text: "proposed rule" } });
     const app = mountApp(deps);
 
-    const res = await app.request("/ui/memory");
+    const res = await app.request("/ui/memory", { headers: WEB_AUTH_HEADERS });
     expect(res.status).toBe(200);
     const body = await res.text();
     expect(body).toContain("granted");
@@ -26,6 +26,8 @@ describe("web memory", () => {
     expect(body).toContain("proposed rule");
     expect(body).toContain("approve");
     expect(body).toContain("reject");
+    expect(body).toContain("Does not affect v3");
+    expect(body).toContain("influence provider proposals");
     // v1 web never offers promote-to-granted
     expect(body).not.toContain('value="promote"');
   });
@@ -51,7 +53,16 @@ describe("web memory", () => {
 
     const body = await (await mountApp(deps).request("/ui/memory")).text();
     expect(body).toContain("Permission: Bash: bun test");
-    expect(body).toContain("approve_permission");
+    expect(body).toContain("Approve Permission");
+  });
+
+  test("read-only viewers see sign-in recovery instead of mutation controls", async () => {
+    const clock = new FakeClock();
+    const deps = buildDeps({ store: memoryStore(clock) });
+    seedMemory(deps.store.db, clock, { status: "pending", content: { text: "legacy proposal" } });
+    const body = await (await mountApp(deps).request("/ui/memory")).text();
+    expect(body).toContain("Sign in to review");
+    expect(body).not.toContain(">Accept in legacy store</button>");
   });
 
   test("archive POST sets status=archived and writes an audit row", async () => {
@@ -60,7 +71,7 @@ describe("web memory", () => {
     const id = seedMemory(deps.store.db, clock, { tier: "rule", status: "active", autonomy: "suggest" });
     const app = mountApp(deps);
 
-    const res = await app.request(`/ui/memory/${id}/archive`, { method: "POST" });
+    const res = await app.request(`/ui/memory/${id}/archive`, { method: "POST", headers: WEB_AUTH_HEADERS });
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/ui/memory");
 
@@ -80,12 +91,12 @@ describe("web memory", () => {
     const id = seedMemory(deps.store.db, clock, { tier: "rule", autonomy: "granted" });
     const app = mountApp(deps);
 
-    let res = await app.request(`/ui/memory/${id}/demote`, { method: "POST" });
+    let res = await app.request(`/ui/memory/${id}/demote`, { method: "POST", headers: WEB_AUTH_HEADERS });
     expect(res.status).toBe(303);
     let row = deps.store.db.query("SELECT autonomy FROM memories WHERE id = ?").get(id) as { autonomy: string };
     expect(row.autonomy).toBe("suggest");
 
-    res = await app.request(`/ui/memory/${id}/demote`, { method: "POST" });
+    res = await app.request(`/ui/memory/${id}/demote`, { method: "POST", headers: WEB_AUTH_HEADERS });
     expect(res.status).toBe(303);
     row = deps.store.db.query("SELECT autonomy FROM memories WHERE id = ?").get(id) as { autonomy: string };
     expect(row.autonomy).toBe("none");
@@ -99,8 +110,8 @@ describe("web memory", () => {
   test("archive/demote 404 for an unknown memory id", async () => {
     const deps = buildDeps();
     const app = mountApp(deps);
-    expect((await app.request("/ui/memory/nope/archive", { method: "POST" })).status).toBe(404);
-    expect((await app.request("/ui/memory/nope/demote", { method: "POST" })).status).toBe(404);
+    expect((await app.request("/ui/memory/nope/archive", { method: "POST", headers: WEB_AUTH_HEADERS })).status).toBe(404);
+    expect((await app.request("/ui/memory/nope/demote", { method: "POST", headers: WEB_AUTH_HEADERS })).status).toBe(404);
   });
 
   test("proposal approve sets status=active, reject sets status=archived, both audited as david", async () => {
@@ -110,14 +121,14 @@ describe("web memory", () => {
     const rejectId = seedMemory(deps.store.db, clock, { status: "pending", authored_by: "triage" });
     const app = mountApp(deps);
 
-    const approveRes = await app.request(`/ui/memory/${approveId}/approve`, { method: "POST" });
+    const approveRes = await app.request(`/ui/memory/${approveId}/approve`, { method: "POST", headers: WEB_AUTH_HEADERS });
     expect(approveRes.status).toBe(303);
     const approved = deps.store.db.query("SELECT status FROM memories WHERE id = ?").get(approveId) as {
       status: string;
     };
     expect(approved.status).toBe("active");
 
-    const rejectRes = await app.request(`/ui/memory/${rejectId}/reject`, { method: "POST" });
+    const rejectRes = await app.request(`/ui/memory/${rejectId}/reject`, { method: "POST", headers: WEB_AUTH_HEADERS });
     expect(rejectRes.status).toBe(303);
     const rejected = deps.store.db.query("SELECT status FROM memories WHERE id = ?").get(rejectId) as {
       status: string;
@@ -140,7 +151,7 @@ describe("web memory", () => {
 
     const res = await app.request("/ui/memory/notes", {
       method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
+      headers: { ...WEB_AUTH_HEADERS, "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ text: "David prefers rebase over merge", repo: "github.com/x/y" }).toString(),
     });
     expect(res.status).toBe(303);
@@ -167,7 +178,7 @@ describe("web memory", () => {
 
     const res = await app.request("/ui/memory/notes", {
       method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
+      headers: { ...WEB_AUTH_HEADERS, "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ text: "   " }).toString(),
     });
     expect(res.status).toBe(303);

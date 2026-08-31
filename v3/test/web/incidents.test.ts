@@ -17,6 +17,139 @@ describe("web incidents", () => {
     expect(body).toContain("Needs a look");
     expect(body).not.toContain("Already handled");
     expect(body).toContain(`/ui/incidents/${openId}`);
+    expect(body).toContain("Monitoring");
+  });
+
+  test("response required is derived from an unanswered escalation, not open state", async () => {
+    const clock = new FakeClock();
+    const deps = buildDeps({ store: memoryStore(clock) });
+    const monitoring = seedIncident(deps.store.db, clock, { state: "open", summary: "Wait for durable evidence" });
+    const response = seedIncident(deps.store.db, clock, { state: "escalated", summary: "Needs a human answer" });
+    seedEscalation(deps.store.db, clock, response, { state: "pending", question: "Proceed?" });
+
+    const body = await (await mountApp(deps).request("/ui/incidents")).text();
+    expect(body).toContain("Monitoring");
+    expect(body).toContain("Response required");
+    const monitoringPos = body.indexOf(`/ui/incidents/${monitoring}`);
+    expect(body.slice(monitoringPos, monitoringPos + 700)).toContain("Monitoring");
+  });
+
+  test("an unanswered escalation names its durable Telegram handoff", async () => {
+    const clock = new FakeClock();
+    const deps = buildDeps({ store: memoryStore(clock) });
+    const incident = seedIncident(deps.store.db, clock, { state: "escalated", summary: "Release approval" });
+    seedEscalation(deps.store.db, clock, incident, {
+      state: "pending",
+      question: "Approve the candidate?",
+      telegram_message_id: "tg-42",
+      sent_at: clock.now().toISOString(),
+    });
+
+    const body = await (await mountApp(deps).request(`/ui/incidents/${incident}`)).text();
+    expect(body).toContain("Respond in Telegram");
+    expect(body).toContain("tg-42");
+    expect(body).toContain("Response required");
+  });
+
+  test("Cursor handoff copy does not pretend Telegram resumes the agent", async () => {
+    const clock = new FakeClock();
+    const store = memoryStore(clock);
+    const deps = buildDeps({ store });
+    const ingested = store.ingestEvent(parseEvent({
+      contract: CONTRACT_VERSION,
+      idempotency_key: "cursor-handoff",
+      ts: clock.now().toISOString(),
+      source: { vendor: "agentctl", host: "mac", adapter: "agentctl-subscribe" },
+      session: { vendor: "agentctl", native_id: "exec-cursor", host: "mac" },
+      type: "attention.question",
+      severity: "attention",
+      requires_response: true,
+      response_channel: { kind: "agentctl-run", hint: { execution_id: "exec-cursor", adapter: "cursor" } },
+      title: "Choose an approach",
+      payload: { agentctl: { adapter: "cursor" } },
+    }));
+    const incident = seedIncident(store.db, clock, { car_session_id: ingested.car_session_id, opened_by_event: ingested.event_id, state: "escalated", summary: "Cursor needs input" });
+    store.db.query("UPDATE events SET incident_id = ? WHERE id = ?").run(incident, ingested.event_id);
+    seedEscalation(store.db, clock, incident, { state: "pending", question: "Which approach?", sent_at: clock.now().toISOString() });
+
+    const body = await (await mountApp(deps).request(`/ui/incidents/${incident}`)).text();
+    expect(body).toContain("Cursor has no verified continuation route");
+    expect(body).toContain("Telegram does not resume this agent");
+  });
+
+  test("a verified Codex ref describes native continuation as an attempt", async () => {
+    const clock = new FakeClock();
+    const store = memoryStore(clock);
+    const deps = buildDeps({ store });
+    const ingested = store.ingestEvent(parseEvent({
+      contract: CONTRACT_VERSION,
+      idempotency_key: "codex-handoff",
+      ts: clock.now().toISOString(),
+      source: { vendor: "agentctl", host: "mac", adapter: "agentctl-subscribe" },
+      session: { vendor: "agentctl", native_id: "exec-codex", host: "mac" },
+      type: "attention.question",
+      severity: "attention",
+      requires_response: true,
+      response_channel: { kind: "agentctl-run" },
+      title: "Continue?",
+      payload: { agentctl: { adapter: "codex" } },
+    }));
+    store.linkSessionRef(ingested.car_session_id!, { vendor: "codex", host: "mac", native_id: "native-codex" });
+    const incident = seedIncident(store.db, clock, { car_session_id: ingested.car_session_id, opened_by_event: ingested.event_id, state: "escalated", summary: "Codex needs input" });
+    store.db.query("UPDATE events SET incident_id = ? WHERE id = ?").run(incident, ingested.event_id);
+    seedEscalation(store.db, clock, incident, { state: "pending", question: "Continue?", sent_at: clock.now().toISOString() });
+
+    const body = await (await mountApp(deps).request(`/ui/incidents/${incident}`)).text();
+    expect(body).toContain("CAR will attempt native continuation");
+    expect(body).toContain("staged for handoff");
+  });
+
+  test("a Codex session with file delivery does not overclaim native continuation", async () => {
+    const clock = new FakeClock();
+    const store = memoryStore(clock);
+    const deps = buildDeps({ store });
+    const ingested = store.ingestEvent(parseEvent({
+      contract: CONTRACT_VERSION,
+      idempotency_key: "codex-file-handoff",
+      ts: clock.now().toISOString(),
+      source: { vendor: "codex", host: "mac", adapter: "hook" },
+      session: { vendor: "codex", native_id: "native-codex-file", host: "mac" },
+      type: "attention.question",
+      severity: "attention",
+      requires_response: true,
+      response_channel: { kind: "file" },
+      title: "Continue from file?",
+    }));
+    const incident = seedIncident(store.db, clock, { car_session_id: ingested.car_session_id, opened_by_event: ingested.event_id, state: "escalated", summary: "File handoff" });
+    store.db.query("UPDATE events SET incident_id = ? WHERE id = ?").run(incident, ingested.event_id);
+    seedEscalation(store.db, clock, incident, { state: "pending", question: "Continue?", sent_at: clock.now().toISOString() });
+    const body = await (await mountApp(deps).request(`/ui/incidents/${incident}`)).text();
+    expect(body).toContain("stages it for manual handoff");
+    expect(body).not.toContain("CAR will attempt native continuation");
+  });
+
+  test("a held Claude request names the in-band route and its fallback", async () => {
+    const clock = new FakeClock();
+    const store = memoryStore(clock);
+    const deps = buildDeps({ store });
+    const ingested = store.ingestEvent(parseEvent({
+      contract: CONTRACT_VERSION,
+      idempotency_key: "claude-hook-handoff",
+      ts: clock.now().toISOString(),
+      source: { vendor: "claude-code", host: "mac", adapter: "hook" },
+      session: { vendor: "claude-code", native_id: "native-claude-hook", host: "mac" },
+      type: "attention.permission",
+      severity: "attention",
+      requires_response: true,
+      response_channel: { kind: "claude-hook-http" },
+      title: "Allow command?",
+    }));
+    const incident = seedIncident(store.db, clock, { car_session_id: ingested.car_session_id, opened_by_event: ingested.event_id, state: "escalated", summary: "Claude permission" });
+    store.db.query("UPDATE events SET incident_id = ? WHERE id = ?").run(incident, ingested.event_id);
+    seedEscalation(store.db, clock, incident, { state: "pending", question: "Allow?", sent_at: clock.now().toISOString() });
+    const body = await (await mountApp(deps).request(`/ui/incidents/${incident}`)).text();
+    expect(body).toContain("return the decision to the held Claude Code request");
+    expect(body).toContain("falls back to continuation or staging");
   });
 
   test("state filter can select resolved incidents explicitly", async () => {

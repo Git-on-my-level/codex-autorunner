@@ -17,6 +17,7 @@
  * Delivery is at-least-once, so idempotency comes from the agentctl event id.
  */
 import type { CarEvent, EventType, ResponseChannel, Severity } from "../contract/events.ts";
+import { isAgentRunFailureState } from "../contract/lifecycle.ts";
 import {
   buildEvent,
   clampString,
@@ -32,9 +33,6 @@ import {
 } from "./normalize.ts";
 
 export const AGENTCTL_ADAPTER = "agentctl-subscribe";
-
-/** Terminal `state` values that mean the execution did not succeed. */
-const BAD_TERMINAL_STATES = new Set(["failed", "cancelled", "canceled", "timed_out", "orphaned", "error"]);
 
 /**
  * agentctl may deliver a bare event, an array, or a callback envelope. The
@@ -157,6 +155,22 @@ function normalizeAgentctlEvent(
         ...(sequence !== undefined ? { sequence } : {}),
         ...(eventId ? { event_id: eventId } : {}),
         ...(str(raw, "authority") ? { authority: str(raw, "authority") } : {}),
+        ...(Array.isArray(raw["labels"]) ? { labels: raw["labels"] } : {}),
+        ...(str(raw, "backend_version", "runtime_version") ?? str(payloadBlob, "backend_version", "runtime_version")
+          ? { runtime: str(raw, "backend_version", "runtime_version") ?? str(payloadBlob, "backend_version", "runtime_version") }
+          : {}),
+        ...(str(raw, "profile") ?? str(payloadBlob, "profile")
+          ? { profile: str(raw, "profile") ?? str(payloadBlob, "profile") }
+          : {}),
+        ...(str(raw, "model") ?? str(payloadBlob, "model")
+          ? { model: str(raw, "model") ?? str(payloadBlob, "model") }
+          : {}),
+        ...(str(raw, "config_fingerprint") ?? str(payloadBlob, "config_fingerprint")
+          ? { config_fingerprint: str(raw, "config_fingerprint") ?? str(payloadBlob, "config_fingerprint") }
+          : {}),
+        ...(str(raw, "worktree") ?? str(payloadBlob, "worktree")
+          ? { worktree: str(raw, "worktree") ?? str(payloadBlob, "worktree") }
+          : {}),
         ...(str(raw, "dedupe_key") ? { dedupe_key: str(raw, "dedupe_key") } : {}),
         payload: payloadBlob,
       },
@@ -212,7 +226,7 @@ function mapKind(
       };
 
     case "terminal": {
-      const bad = BAD_TERMINAL_STATES.has(info.state);
+      const bad = isAgentRunFailureState(info.state);
       return {
         type: "session.ended",
         severity: bad ? "attention" : "info",
@@ -328,7 +342,7 @@ function agentctlTitle(raw: Record<string, unknown>, adapter: string | undefined
   if (Array.isArray(labels) && labels.length > 0 && typeof labels[0] === "string") {
     return clampString(labels.filter((l) => typeof l === "string").join(" "), 512);
   }
-  return adapter ? `agentctl/${adapter}` : undefined;
+  return undefined;
 }
 
 /**

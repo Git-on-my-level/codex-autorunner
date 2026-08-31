@@ -7,11 +7,11 @@
  * answered from a row (kv / digests / events.idempotency_key), never from
  * process memory — the daemon is crash-only.
  */
-import type { DaemonDeps, EscalationMessage, Loop } from "../ports.ts";
+import type { ChannelPort, DaemonDeps, EscalationMessage, Loop } from "../ports.ts";
 import type { Store } from "../store/db.ts";
 import { suggestedLabel } from "../surfaces/telegram/rows.ts";
-import { buildDigest, markHeldDelivered, type DigestData } from "./build.ts";
-import { isQuietDay, renderDigest, renderMissedDay } from "./render.ts";
+import { buildDigest, type DigestData } from "./build.ts";
+import { renderDigest, renderMissedDay } from "./render.ts";
 import { runWatchdog, type StuckLine } from "./watchdog.ts";
 import { localDay, localHhMm, parseHhMm, shiftHhMm } from "./time.ts";
 
@@ -23,6 +23,10 @@ const MAX_BACKFILL_DAYS = 7;
 const KV_LAST_DIGEST = "scheduler.last_digest_day";
 const KV_LAST_CONSOLIDATION = "scheduler.last_consolidation_day";
 const KV_LAST_WATCHDOG = "scheduler.last_watchdog_at";
+
+interface ChannelPortWithTrackedDigest extends ChannelPort {
+  sendDigestTracked(markdown: string, day: string, heldOutboxIds: number[]): number;
+}
 
 export interface DigestScheduler extends Loop {
   /** One scheduler pass. Exposed so tests drive it with a fake clock. */
@@ -57,32 +61,46 @@ export function createDigestScheduler(
     // never crossed its slot (daemon was down), run it here rather than skip it.
     await runConsolidation(day);
 
+    store.reconcileDigestReceipts();
     const missedDays = backfillMissedDays(store, day);
     const data = await buildDigest(store, config, { stuck, missedDays });
-    const markdown = renderDigest(data, now);
+    const existing = store.getDigest(day);
+    const markdown = existing?.rendered_md ?? renderDigest(data, now);
+    const heldIds = existing ? parseHeldIds(existing.held_outbox_ids_json) : data.held.map((h) => h.outboxId);
 
-    store.db
-      .query(
-        `INSERT INTO digests (day, rendered_md, sent_at) VALUES (?, ?, ?)
-         ON CONFLICT(day) DO UPDATE SET rendered_md = excluded.rendered_md, sent_at = excluded.sent_at`,
-      )
-      .run(day, markdown, now.toISOString());
-    store.kvSet(KV_LAST_DIGEST, day);
+    if (!existing) store.recordDigest(day, markdown, heldIds);
 
-    deps.channel.sendDigest(markdown);
-    markHeldDelivered(store, data.held.map((h) => h.outboxId));
-    store.audit("daemon", "digest.sent", "digest", day, {
-      handled: data.handled.length,
-      resolved: data.resolved.length,
-      stuck: data.stuck.length,
-      quiet: isQuietDay(data),
-    });
+    // A delivered/failed/uncertain canonical row is terminal. The former is
+    // reconciled above; the latter two stay visible for explicit operator
+    // reconciliation and are never silently duplicated by the scheduler.
+    const current = store.getDigest(day);
+    const outbox = current?.outbox_id
+      ? (store.db.query("SELECT state FROM outbox WHERE id = ?").get(current.outbox_id) as { state: string } | null)
+      : null;
+    if (current?.sent_at || outbox && ["pending", "sending", "deferred", "failed", "uncertain"].includes(outbox.state)) {
+      return data;
+    }
+
+    const tracked = deps.channel as ChannelPortWithTrackedDigest;
+    if (typeof tracked.sendDigestTracked === "function") {
+      const outboxId = tracked.sendDigestTracked(markdown, day, heldIds);
+      store.attachDigestOutbox(day, outboxId);
+      store.reconcileDigestReceipts();
+    } else {
+      // Compatibility fakes/ports may only expose the historical void method.
+      // They can observe the enqueue request, but cannot claim delivery truth.
+      deps.channel.sendDigest(markdown);
+    }
     return data;
   }
 
   async function tick(): Promise<void> {
     const now = store.clock.now();
     const day = localDay(now);
+
+    // Receipt reconciliation is also run at scheduler start so a crash after
+    // the outbox terminal write but before projection side effects is replayed.
+    store.reconcileDigestReceipts();
 
     expireSnoozes(deps);
 
@@ -104,7 +122,9 @@ export function createDigestScheduler(
       await runConsolidation(day);
     }
 
-    if (nowMinutes >= digestMinutes && store.kvGet<string>(KV_LAST_DIGEST) !== day && !digestExists(store, day)) {
+    const tracked = deps.channel as ChannelPortWithTrackedDigest;
+    const recoverableDigest = typeof tracked.sendDigestTracked === "function" && digestNeedsEnqueue(store, day);
+    if (nowMinutes >= digestMinutes && (recoverableDigest || !digestExists(store, day))) {
       // Always digest against a fresh watchdog read.
       if (!watchdogRan) {
         stuck = runWatchdog(store, config).stuck;
@@ -199,6 +219,25 @@ export function expireSnoozes(deps: DaemonDeps): number {
 
 function digestExists(store: Store, day: string): boolean {
   return Boolean(store.db.query("SELECT day FROM digests WHERE day = ?").get(day));
+}
+
+function digestNeedsEnqueue(store: Store, day: string): boolean {
+  const row = store.getDigest(day);
+  if (!row || row.sent_at) return false;
+  if (!row.outbox_id) return true;
+  const outbox = store.db.query("SELECT state FROM outbox WHERE id = ?").get(row.outbox_id) as { state: string } | null;
+  return !outbox;
+}
+
+function parseHeldIds(value: string): number[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((id): id is number => typeof id === "number" && Number.isInteger(id) && id > 0)
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 /**

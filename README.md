@@ -1,36 +1,46 @@
 # CAR (codex-autorunner)
 [![PyPI](https://img.shields.io/pypi/v/codex-autorunner.svg)](https://pypi.org/project/codex-autorunner/)
 
-**Plan once, then let your favorite coding agents grind through tickets while you sleep — and ping you on Telegram or Discord when they're stuck.**
+**One durable attention router for every agent you run.**
 
-CAR is a meta-harness for coding agents (Codex, Hermes, OpenCode, OMP, anything ACP). It is _not_ a coding agent itself. You bring the plan and the agents; CAR coordinates the long-running execution.
-
-> 🧪 Built for developers comfortable running long-horizon agent workflows on their own machine. If you babysit every agent turn, this isn't the tool for you.
-
+CAR v3 ingests lifecycle and attention events from coding agents, CI, cron, and other
+automation; groups them into one trustworthy inbox; routes human replies back to the
+right source; and records every decision and delivery. Autonomous operators, policy
+judgment, and learning are replaceable capability providers rather than CAR core.
 
 **What you actually do with CAR:**
-- ✍️ Write a plan, or chat with an AI to generate one
-- 🎫 Convert it into CAR tickets (markdown + frontmatter) — use the [CAR Ticket Skill](docs/car-ticket-skill.md) with any assistant
-- 🚶 Walk away. Agents work the queue and notify you (Telegram, Discord, inbox) only when they need input
-
-![Tickets example](docs/screenshots/ticket-list.png)
+- Connect the agents and automation you already use.
+- Choose the native provider, Hermes, or a scoped combination for operator, policy,
+  and memory capabilities.
+- Handle one attention inbox, grant or revoke autonomy, and inspect why CAR routed or
+  executed each effect.
 
 ---
 
-## 🚧 CAR v3 — the attention control plane (new direction)
+## 🚧 CAR v3 — the attention router
 
-CAR is pivoting: v3 is a cross-vendor attention & escalation control plane that ingests
+CAR is pivoting: v3 is a cross-vendor attention router that ingests
 lifecycle/attention events from *any* agent (Claude Code, Codex, Hermes, OMP, agentctl,
-Multica, CI, cron), triages them autonomously, and escalates to you in Telegram only
-when it can't unblock itself — one inbox for "what needs me," not a per-tool ticket queue.
+Multica, CI, cron), preserves human handoffs, and routes replies and authorized effects
+through one audited core — one inbox for "what needs me," not a per-tool ticket queue.
 **Status: alpha, actively under construction, lives entirely under [`v3/`](./v3/).**
 Start here: [`v3/README.md`](./v3/README.md) (quickstart) and [`v3/DESIGN.md`](./v3/DESIGN.md)
-(binding spec). The v2 runner/ticket product documented below remains fully functional
-and is now in maintenance mode — it isn't going away, but new investment is going to v3.
+(binding spec). The accepted router/provider boundary is
+[`ADR 0001`](./v3/docs/architecture/0001-attention-router-capability-providers.md).
+
+CAR v2, the runner/ticket product documented below, is **deprecated immediately**. It
+remains runnable during migration and receives only security fixes, critical correctness
+fixes, and migration support. It is not a co-equal product direction.
 
 ---
 
-## 🚀 Quickstart
+## ⚠️ Deprecated CAR v2 documentation
+
+Everything below this point describes the deprecated Python runner/ticket product. It
+is retained temporarily for existing installations while the v3 installation and
+migration path is completed.
+
+### Legacy quickstart
 
 ### Option 1 — Let your agent install it (recommended)
 
@@ -52,10 +62,11 @@ car init --mode hub
 
 Then open the web UI and add a repo. Full walkthrough: [AGENT_SETUP_GUIDE.md](docs/AGENT_SETUP_GUIDE.md).
 
-### Recommended add-ons
+### Legacy v2 add-ons
 
 - 💬 [Telegram setup](docs/AGENT_SETUP_TELEGRAM_GUIDE.md) · [Discord setup](docs/AGENT_SETUP_DISCORD_GUIDE.md) - Pick one
-- 🤖 [Hermes setup](docs/ops/hermes-acp.md) - Recommended PMA, keeps memory across all your CAR projects
+- 🤖 [Hermes setup](docs/ops/hermes-acp.md) - Legacy v2 PMA setup; its global-memory
+  recommendation is not the v3 default topology
 - 🤖 [OMP setup](docs/ops/omp-acp.md) - ACP-backed, native durable sessions under `~/.omp/agent`
 - 🐳 [Docker runtime per repo/worktree](docs/configuration/destinations.md) - For running agents in a containerized environment
 
@@ -82,7 +93,7 @@ When an agent wakes up it gets: knowledge of CAR, a pre-defined `contextspace`, 
 | **Web UI** | Main control plane. Set up repos, chat with agents, run the autorunner, view usage. Start here. ([security notes](docs/web/security.md)) |
 | **CLI** | The agent-friendly surface. Not really made for human use. |
 | **Telegram / Discord** | Persistent multi-device chat without exposing your hub to the internet. |
-| **Project Manager Agent (PMA)** | Conversational interface to CAR itself. Available in the web UI and chat apps. Hermes makes [an excellent PMA](docs/ops/hermes-acp.md) thanks to its global memory. |
+| **Project Manager Agent (PMA)** | Legacy v2 conversational interface to CAR itself. Hermes can supply the PMA through the v2 setup; v3 makes continuity an explicit user choice. |
 
 ---
 

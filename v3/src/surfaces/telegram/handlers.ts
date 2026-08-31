@@ -10,6 +10,7 @@
 import type { Store } from "../../store/db.ts";
 import type { CarConfig } from "../../config/config.ts";
 import type { ActionBus, MemoryWriter } from "../../ports.ts";
+import type { EffectType, SafetyKernel, VerifiedScope } from "../../safety/index.ts";
 import { CONTRACT_VERSION, type CarEvent } from "../../contract/events.ts";
 import { localAt, nextLocalAt, parseDuration } from "../../digest/time.ts";
 import { enqueueMessage, tickerKey } from "./outbox.ts";
@@ -29,7 +30,6 @@ import {
 } from "./render.ts";
 import {
   getEscalation,
-  getEscalationByMessage,
   getIncident,
   incidentResponseChannel,
   latestDecision,
@@ -50,6 +50,8 @@ export interface HandlerDeps {
   config: CarConfig;
   actions: ActionBus;
   memoryWriter: MemoryWriter;
+  /** Core is the sole authority for panic state and effect grants. */
+  safety: SafetyKernel;
   /** Host recorded on synthetic events this surface ingests (Telegram notes). */
   host: string;
 }
@@ -62,26 +64,130 @@ export interface CallbackAck {
 
 export interface CallbackInput {
   data: string;
-  /** Telegram user id / username of the tapper. Only David's taps grant autonomy. */
+  /** Telegram numeric user id of the tapper; only configured actors may mutate CAR. */
   from?: string;
   /** The message the button is attached to, so it can be edited in place. */
   messageId?: string;
   messageText?: string;
 }
 
+/**
+ * Telegram's chat id identifies a conversation, not the human who tapped a
+ * button. Every inbound update must carry an explicit, configured user id.
+ * These helpers are shared by the grammY seam and the row-only handlers so a
+ * test or another adapter cannot accidentally bypass the same gate.
+ */
+export function isAllowedTelegramActor(config: CarConfig, actorId: string | number | undefined | null): boolean {
+  if (actorId === undefined || actorId === null) return false;
+  const normalized = String(actorId).trim();
+  return normalized.length > 0 && config.telegram.allowed_user_ids.includes(normalized);
+}
+
+export function isAllowedTelegramUpdate(
+  config: CarConfig,
+  chatId: string | number | undefined | null,
+  actorId: string | number | undefined | null,
+): boolean {
+  if (!config.telegram.chat_id) return false;
+  if (chatId === undefined || chatId === null || String(chatId) !== config.telegram.chat_id) return false;
+  return isAllowedTelegramActor(config, actorId);
+}
+
+function telegramActor(config: CarConfig, actorId: string | number | undefined | null): string | null {
+  if (!isAllowedTelegramActor(config, actorId)) return null;
+  return String(actorId).trim();
+}
+
+function rejectTelegramActor(store: Store, actorId: string | number | undefined | null, objectType: string, objectId: string): void {
+  store.audit("telegram", "telegram.actor_rejected", objectType, objectId, {
+    actor_id: actorId === undefined || actorId === null ? null : String(actorId),
+  });
+}
+
+/** Escalation-card operations must come from the live, durably bound card. */
+const ESCALATION_CARD_OPS = new Set<CallbackOp>([
+  CB.approve,
+  CB.deny,
+  CB.reply,
+  CB.snoozeMenu,
+  CB.backToMain,
+  CB.snooze1h,
+  CB.snoozeTonight,
+  CB.snoozeDigest,
+  CB.alwaysMenu,
+  CB.alwaysAll,
+  CB.alwaysRepo,
+  CB.alwaysKeep,
+]);
+
+function requirePendingEscalationBinding(
+  deps: HandlerDeps,
+  escalationId: string,
+  input: CallbackInput,
+): CallbackAck | null {
+  const esc = getEscalation(deps.store, escalationId);
+  if (!esc) return { text: "That escalation is gone.", alert: true };
+  if (esc.state === "answered") return { text: "Already answered." };
+  if (esc.state !== "pending") return { text: "That card is stale — the escalation is already handled.", alert: true };
+  const messageId = input.messageId;
+  if (!messageId || esc.telegram_message_id !== messageId) {
+    deps.store.audit("telegram", "telegram.stale_card_rejected", "escalation", escalationId, {
+      reason: "message_binding_mismatch",
+      message_id: messageId ?? null,
+      bound_message_id: esc.telegram_message_id,
+    });
+    return { text: "That card is stale — please use the current escalation card.", alert: true };
+  }
+
+  // The scalar escalation column is paired with the durable message map. Both
+  // must agree, including the incident and session lineage, before a callback
+  // can mutate lifecycle state or create authority.
+  const binding = deps.store.kvGet<{
+    escalation_id: string | null;
+    incident_id: string | null;
+    car_session_id: string | null;
+  }>(`tg.msg.${messageId}`);
+  const incident = getIncident(deps.store, esc.incident_id);
+  const expectedSession = incident?.car_session_id ?? null;
+  if (
+    !binding ||
+    binding.escalation_id !== esc.id ||
+    binding.incident_id !== esc.incident_id ||
+    binding.car_session_id !== expectedSession
+  ) {
+    deps.store.audit("telegram", "telegram.stale_card_rejected", "escalation", escalationId, {
+      reason: "durable_message_map_mismatch",
+      message_id: messageId,
+      binding: binding ?? null,
+    });
+    return { text: "That card is stale — please use the current escalation card.", alert: true };
+  }
+  return null;
+}
+
 /* ------------------------------------------------------------- callbacks */
 
 export async function handleCallback(deps: HandlerDeps, input: CallbackInput): Promise<CallbackAck> {
   const decoded = decodeCallback(input.data);
+  const actor = telegramActor(deps.config, input.from);
+  if (!actor) {
+    rejectTelegramActor(deps.store, input.from, "callback", decoded?.id ?? input.data.slice(0, 120));
+    return { text: "not authorized", alert: true };
+  }
   if (!decoded) return { text: "unknown button" };
   const { op, id } = decoded;
-  deps.store.audit("david", "telegram.callback", "callback", id, { op });
+  deps.store.audit(actor, "telegram.callback", "callback", id, { op });
+
+  if (ESCALATION_CARD_OPS.has(op)) {
+    const rejected = requirePendingEscalationBinding(deps, id, input);
+    if (rejected) return rejected;
+  }
 
   switch (op) {
     case CB.approve:
-      return answerEscalation(deps, id, true, input);
+      return answerEscalation(deps, id, true, input, actor);
     case CB.deny:
-      return answerEscalation(deps, id, false, input);
+      return answerEscalation(deps, id, false, input, actor);
     case CB.reply:
       return promptReply(deps, id);
     case CB.snoozeMenu:
@@ -89,34 +195,34 @@ export async function handleCallback(deps: HandlerDeps, input: CallbackInput): P
     case CB.backToMain:
       return swapKeyboard(deps, id, input, escalationKeyboard(id, approveDenyAllowed(deps, id)), "back");
     case CB.snooze1h:
-      return snooze(deps, id, input, "1h");
+      return snooze(deps, id, input, "1h", actor);
     case CB.snoozeTonight:
-      return snooze(deps, id, input, "tonight");
+      return snooze(deps, id, input, "tonight", actor);
     case CB.snoozeDigest:
-      return snooze(deps, id, input, "digest");
+      return snooze(deps, id, input, "digest", actor);
     case CB.alwaysMenu:
       return swapKeyboard(deps, id, input, alwaysKeyboard(id), "grant autonomy?");
     case CB.alwaysAll:
-      return grantAlways(deps, id, false, input);
+      return grantAlways(deps, id, false, input, actor);
     case CB.alwaysRepo:
-      return grantAlways(deps, id, true, input);
+      return grantAlways(deps, id, true, input, actor);
     case CB.alwaysKeep:
       return swapKeyboard(deps, id, input, escalationKeyboard(id, approveDenyAllowed(deps, id)), "keeping ask");
     case CB.digestUp:
-      return digestFeedback(deps, id, "confirmed");
+      return digestFeedback(deps, id, "confirmed", actor);
     case CB.digestDown:
-      return digestFeedback(deps, id, "overridden");
+      return digestFeedback(deps, id, "overridden", actor);
     case CB.promoteYes:
-      return promote(deps, id, false);
+      return promote(deps, id, false, actor);
     case CB.promoteRepo:
-      return promote(deps, id, true);
+      return promote(deps, id, true, actor);
     case CB.promoteKeep:
-      deps.store.audit("david", "memory.promotion_declined", "memory", id, {});
+      deps.store.audit(actor, "memory.promotion_declined", "memory", id, {});
       return { text: "Keeping ask-first." };
     case CB.probe:
-      return probeStuck(deps, id);
+      return probeStuck(deps, id, actor);
     case CB.escalateNow:
-      return escalateStuck(deps, id);
+      return escalateStuck(deps, id, actor);
     case CB.memoryReview:
       return { text: "Pending memories: review in the web UI (/memory)." };
     default:
@@ -139,30 +245,40 @@ async function answerEscalation(
   escalationId: string,
   approval: boolean,
   input: CallbackInput,
+  actor: string,
 ): Promise<CallbackAck> {
   const { store } = deps;
   const esc = getEscalation(store, escalationId);
   if (!esc) return { text: "That escalation is gone.", alert: true };
   if (esc.state === "answered") return { text: "Already answered." };
+  if (esc.state !== "pending") return { text: "That card is stale — the escalation is already handled.", alert: true };
 
   const incident = getIncident(store, esc.incident_id);
   const now = store.clock.now().toISOString();
-  const answer = { approval, by: "david" };
+  const answer = { approval, by: actor };
 
-  store.db
+  const answered = store.db
     .query(
-      "UPDATE escalations SET state = 'answered', answer_json = ?, answered_by = 'david', answered_at = ? WHERE id = ?",
+      "UPDATE escalations SET state = 'answered', answer_json = ?, answered_by = ?, answered_at = ? WHERE id = ? AND state = 'pending' AND telegram_message_id = ?",
     )
-    .run(JSON.stringify(answer), now, escalationId);
+    .run(JSON.stringify(answer), actor, now, escalationId, input.messageId ?? "");
+  if (answered.changes === 0) {
+    store.audit("telegram", "telegram.stale_card_rejected", "escalation", escalationId, {
+      reason: "lifecycle_cas_failed",
+      message_id: input.messageId ?? null,
+    });
+    return { text: "That card is stale — the escalation changed before this tap was applied.", alert: true };
+  }
   if (incident) {
     store.db
       .query("UPDATE incidents SET state = 'resolved', closed_at = ?, snooze_until = NULL WHERE id = ?")
       .run(now, incident.id);
   }
-  store.audit("david", "escalation.answered", "escalation", escalationId, answer);
+  store.audit(actor, "escalation.answered", "escalation", escalationId, answer);
 
   // The tap IS the learning signal.
-  recordTapOutcome(deps, esc, { approval });
+  recordTapOutcome(deps, esc, { approval }, actor);
+  recordHumanTap(deps, input, "feedback", "escalation", esc.id, { approval });
 
   // Route the answer back to the agent.
   let delivery = "skipped";
@@ -172,11 +288,11 @@ async function answerEscalation(
       incidentResponseChannel(store, incident),
       { approval },
     );
-    store.audit("david", "escalation.delivered", "escalation", escalationId, { delivery });
+    store.audit(actor, "escalation.delivered", "escalation", escalationId, { delivery });
   }
 
   const verb = approval ? "✅ approved" : "❌ denied";
-  editEscalationCard(deps, esc, incident, renderResolution(cardText(deps, esc, input), verb).text, []);
+  editEscalationCard(deps, esc, incident, renderResolution(cardText(deps, esc, input), verb, actor).text, []);
 
   if (delivery === "failed") {
     // Non-negotiable #6: a reply that cannot reach its agent is loud.
@@ -190,10 +306,11 @@ function recordTapOutcome(
   deps: HandlerDeps,
   esc: EscalationRow,
   davidAction: Record<string, unknown>,
+  actor: string,
 ): void {
   const decision = latestDecision(deps.store, esc.incident_id);
   if (!decision) {
-    deps.store.audit("david", "outcome.skipped_no_decision", "escalation", esc.id, {});
+    deps.store.audit(actor, "outcome.skipped_no_decision", "escalation", esc.id, {});
     return;
   }
   const suggested = suggestedApproval(esc.suggested_action_json);
@@ -249,6 +366,7 @@ function snooze(
   escalationId: string,
   input: CallbackInput,
   mode: "1h" | "tonight" | "digest",
+  actor: string,
 ): CallbackAck {
   const { store, config } = deps;
   const esc = getEscalation(store, escalationId);
@@ -262,16 +380,23 @@ function snooze(
         : nextLocalAt(now, config.telegram.digest_time);
 
   const incident = getIncident(store, esc.incident_id);
-  store.db
-    .query("UPDATE escalations SET state = 'snoozed' WHERE id = ?")
-    .run(escalationId);
+  const snoozed = store.db
+    .query("UPDATE escalations SET state = 'snoozed' WHERE id = ? AND state = 'pending' AND telegram_message_id = ?")
+    .run(escalationId, input.messageId ?? "");
+  if (snoozed.changes === 0) {
+    store.audit("telegram", "telegram.stale_card_rejected", "escalation", escalationId, {
+      reason: "lifecycle_cas_failed",
+      message_id: input.messageId ?? null,
+    });
+    return { text: "That card is stale — the escalation changed before this tap was applied.", alert: true };
+  }
   if (incident) {
     store.db
       .query("UPDATE incidents SET state = 'snoozed', snooze_until = ? WHERE id = ?")
       .run(until.toISOString(), incident.id);
   }
   const label = mode === "1h" ? "in 1h" : mode === "tonight" ? "tonight" : "the next digest";
-  store.audit("david", "incident.snoozed", "incident", incident?.id ?? esc.incident_id, {
+  store.audit(actor, "incident.snoozed", "incident", incident?.id ?? esc.incident_id, {
     until: until.toISOString(),
     mode,
   });
@@ -287,15 +412,17 @@ function nextLocalOrToday(now: Date, hhmm: string): Date {
 /* ------------------------------------------------------- 🧠 Always… */
 
 /**
- * Create (or reuse) a rule-tier memory for this class of escalation and grant it
- * autonomy. Non-negotiable #4: ONLY this path — David's explicit tap — ever
- * calls setAutonomy(..., 'granted', 'david').
+ * A Telegram Always tap records a learning suggestion and creates a reusable
+ * core grant for the exact blocked effect. Memory autonomy is deliberately not
+ * an authorization path: providers may learn from the tap, but only the core
+ * SafetyKernel can create authority.
  */
 function grantAlways(
   deps: HandlerDeps,
   escalationId: string,
   repoOnly: boolean,
   input: CallbackInput,
+  actor: string,
 ): CallbackAck {
   const { store } = deps;
   const esc = getEscalation(store, escalationId);
@@ -304,43 +431,164 @@ function grantAlways(
   const session = incident?.car_session_id ? getSession(store, incident.car_session_id) : null;
   const eventType = incident ? openingEventType(store, incident) : null;
 
-  const scope: Record<string, unknown> = {};
-  if (session?.vendor) scope.vendor = session.vendor;
-  if (eventType) scope.event_type = eventType;
-  if (incident?.dedupe_class) scope.dedupe_class = incident.dedupe_class;
+  // An Always tap is meaningful only when the card names the canonical effect
+  // that was blocked. Never reconstruct authority from the escalation prose or
+  // the legacy suggested approval boolean.
+  const suggested = parseSuggestedAction(esc.suggested_action_json);
+  const effectIntentId = typeof suggested?.effect_intent_id === "string" ? suggested.effect_intent_id : null;
+  if (!effectIntentId) {
+    return { text: "Cannot grant: this escalation has no canonical blocked effect.", alert: true };
+  }
+  const effect = store.getEffectByIntent(effectIntentId);
+  if (!effect || effect.state !== "blocked") {
+    return { text: "Cannot grant: the canonical effect is missing or no longer blocked.", alert: true };
+  }
+  if (!session?.vendor || !eventType) {
+    return { text: "Cannot grant: the escalation has no verified vendor/event scope.", alert: true };
+  }
+  const canonicalScope = parseJsonObject(effect.scope_json ?? null);
+  if (canonicalScope.vendor !== session.vendor || canonicalScope.event_type !== eventType) {
+    return { text: "Cannot grant: the blocked effect scope does not match this escalation.", alert: true };
+  }
+  const scope: VerifiedScope = { vendor: session.vendor, event_type: eventType };
   if (repoOnly) {
-    const repo = session?.repo ?? session?.cwd ?? null;
-    if (repo) scope.repo = repo;
+    // A cwd is a mutable execution location, not a verified repository
+    // identity. Repo-only grants must fail closed when the session did not
+    // carry an authenticated repository label.
+    if (session.repo_verified !== 1 || !session.repo) {
+      return { text: "Cannot grant for this repo: no verified repository identity is available.", alert: true };
+    }
+    if (canonicalScope.repo !== session.repo || canonicalScope.repo_verified !== true) {
+      return { text: "Cannot grant for this repo: the blocked effect has no matching verified repository scope.", alert: true };
+    }
+    scope.repo = session.repo;
+    scope.repo_verified = true;
   }
 
-  const approval = suggestedApproval(esc.suggested_action_json);
+  const args = parseJsonObject(effect.args_json);
+  const actionClass = effect.action_class;
+  if (!actionClass) {
+    return { text: "Cannot grant: the blocked effect has no canonical action class.", alert: true };
+  }
+  const grantIntentId = `telegram:grant:${escalationId}:${repoOnly ? "repo" : "global"}`;
+  let grant = existingGrant(deps, grantIntentId);
+  if (!grant) {
+    try {
+      grant = deps.safety.createGrant({
+        intent_id: grantIntentId,
+        lineage: null,
+        scope,
+        effect_type: effect.type as EffectType,
+        constraints: { args, action_class: actionClass },
+        uses_remaining: null,
+        created_by: "human",
+        provenance: {
+          source: "telegram_always_button",
+          escalation_id: escalationId,
+          effect_intent_id: effectIntentId,
+          repo_only: repoOnly,
+        },
+      });
+    } catch (error) {
+      store.audit(actor, "grant.creation_failed", "escalation", escalationId, { error: String(error) });
+      return { text: "Cannot grant: the core safety kernel rejected this authority.", alert: true };
+    }
+  }
+
   const content: Record<string, unknown> = {
     match: incident?.dedupe_class ?? eventType ?? esc.question.slice(0, 120),
-    disposition: "auto_resolve",
-    action_class: approval === false ? "deny_permission" : "approve_permission",
-    args_template: approval === null ? {} : { approval },
+    disposition: "suggest",
+    action_class: actionClass,
+    args_template: args,
     origin: "telegram_always_button",
     question: esc.question.slice(0, 200),
+    effect_intent_id: effectIntentId,
+    grant_id: grant.id,
   };
-
-  const existing = findRule(store, String(content.match), scope);
-  const memoryId = existing ?? deps.memoryWriter.addFromDavid("rule", "autonomy", content, scope);
-  // Explicit tap by David — the only grant path in the system.
-  deps.memoryWriter.setAutonomy(memoryId, "granted", "david");
-  store.audit("david", "memory.autonomy_granted_from_escalation", "memory", memoryId, {
+  const memoryScope = scope as Record<string, unknown>;
+  const existing = findRule(store, String(content.match), memoryScope);
+  const memoryId = existing ?? deps.memoryWriter.addFromDavid("rule", "autonomy", content, memoryScope);
+  store.audit(actor, "memory.suggestion_from_escalation", "memory", memoryId, {
     escalation_id: escalationId,
+    effect_intent_id: effectIntentId,
+    grant_id: grant.id,
     repo_only: repoOnly,
     reused: Boolean(existing),
+  });
+  recordHumanTap(deps, input, "grant_created", "grant", grant.id, {
+    escalation_id: escalationId,
+    effect_intent_id: effectIntentId,
+    repo_only: repoOnly,
+    scope,
+  });
+  store.audit(actor, "telegram.grant_created", "grant", grant.id, {
+    escalation_id: escalationId,
+    effect_intent_id: effectIntentId,
+    repo_only: repoOnly,
   });
 
   editEscalationCard(
     deps,
     esc,
     incident,
-    `${cardText(deps, esc, input)}\n🧠 Always${repoOnly ? " (this repo)" : ""}: granted.`,
+    `${cardText(deps, esc, input)}\n🧠 Always${repoOnly ? " (this repo)" : ""}: core grant created.`,
     escalationKeyboard(escalationId, approveDenyAllowed(deps, escalationId)),
   );
   return { text: `🧠 Granted${repoOnly ? " for this repo" : ""}. Still needs your call on this one.` };
+}
+
+function parseSuggestedAction(value: string | null): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseJsonObject(value: string | null): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function existingGrant(deps: HandlerDeps, intentId: string) {
+  const row = deps.store.db.query("SELECT id FROM grants WHERE intent_id = ?").get(intentId) as { id: string } | null;
+  return row ? deps.safety.getGrant(row.id) : null;
+}
+
+function recordHumanTap(
+  deps: HandlerDeps,
+  input: CallbackInput,
+  kind: "grant_created" | "feedback" | "instruction" | "reply",
+  targetType: string,
+  targetId: string,
+  body: Record<string, unknown>,
+): void {
+  try {
+    deps.store.recordHumanFact({
+      sourceId: "telegram",
+      idempotencyKey: `callback:${input.messageId ?? "unknown"}:${input.data}`,
+      kind,
+      targetType,
+      targetId,
+      actorId: input.from!,
+      body: { ...body, from: input.from },
+    });
+  } catch (error) {
+    // The grant has already been durably recorded. Keep the tap visible in
+    // audit if a replay races the interaction reservation.
+    deps.store.audit("daemon", "human_fact.record_failed", targetType, targetId, { error: String(error) });
+  }
 }
 
 function findRule(store: Store, match: string, scope: Record<string, unknown>): string | null {
@@ -358,19 +606,37 @@ function findRule(store: Store, match: string, scope: Record<string, unknown>): 
 
 /* ------------------------------------------- digest feedback / promotion */
 
-function digestFeedback(deps: HandlerDeps, decisionId: string, verdict: "confirmed" | "overridden"): CallbackAck {
+function digestFeedback(
+  deps: HandlerDeps,
+  decisionId: string,
+  verdict: "confirmed" | "overridden",
+  actor: string,
+): CallbackAck {
   const row = deps.store.db.query("SELECT id FROM decisions WHERE id = ?").get(decisionId) as { id: string } | null;
   if (!row) return { text: "That decision is gone." };
+  const interaction = deps.store.recordHumanFact({
+    sourceId: "telegram",
+    idempotencyKey: `digest-feedback:${decisionId}:${verdict}:${actor}`,
+    kind: "feedback",
+    targetType: "decision",
+    targetId: decisionId,
+    actorId: actor,
+    body: { verdict, via: "digest" },
+  });
+  if (!interaction.inserted) {
+    return { text: verdict === "confirmed" ? "👍 already noted" : "👎 already noted" };
+  }
   deps.memoryWriter.recordOutcome({ decisionId, verdict, davidAction: { via: "digest" } });
-  deps.store.audit("david", "digest.feedback", "decision", decisionId, { verdict });
+  deps.store.audit(actor, "digest.feedback", "decision", decisionId, { verdict });
   return { text: verdict === "confirmed" ? "👍 noted" : "👎 noted — that rule is demoted." };
 }
 
 /**
  * Digest promotion offer: "Auto-approve these? [Yes] [Yes, this repo only] [Keep asking]".
- * Again, only this tap grants autonomy.
+ * A promotion is still a learning signal; it does not grant runtime authority
+ * without a canonical blocked effect for the core SafetyKernel to review.
  */
-function promote(deps: HandlerDeps, memoryId: string, repoOnly: boolean): CallbackAck {
+function promote(deps: HandlerDeps, memoryId: string, repoOnly: boolean, actor: string): CallbackAck {
   const { store } = deps;
   const row = store.db
     .query("SELECT id, tier, kind, content_json, scope_json FROM memories WHERE id = ?")
@@ -380,18 +646,19 @@ function promote(deps: HandlerDeps, memoryId: string, repoOnly: boolean): Callba
   if (!row) return { text: "That proposal is gone." };
 
   if (!repoOnly) {
-    deps.memoryWriter.setAutonomy(memoryId, "granted", "david");
-    store.audit("david", "memory.promoted", "memory", memoryId, { repo_only: false });
-    return { text: "🧠 Granted — CAR will act on this without asking." };
+    store.audit(actor, "memory.promotion_recorded", "memory", memoryId, { repo_only: false });
+    return { text: "🧠 Recorded as a suggestion. A specific effect still needs a core grant." };
   }
 
   // Narrower grant: a repo-scoped copy is granted, the broad rule stays at suggest.
   const scope = safeParse(row.scope_json);
   const repo = inferRepoForMemory(store, memoryId) ?? (scope.repo as string | undefined);
   if (!repo) {
-    deps.memoryWriter.setAutonomy(memoryId, "granted", "david");
-    store.audit("david", "memory.promoted", "memory", memoryId, { repo_only: true, repo: null });
-    return { text: "🧠 Granted (no repo scope available, granted as-is)." };
+    store.audit(actor, "memory.promotion_rejected", "memory", memoryId, {
+      repo_only: true,
+      reason: "no verified repository identity",
+    });
+    return { text: "Cannot record this repo-only suggestion: no verified repository identity is available.", alert: true };
   }
   const narrowed = deps.memoryWriter.addFromDavid(
     row.tier,
@@ -399,9 +666,8 @@ function promote(deps: HandlerDeps, memoryId: string, repoOnly: boolean): Callba
     { ...safeParse(row.content_json), narrowed_from: memoryId },
     { ...scope, repo },
   );
-  deps.memoryWriter.setAutonomy(narrowed, "granted", "david");
-  store.audit("david", "memory.promoted_repo_scoped", "memory", narrowed, { from: memoryId, repo });
-  return { text: `🧠 Granted for ${repo} only.` };
+  store.audit(actor, "memory.promotion_recorded_repo_scoped", "memory", narrowed, { from: memoryId, repo });
+  return { text: `🧠 Recorded as a suggestion for ${repo} only. A specific effect still needs a core grant.` };
 }
 
 function inferRepoForMemory(store: Store, memoryId: string): string | null {
@@ -426,7 +692,7 @@ function safeParse(json: string): Record<string, unknown> {
  * enforces that independently. The probe runs detached and reports its result
  * back into the thread as a normal outbox row — the tap itself just writes.
  */
-function probeStuck(deps: HandlerDeps, carSessionId: string): CallbackAck {
+function probeStuck(deps: HandlerDeps, carSessionId: string, actor: string): CallbackAck {
   const { store, config } = deps;
   const session = getSession(store, carSessionId);
   if (!session) return { text: "Session not found." };
@@ -434,7 +700,7 @@ function probeStuck(deps: HandlerDeps, carSessionId: string): CallbackAck {
   const probe = session.cwd
     ? { templateId: "git.status", args: { repo: session.cwd } as Record<string, unknown> }
     : { templateId: "agentctl.recent", args: { limit: 10 } as Record<string, unknown> };
-  store.audit("david", "digest.probe_requested", "session", carSessionId, probe);
+  store.audit(actor, "digest.probe_requested", "session", carSessionId, probe);
 
   void deps.actions
     .runTemplate(probe.templateId, probe.args, { decisionId: `telegram:${carSessionId}`, mutating: false })
@@ -451,7 +717,7 @@ function probeStuck(deps: HandlerDeps, carSessionId: string): CallbackAck {
   return { text: "🔍 probing…" };
 }
 
-function escalateStuck(deps: HandlerDeps, carSessionId: string): CallbackAck {
+function escalateStuck(deps: HandlerDeps, carSessionId: string, actor: string): CallbackAck {
   const { store, config } = deps;
   const session = getSession(store, carSessionId);
   if (!session) return { text: "Session not found." };
@@ -469,7 +735,7 @@ function escalateStuck(deps: HandlerDeps, carSessionId: string): CallbackAck {
   enqueueMessage(store, target, {
     text: `🔺 Escalated by you: ${sessionLabel(session) ?? carSessionId} — open incidents reopened.`,
   });
-  store.audit("david", "digest.escalate_requested", "session", carSessionId, {});
+  store.audit(actor, "digest.escalate_requested", "session", carSessionId, {});
   return { text: "Escalated." };
 }
 
@@ -553,6 +819,11 @@ export async function routeIncomingMessage(
   msg: IncomingMessage,
 ): Promise<RouteOutcome> {
   const { store } = deps;
+  const actor = telegramActor(deps.config, msg.from);
+  if (!actor) {
+    rejectTelegramActor(store, msg.from, "message", msg.messageId);
+    return { kind: "ignored", reason: "unauthorized" };
+  }
   const text = msg.text.trim();
   if (!text) return { kind: "ignored", reason: "empty" };
 
@@ -566,22 +837,37 @@ export async function routeIncomingMessage(
   const esc = route.escalationId ? getEscalation(store, route.escalationId) : null;
   if (esc && esc.state === "pending") {
     const now = store.clock.now().toISOString();
-    store.db
+    const answered = store.db
       .query(
-        "UPDATE escalations SET state = 'answered', answer_json = ?, answered_by = 'david', answered_at = ? WHERE id = ?",
+        "UPDATE escalations SET state = 'answered', answer_json = ?, answered_by = ?, answered_at = ? WHERE id = ? AND state = 'pending' AND telegram_message_id = ?",
       )
-      .run(JSON.stringify({ text }), now, esc.id);
+      .run(JSON.stringify({ text }), actor, now, esc.id, msg.replyToMessageId ?? "");
+    if (answered.changes === 0) {
+      store.audit("telegram", "telegram.stale_card_rejected", "escalation", esc.id, {
+        reason: "lifecycle_cas_failed",
+        message_id: msg.replyToMessageId ?? null,
+      });
+      return { kind: "ignored", reason: "stale_escalation" };
+    }
     if (incident) {
       store.db.query("UPDATE incidents SET state = 'resolved', closed_at = ? WHERE id = ?").run(now, incident.id);
     }
     // Free text instead of a tap: recorded as a correction, never as a confirm.
-    recordTapOutcome(deps, esc, { text });
-    store.audit("david", "escalation.answered_text", "escalation", esc.id, { chars: text.length });
+    recordTapOutcome(deps, esc, { text }, actor);
+    store.audit(actor, "escalation.answered_text", "escalation", esc.id, { chars: text.length });
   }
 
   const channel = incident ? incidentResponseChannel(store, incident) : null;
+  recordHumanTap(
+    deps,
+    { data: `message:${msg.messageId}`, messageId: msg.messageId, ...(msg.from ? { from: msg.from } : {}) },
+    "reply",
+    "session",
+    carSessionId,
+    { text, escalation_id: esc?.id ?? null },
+  );
   const result = await deps.actions.deliver(carSessionId, channel, { text });
-  store.audit("david", "reply.delivered", "session", carSessionId, {
+  store.audit(actor, "reply.delivered", "session", carSessionId, {
     result,
     escalation_id: esc?.id ?? null,
   });
@@ -617,8 +903,6 @@ function resolveRoute(
       if (mapped.car_session_id) out.carSessionId = mapped.car_session_id;
       if (Object.keys(out).length) return out;
     }
-    const esc = getEscalationByMessage(store, msg.replyToMessageId);
-    if (esc) return { escalationId: esc.id, incidentId: esc.incident_id };
     const inc = store.db
       .query("SELECT id, car_session_id FROM incidents WHERE telegram_message_id = ? ORDER BY opened_at DESC LIMIT 1")
       .get(msg.replyToMessageId) as { id: string; car_session_id: string | null } | null;
@@ -652,7 +936,7 @@ function ingestNote(deps: HandlerDeps, msg: IncomingMessage): string {
     response_channel: null,
     title: msg.text.slice(0, 120),
     body: msg.text.slice(0, 4000),
-    payload: { from: msg.from ?? "david", telegram_message_id: msg.messageId },
+    payload: { from: msg.from!, telegram_message_id: msg.messageId },
   };
   const res = deps.store.ingestEvent(event);
   return res.event_id;
@@ -669,7 +953,12 @@ export interface CommandInput {
 export async function handleCommand(deps: HandlerDeps, input: CommandInput): Promise<string> {
   const { store, config } = deps;
   const cmd = input.command.replace(/^\//, "").split("@")[0]!.toLowerCase();
-  store.audit("david", "telegram.command", "command", cmd, { args: input.args.slice(0, 200) });
+  const actor = telegramActor(config, input.from);
+  if (!actor) {
+    rejectTelegramActor(store, input.from, "command", cmd);
+    return "not authorized";
+  }
+  store.audit(actor, "telegram.command", "command", cmd, { args: input.args.slice(0, 200) });
 
   switch (cmd) {
     case "status":
@@ -683,23 +972,25 @@ export async function handleCommand(deps: HandlerDeps, input: CommandInput): Pro
       return `🧠 Remembered (${id}).`;
     }
     case "mute":
-      return muteSession(deps, input.args);
+      return muteSession(deps, input.args, actor);
     case "panic":
-      return await panic(deps, input.args);
+      return await panic(deps, input.args, actor);
     case "ticker": {
       const arg = input.args.trim().toLowerCase();
       if (arg !== "on" && arg !== "off") return "Usage: /ticker on|off";
       store.kvSet(KV_TICKER, arg === "on");
-      store.audit("david", "telegram.ticker", "kv", KV_TICKER, { enabled: arg === "on" });
+      store.audit(actor, "telegram.ticker", "kv", KV_TICKER, { enabled: arg === "on" });
       return `Ticker ${arg}.`;
     }
     case "policy": {
-      const escalateOnly = escalateOnlyMode(store);
+      const snapshot = deps.safety.snapshot();
       return [
-        "⚖️ Policy",
-        `mode: ${escalateOnly ? "ESCALATE-ONLY" : "normal"}`,
-        `file: ${config.state_dir}/policy.toml`,
-        "Edit via the web UI; the daemon hot-reloads.",
+        "⚖️ Core safety",
+        `mode: ${snapshot.panic || snapshot.breaker_open ? "ESCALATE-ONLY" : "normal"}`,
+        `panic: ${snapshot.panic ? snapshot.panic_reason ?? "active" : "off"}`,
+        `breaker: ${snapshot.breaker_open ? "open" : "closed"}`,
+        `attempts: ${snapshot.attempts} · failures: ${snapshot.failures} · effect spend: $${snapshot.spent_usd.toFixed(2)}`,
+        "Provider policy is advisory; human grants and these rails are core-owned.",
       ].join("\n");
     }
     case "help":
@@ -738,21 +1029,22 @@ function statusText(deps: HandlerDeps): string {
      FROM sessions`,
     store.clock.now().toISOString(),
   );
-  const outbox = one<{ pending: number; dead: number; deferred: number }>(
+  const outbox = one<{ pending: number; failed: number; uncertain: number; deferred: number }>(
     `SELECT SUM(state = 'pending') AS pending,
-            SUM(state = 'dead') AS dead,
+            SUM(state IN ('failed','dead')) AS failed,
+            SUM(state = 'uncertain') AS uncertain,
             SUM(state = 'deferred') AS deferred
      FROM outbox`,
   );
   const spend = store.spendToday();
-  const escalateOnly = escalateOnlyMode(store);
+  const escalateOnly = deps.safety.snapshot().panic;
 
   return [
     "📊 CAR status",
     `🙋 escalations pending: ${escalations.pending ?? 0}`,
     `📁 incidents: ${incidents.open ?? 0} open · ${incidents.escalated ?? 0} escalated · ${incidents.snoozed ?? 0} snoozed`,
     `🧑‍💻 sessions: ${sessions.active ?? 0} active · ${sessions.muted ?? 0} muted`,
-    `📮 outbox: ${outbox.pending ?? 0} pending · ${outbox.deferred ?? 0} held · ${outbox.dead ?? 0} dead`,
+    `📮 outbox: ${outbox.pending ?? 0} pending · ${outbox.deferred ?? 0} held · ${outbox.uncertain ?? 0} uncertain · ${outbox.failed ?? 0} failed`,
     `💸 triage spend today: $${(spend.cost_usd ?? 0).toFixed(2)} (${spend.calls ?? 0} calls)`,
     `⚙️ mode: ${escalateOnly ? "ESCALATE-ONLY" : "normal"}`,
   ].join("\n");
@@ -772,7 +1064,7 @@ function sendLatestDigest(deps: HandlerDeps): string {
   return `Resending the digest for ${row.day}.`;
 }
 
-function muteSession(deps: HandlerDeps, args: string): string {
+function muteSession(deps: HandlerDeps, args: string, actor: string): string {
   const { store } = deps;
   const [ref, dur] = args.trim().split(/\s+/);
   if (!ref || !dur) return "Usage: /mute <session> <2h|30m|1d>";
@@ -782,7 +1074,7 @@ function muteSession(deps: HandlerDeps, args: string): string {
   if (!carSessionId) return `No session matching "${ref}".`;
   const until = new Date(store.clock.now().getTime() + ms).toISOString();
   store.db.query("UPDATE sessions SET muted_until = ? WHERE car_session_id = ?").run(until, carSessionId);
-  store.audit("david", "session.muted", "session", carSessionId, { until });
+  store.audit(actor, "session.muted", "session", carSessionId, { until });
   return `🔇 Muted ${carSessionId} until ${until}.`;
 }
 
@@ -808,56 +1100,30 @@ export function resolveSessionRef(store: Store, ref: string): string | null {
   return like?.car_session_id ?? null;
 }
 
-/**
- * The breaker itself belongs to the policy module. We call its free functions
- * when they exist and fall back to the raw kv flag otherwise, so /panic works
- * whether or not WS-B's engine has landed.
- *
- * NOTE the kv value must stay a plain boolean: policy checks
- * `kvGet<boolean>('escalate_only') === true`.
- */
-async function policyBreaker(): Promise<{
-  trip?: (store: Store, reason: string) => void;
-  clear?: (store: Store) => void;
-}> {
-  try {
-    const mod = (await import("../../policy/index.ts")) as Record<string, unknown>;
-    return {
-      ...(typeof mod.tripBreaker === "function"
-        ? { trip: mod.tripBreaker as (s: Store, r: string) => void }
-        : {}),
-      ...(typeof mod.clearBreaker === "function" ? { clear: mod.clearBreaker as (s: Store) => void } : {}),
-    };
-  } catch {
-    return {};
-  }
-}
-
-/** /panic — flip to escalate-only and cancel in-flight actions. /panic off clears it. */
-async function panic(deps: HandlerDeps, args: string): Promise<string> {
+/** /panic — durable core panic and cancellation of compatibility actions. */
+async function panic(deps: HandlerDeps, args: string, actor: string): Promise<string> {
   const { store } = deps;
-  const breaker = await policyBreaker();
   const off = args.trim().toLowerCase() === "off";
 
   if (off) {
-    if (breaker.clear) breaker.clear(store);
-    else store.kvSet(KV_ESCALATE_ONLY, false);
-    store.audit("david", "panic.cleared", "kv", KV_ESCALATE_ONLY, { via_policy: Boolean(breaker.clear) });
-    return "✅ Escalate-only cleared. CAR may act autonomously again.";
+    deps.safety.clearPanic();
+    const snapshot = deps.safety.snapshot();
+    store.audit(actor, "panic.cleared", "safety", "global", { snapshot });
+    return `✅ Escalate-only cleared. CAR may act autonomously again. (panic=${snapshot.panic})`;
   }
 
-  if (breaker.trip) breaker.trip(store, "telegram /panic");
-  else store.kvSet(KV_ESCALATE_ONLY, true);
+  deps.safety.panic("telegram /panic");
   store.db
     .query("UPDATE actions SET state = 'failed', result_json = ? WHERE state IN ('pending','running')")
     .run(JSON.stringify({ cancelled_by: "panic" }));
-  store.audit("david", "panic.engaged", "kv", KV_ESCALATE_ONLY, { via_policy: Boolean(breaker.trip) });
-  return "🛑 ESCALATE-ONLY. In-flight actions cancelled; CAR will ask before anything. /panic off to clear.";
+  const snapshot = deps.safety.snapshot();
+  store.audit(actor, "panic.engaged", "safety", "global", { snapshot });
+  return `🛑 ESCALATE-ONLY. In-flight actions cancelled; CAR will ask before anything. (panic=${snapshot.panic}) /panic off to clear.`;
 }
 
-/** Strict read: policy stores a plain boolean, so anything else means "off". */
+/** Compatibility read for surfaces that still ask for the old mode label. */
 export function escalateOnlyMode(store: Store): boolean {
-  return store.kvGet<boolean>(KV_ESCALATE_ONLY) === true;
+  return store.getPanicState().active;
 }
 
 /* ------------------------------------------------------------ ticker line */

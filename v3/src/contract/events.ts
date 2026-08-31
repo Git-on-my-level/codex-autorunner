@@ -70,6 +70,8 @@ export const SessionRef = z.object({
   host: z.string().min(1).max(128),
   cwd: z.string().max(1024).optional(),
   repo: z.string().max(512).optional(),
+  /** True only when the adapter resolved a canonical VCS identity, not a cwd label. */
+  repo_verified: z.boolean().default(false),
   title: z.string().max(512).optional(),
 });
 export type SessionRef = z.infer<typeof SessionRef>;

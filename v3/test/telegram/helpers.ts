@@ -8,6 +8,15 @@ import type { MemoryWriter } from "../../src/ports.ts";
 import type { MessageSpec, TelegramSendFn, TelegramTarget } from "../../src/surfaces/telegram/types.ts";
 import { escalationId, incidentId, decisionId } from "../../src/contract/ids.ts";
 import { CONTRACT_VERSION, type CarEvent } from "../../src/contract/events.ts";
+import { createSafetyKernel, SqlSafetyLedger, type SafetyKernel } from "../../src/safety/index.ts";
+
+export function testSafety(store: Store): SafetyKernel {
+  return createSafetyKernel({
+    clock: store.clock,
+    ledger: new SqlSafetyLedger(store),
+    audit: (verb, objectId, detail) => store.audit("safety", verb, "safety", objectId, detail),
+  });
+}
 
 export class FakeMemoryWriter implements MemoryWriter {
   added: { tier: string; kind: string; content: Record<string, unknown>; scope: Record<string, unknown>; id: string }[] = [];
@@ -110,6 +119,7 @@ export function seedEscalation(store: Store, opts: SeedOptions = {}): SeededEsca
       vendor: vendor as never,
       native_id: `native-${Math.random().toString(36).slice(2, 8)}`,
       host,
+      repo_verified: Boolean(opts.repo),
       ...(opts.repo ? { repo: opts.repo } : {}),
       title: opts.title ?? "fix BLE reconnect",
     },
@@ -121,7 +131,7 @@ export function seedEscalation(store: Store, opts: SeedOptions = {}): SeededEsca
     body: "remote diverged",
     payload: {},
   };
-  const ingested = store.ingestEvent(event);
+  const ingested = store.ingestEvent(event, { verifiedRepo: opts.repo ?? null });
   const carSessionId = ingested.car_session_id!;
 
   const inc = incidentId();
@@ -143,6 +153,26 @@ export function seedEscalation(store: Store, opts: SeedOptions = {}): SeededEsca
 
   const esc = escalationId();
   const suggested = opts.suggested === undefined ? { approval: false, label: "DENY — tell agent to rebase instead" } : opts.suggested;
+  const suggestedApproval = suggested && typeof suggested.approval === "boolean" ? suggested.approval : null;
+  const effectIntentId = `seed:effect:${esc}`;
+  store.createEffect({
+    intentId: effectIntentId,
+    type: suggestedApproval === true ? "approve" : "deny",
+    args: { approval: suggestedApproval },
+    lineageId: `seed:lineage:${esc}`,
+    scope: {
+      vendor,
+      event_type: opts.eventType ?? "attention.permission",
+      ...(opts.repo ? { repo: opts.repo, repo_verified: true } : {}),
+    },
+    lineage: { source_id: "seed", request_id: esc },
+    actionClass: suggestedApproval === true ? "approve_permission" : "deny_permission",
+    state: "blocked",
+    safetyVerdict: "grant_required",
+  });
+  const suggestedWithEffect = suggested
+    ? { ...suggested, effect_intent_id: effectIntentId }
+    : suggested;
   store.db
     .query(
       `INSERT INTO escalations (id, incident_id, severity, question, suggested_action_json, state, created_at)
@@ -153,7 +183,7 @@ export function seedEscalation(store: Store, opts: SeedOptions = {}): SeededEsca
       inc,
       opts.severity ?? "attention",
       opts.question ?? "force-push to fix/telemetry-cliff? Remote diverged.",
-      suggested ? JSON.stringify(suggested) : null,
+      suggestedWithEffect ? JSON.stringify(suggestedWithEffect) : null,
       now,
     );
 

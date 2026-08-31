@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { FakeActionBus, FakeClock, memoryStore, testConfig } from "../fakes.ts";
 import type { Store } from "../../src/store/db.ts";
 import { createTelegram, type TelegramChannel } from "../../src/surfaces/telegram/index.ts";
-import { FakeMemoryWriter, FakeSend, auditVerbs, outboxRows, seedEscalation } from "./helpers.ts";
+import { FakeMemoryWriter, FakeSend, auditVerbs, outboxRows, seedEscalation, testSafety } from "./helpers.ts";
 
 let clock: FakeClock;
 let store: Store;
@@ -14,6 +14,7 @@ function build(configOverrides: Record<string, unknown> = {}): TelegramChannel {
     testConfig({ telegram: { chat_id: "-100", ...configOverrides } }),
     new FakeActionBus(),
     new FakeMemoryWriter(),
+    testSafety(store),
   );
 }
 

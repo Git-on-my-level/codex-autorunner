@@ -117,7 +117,11 @@ export function tempState(overrides: Record<string, unknown> = {}): TempState {
   const dir = mkdtempSync(join(tmpdir(), "car-ws-e-"));
   return {
     dir,
-    config: CarConfig.parse({ state_dir: dir, ...overrides }),
+    config: CarConfig.parse({
+      state_dir: dir,
+      http: { ingest_tokens: { agentctl: "test-agentctl-callback" } },
+      ...overrides,
+    }),
     cleanup: () => rmSync(dir, { recursive: true, force: true }),
   };
 }

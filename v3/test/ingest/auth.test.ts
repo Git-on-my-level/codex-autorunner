@@ -1,9 +1,9 @@
 /**
- * Ingest auth: localhost trusted, per-source bearer token otherwise, fail closed.
+ * Ingest auth: explicit per-source credentials everywhere, including localhost.
  */
 import { describe, expect, test } from "bun:test";
 import { harness, LOCALHOST, REMOTE } from "./harness.ts";
-import { bearerToken, isLoopback, timingSafeEqual } from "../../src/ingest/auth.ts";
+import { agentctlCallbackCapability, bearerToken, isLoopback, timingSafeEqual } from "../../src/ingest/auth.ts";
 
 const EVENT = {
   contract: "car.event.v1",
@@ -18,24 +18,28 @@ const TOKENS = {
 };
 
 describe("ingest auth", () => {
-  test("localhost is trusted without a token", async () => {
-    const h = harness();
-    const res = await h.post("/v1/events", EVENT, { from: LOCALHOST });
-    expect(res.status).toBe(200);
+  test("localhost without a token is rejected", async () => {
+    const h = harness(TOKENS);
+    const res = await h.post("/v1/events", EVENT, { from: LOCALHOST, auth: false });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "unauthorized", detail: "missing_bearer_token" });
   });
 
-  test("IPv6 loopback is trusted too", async () => {
-    const h = harness();
-    expect((await h.post("/v1/events", EVENT, { from: "::1" })).status).toBe(200);
+  test("loopback callers are accepted only with credentials", async () => {
+    const h = harness(TOKENS);
+    expect((await h.post("/v1/events", EVENT, { from: "::1", auth: false })).status).toBe(401);
     expect(
-      (await h.post("/v1/events", { ...EVENT, idempotency_key: "auth-test:2" }, { from: "::ffff:127.0.0.1" }))
+      (await h.post("/v1/events", { ...EVENT, idempotency_key: "auth-test:2" }, {
+        from: "::ffff:127.0.0.1",
+        headers: { authorization: "Bearer tok-generic" },
+      }))
         .status,
     ).toBe(200);
   });
 
   test("a remote peer without a token is rejected", async () => {
     const h = harness(TOKENS);
-    const res = await h.post("/v1/events", EVENT, { from: REMOTE });
+    const res = await h.post("/v1/events", EVENT, { from: REMOTE, auth: false });
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: "unauthorized", detail: "missing_bearer_token" });
     expect(res.headers.get("www-authenticate")).toContain("car-ingest");
@@ -50,6 +54,27 @@ describe("ingest auth", () => {
     });
     expect(res.status).toBe(200);
     expect(h.events()).toHaveLength(1);
+  });
+
+  test("generic wire input cannot self-attest a verified repository", async () => {
+    const h = harness(TOKENS);
+    const res = await h.post("/v1/events", {
+      ...EVENT,
+      idempotency_key: "auth-test:forged-repo",
+      session: {
+        vendor: "other",
+        native_id: "forged-session",
+        host: "mac-studio",
+        cwd: "/tmp/claimed-repo",
+        repo: "github.com/acme/privileged",
+        repo_verified: true,
+      },
+    }, { headers: { authorization: "Bearer tok-generic" } });
+    expect(res.status).toBe(200);
+    expect(h.store.db.query("SELECT repo, repo_verified FROM sessions").get()).toEqual({
+      repo: "github.com/acme/privileged",
+      repo_verified: 0,
+    });
   });
 
   test("a token belonging to a different source does not open this route", async () => {
@@ -76,6 +101,19 @@ describe("ingest auth", () => {
     }
   });
 
+  test("agentctl continuation callbacks use an execution-scoped URL capability", async () => {
+    const h = harness(TOKENS);
+    const cap = agentctlCallbackCapability("tok-agentctl", "exec-77");
+    const event = { id: "event-77", execution_id: "exec-77", kind: "started", ordering: "observation", occurred_at: EVENT.ts };
+    expect((await h.post(`/v1/ingest/agentctl/callback/exec-77/${cap}`, event, { auth: false })).status).toBe(200);
+    expect((await h.post("/v1/ingest/agentctl/callback/exec-77/bad", event, { auth: false })).status).toBe(401);
+    expect((await h.post(
+      `/v1/ingest/agentctl/callback/exec-77/${cap}`,
+      { ...event, id: "event-88", execution_id: "exec-88" },
+      { auth: false },
+    )).status).toBe(400);
+  });
+
   test("a source with no configured token stays shut to remote peers", async () => {
     const h = harness({ http: { ingest_tokens: { generic: "tok-generic" } } });
     const res = await h.post(
@@ -89,15 +127,16 @@ describe("ingest auth", () => {
 
   test("an unidentifiable peer fails closed, it is not assumed to be localhost", async () => {
     const h = harness(TOKENS);
-    const res = await h.post("/v1/events", EVENT, { from: null });
+    const res = await h.post("/v1/events", EVENT, { from: null, auth: false });
     expect(res.status).toBe(401);
-    expect(await res.json()).toMatchObject({ detail: "unidentified_peer" });
+    expect(await res.json()).toMatchObject({ detail: "unidentified_peer_and_missing_token" });
   });
 
   test("proxy headers cannot forge localhost", async () => {
     const h = harness(TOKENS);
     const res = await h.post("/v1/events", EVENT, {
       from: REMOTE,
+      auth: false,
       headers: { "x-forwarded-for": "127.0.0.1", "x-real-ip": "127.0.0.1" },
     });
     expect(res.status).toBe(401);
@@ -105,7 +144,7 @@ describe("ingest auth", () => {
 
   test("denials are audited", async () => {
     const h = harness(TOKENS);
-    await h.post("/v1/events", EVENT, { from: REMOTE });
+    await h.post("/v1/events", EVENT, { from: REMOTE, auth: false });
     const denials = h.audits("ingest.denied");
     expect(denials).toHaveLength(1);
     expect(denials[0]!.object_id).toBe("generic");

@@ -7,8 +7,9 @@ import {
   deliverOutboxOnce,
   enqueueMessage,
   lookupMessage,
+  reconcileTelegramDeliveryProjections,
 } from "../../src/surfaces/telegram/outbox.ts";
-import { FakeMemoryWriter, FakeSend, auditVerbs, outboxRows, seedEscalation } from "./helpers.ts";
+import { FakeMemoryWriter, FakeSend, auditVerbs, outboxRows, seedEscalation, testSafety } from "./helpers.ts";
 
 let clock: FakeClock;
 let store: Store;
@@ -39,7 +40,7 @@ describe("deliverOutboxOnce", () => {
     expect(send.last!.spec.text).toBe("hello");
 
     const [row] = outboxRows(store);
-    expect(row!.state).toBe("sent");
+    expect(row!.state).toBe("delivered");
     expect(row!.attempts).toBe(1);
     expect(row!.sent_message_id).toBe("1001");
     expect(auditVerbs(store)).toContain("outbox.sent");
@@ -48,6 +49,22 @@ describe("deliverOutboxOnce", () => {
   test("does not re-send an already sent row", async () => {
     enqueueMessage(store, { kind: "notify" }, { text: "once" });
     await deliverOutboxOnce(store, send.fn);
+    await deliverOutboxOnce(store, send.fn);
+    expect(send.calls).toHaveLength(1);
+  });
+
+  test("an expired remote-send claim becomes uncertain and is never auto-retried", async () => {
+    enqueueMessage(store, { kind: "notify" }, { text: "possibly delivered" });
+    const [claimed] = store.claimPendingOutbox(1, "crashed-worker", 120);
+    expect(claimed?.state).toBe("sending");
+
+    // The transport accepted the message, then the process died before its
+    // receipt transaction. Startup can prove neither success nor failure.
+    await send.fn({ kind: "notify" }, { text: "possibly delivered" });
+    clock.advance(121_000);
+    expect(store.recoverExpiredClaims().outbox).toBe(1);
+    expect(outboxRows(store)[0]!.state).toBe("uncertain");
+
     await deliverOutboxOnce(store, send.fn);
     expect(send.calls).toHaveLength(1);
   });
@@ -79,7 +96,7 @@ describe("deliverOutboxOnce", () => {
     const stats = await deliverOutboxOnce(store, send.fn);
     expect(stats).toEqual({ sent: 0, retried: 0, dead: 1, deferred: 0 });
     const [row] = outboxRows(store);
-    expect(row!.state).toBe("dead");
+    expect(row!.state).toBe("failed");
     expect(row!.attempts).toBe(6);
     expect(auditVerbs(store)).toContain("outbox.dead");
   });
@@ -93,7 +110,7 @@ describe("deliverOutboxOnce", () => {
     await deliverOutboxOnce(store, send.fn);
 
     const [row] = outboxRows(store);
-    expect(row!.state).toBe("sent");
+    expect(row!.state).toBe("delivered");
     expect(row!.attempts).toBe(2);
     expect(row!.sent_message_id).toBe("1001");
   });
@@ -165,9 +182,45 @@ describe("delivery side effects", () => {
     });
   });
 
+  test("replays callback projections after a post-receipt crash without re-sending", async () => {
+    const seeded = seedEscalation(store);
+    enqueueMessage(
+      store,
+      {
+        kind: "escalation",
+        escalation_id: seeded.escalationId,
+        incident_id: seeded.incidentId,
+        car_session_id: seeded.carSessionId,
+      },
+      { text: "needs you" },
+    );
+
+    const first = await deliverOutboxOnce(store, send.fn, {
+      afterReceipt: () => {
+        throw new Error("simulated process crash after receipt");
+      },
+    });
+    expect(first.sent).toBe(1);
+    expect(send.calls).toHaveLength(1);
+    expect(outboxRows(store)[0]!.state).toBe("delivered");
+    expect(lookupMessage(store, "1001")).toBeNull();
+
+    // Startup/delivery reconciliation consumes only the delivered row. It
+    // restores the callback target and never invokes the transport again.
+    const second = await deliverOutboxOnce(store, send.fn);
+    expect(second.sent).toBe(0);
+    expect(send.calls).toHaveLength(1);
+    expect(lookupMessage(store, "1001")).toEqual({
+      escalation_id: seeded.escalationId,
+      incident_id: seeded.incidentId,
+      car_session_id: seeded.carSessionId,
+    });
+    expect(reconcileTelegramDeliveryProjections(store)).toBe(0);
+  });
+
   test("forum mode creates a topic once and stores telegram_thread_id", async () => {
     const config = testConfig({ telegram: { enabled: true, forum_mode: true, chat_id: "-100" } });
-    const channel = createTelegram(store, config, new FakeActionBus(), new FakeMemoryWriter());
+    const channel = createTelegram(store, config, new FakeActionBus(), new FakeMemoryWriter(), testSafety(store));
     const seeded = seedEscalation(store);
 
     channel.sendEscalation({
@@ -195,7 +248,7 @@ describe("delivery side effects", () => {
 
   test("flat mode makes the first message the anchor and threads the rest under it", async () => {
     const config = testConfig({ telegram: { enabled: true, forum_mode: false, chat_id: "-100" } });
-    const channel = createTelegram(store, config, new FakeActionBus(), new FakeMemoryWriter());
+    const channel = createTelegram(store, config, new FakeActionBus(), new FakeMemoryWriter(), testSafety(store));
     const seeded = seedEscalation(store);
 
     channel.sendNotify("first", seeded.carSessionId);

@@ -19,6 +19,7 @@ import { z } from "zod";
 import type { Store } from "../store/db.ts";
 import { policyPath, type CarConfig } from "../config/config.ts";
 import type { PolicyPort, PolicyVerdict } from "../ports.ts";
+import { dangerousContent as coreDangerousContent } from "../safety/index.ts";
 
 /* ----------------------------------------------------------------- constants */
 
@@ -74,6 +75,12 @@ export const NEVER_AUTO_APPROVE: { pattern: RegExp; label: string }[] = [
  * policy.toml can never quietly widen what CAR will approve.
  */
 export function matchNeverAutoApprove(text: string, extraPatterns: string[] = []): string | null {
+  // Keep this compatibility helper on the policy port, but make the
+  // non-bypassable built-in decision come from the core safety kernel. This
+  // prevents provider/contextual policy from becoming the authority for
+  // irreversible content while preserving the existing surface API.
+  const coreLabel = coreDangerousContent(text);
+  if (coreLabel) return coreLabel;
   for (const { pattern, label } of NEVER_AUTO_APPROVE) {
     if (pattern.test(text)) return label;
   }

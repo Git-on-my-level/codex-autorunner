@@ -27,6 +27,8 @@ describe("web policy", () => {
     const body = await res.text();
     expect(body).toContain("classes.reply");
     expect(body).toContain(">ok<");
+    expect(body).toContain("Core safety boundary");
+    expect(body).toContain("Core authorizes");
   });
 
   test("reports a missing policy.toml without throwing", async () => {

@@ -4,7 +4,8 @@
  * The app is driven through `app.fetch(request, env)` rather than a real socket.
  * `env` stands in for Bun's `Server`: auth.ts reads the peer address from
  * `env.requestIP(req)`, which is exactly what Bun provides in production, so
- * localhost-vs-remote is exercised for real without binding a port.
+ * peer handling is exercised for real without binding a port. Authentication is
+ * credential-based even on localhost.
  */
 import { Hono } from "hono";
 import type { CarConfig } from "../../src/config/config.ts";
@@ -23,6 +24,7 @@ import {
 
 export const LOCALHOST = "127.0.0.1";
 export const REMOTE = "203.0.113.9";
+export const TEST_INGEST_TOKEN = "test-ingest-token";
 
 class NoopTriage implements TriagePort {
   async tick(): Promise<number> {
@@ -46,11 +48,11 @@ export interface Harness {
   store: Store;
   clock: FakeClock;
   config: CarConfig;
-  /** POST a body to `path`, as if from `from` (default: localhost). */
+  /** POST a body to `path`, as if from `from` (default: localhost, authenticated). */
   post(
     path: string,
     body: string | unknown,
-    init?: { from?: string | null; headers?: Record<string, string> },
+    init?: { from?: string | null; headers?: Record<string, string>; auth?: boolean },
   ): Promise<Response>;
   get(path: string, init?: { from?: string | null }): Promise<Response>;
   /** Rows in the audit table, newest last. */
@@ -67,7 +69,12 @@ export function harness(
 ): Harness {
   const clock = new FakeClock();
   const store = memoryStore(clock);
-  const config = testConfig(configOverrides);
+  const hasHttpOverride = Object.prototype.hasOwnProperty.call(configOverrides, "http");
+  const config = testConfig(
+    hasHttpOverride
+      ? configOverrides
+      : { ...configOverrides, http: { ingest_tokens: { "*": TEST_INGEST_TOKEN } } },
+  );
 
   const deps: DaemonDeps = {
     store,
@@ -96,9 +103,19 @@ export function harness(
     config,
     post(path, body, init = {}) {
       const text = typeof body === "string" ? body : JSON.stringify(body);
+      const source = path.includes("agentctl")
+        ? "agentctl"
+        : path.includes("claude")
+          ? "claude"
+          : path.includes("multica")
+            ? "multica"
+            : "generic";
+      const configured = config.http.ingest_tokens[source] ?? config.http.ingest_tokens["*"];
+      const authHeaders: Record<string, string> =
+        init.auth === false || !configured ? {} : { authorization: `Bearer ${configured}` };
       const req = new Request(`http://127.0.0.1:7171${path}`, {
         method: "POST",
-        headers: { "content-type": "application/json", ...(init.headers ?? {}) },
+        headers: { "content-type": "application/json", ...authHeaders, ...(init.headers ?? {}) },
         body: text,
       });
       return Promise.resolve(app.fetch(req, envFor(init.from)));

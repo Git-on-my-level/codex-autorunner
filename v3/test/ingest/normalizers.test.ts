@@ -171,6 +171,31 @@ describe("agentctl normalizer", () => {
     const [event] = normalizeAgentctl(journalEvent({ labels: ["car-triage", "omi"] }), ctx());
     expect(event!.session!.title).toBe("car-triage omi");
   });
+
+  test("unlabeled callbacks do not overwrite a useful title with transport jargon", () => {
+    const [event] = normalizeAgentctl(journalEvent({ labels: [] }), ctx());
+    expect(event!.session!.title).toBeUndefined();
+  });
+
+  test("reported runtime metadata is preserved without being guessed", () => {
+    const [event] = normalizeAgentctl(journalEvent({
+      profile: "reviewer",
+      model: "frontier",
+      backend_version: "cursor-1.2",
+      config_fingerprint: "sha256:abc",
+      worktree: "/tmp/worktree",
+    }), ctx());
+    expect((event!.payload as any).agentctl).toMatchObject({
+      profile: "reviewer",
+      model: "frontier",
+      runtime: "cursor-1.2",
+      config_fingerprint: "sha256:abc",
+      worktree: "/tmp/worktree",
+    });
+    const [absent] = normalizeAgentctl(journalEvent(), ctx());
+    expect((absent!.payload as any).agentctl.model).toBeUndefined();
+    expect((absent!.payload as any).agentctl.profile).toBeUndefined();
+  });
 });
 
 describe("claude normalizer", () => {
@@ -265,12 +290,13 @@ describe("claude normalizer", () => {
    * empty repo as "no match" — so a Claude session without one silently opts out
    * of repo-scoped rules, notes and the "this repo only" grant.
    */
-  test("the session ref carries a repo derived from cwd", () => {
+  test("a repo label derived from cwd is explicitly not authorization-grade", () => {
     const { event } = normalizeClaude(
       { session_id: "s", hook_event_name: "SessionStart", cwd: "/Users/dazheng/car-workspace/codex-autorunner" },
       ctx(),
     );
     expect(event.session!.repo).toBe("codex-autorunner");
+    expect(event.session!.repo_verified).toBe(false);
   });
 
   test("a session with no cwd reports no repo rather than a guess", () => {

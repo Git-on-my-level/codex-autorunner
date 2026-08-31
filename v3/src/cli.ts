@@ -1,14 +1,13 @@
 #!/usr/bin/env bun
-/**
- * `card` — CAR v3 CLI.
- * Scaffold implements: serve, emit, status, doctor(basic). WS-G extends docs;
- * memory/policy subcommands land with WS-C/WS-B.
- */
+/** `card` — CAR v3 daemon, authenticated event emitter, status, and diagnostics. */
 import { startDaemon } from "./daemon.ts";
 import { loadConfig, dbPath } from "./config/config.ts";
+import { validateProviderTopology } from "./config/provider_topology.ts";
 import { openStore } from "./store/db.ts";
 import { CONTRACT_VERSION, computedIdempotencyKey, parseEvent } from "./contract/events.ts";
 import { hostname } from "node:os";
+import { mkdirSync } from "node:fs";
+import { defaultCutoverReportPath, writeV2CutoverReport } from "./migration/cutover.ts";
 
 function argValue(args: string[], flag: string): string | undefined {
   const i = args.indexOf(flag);
@@ -48,10 +47,22 @@ switch (cmd) {
       body: argValue(rest, "--body") ?? "",
       payload,
     });
-    const port = argValue(rest, "--port") ?? String(loadConfig().http.port);
+    const cfg = loadConfig(argValue(rest, "--config"));
+    const port = argValue(rest, "--port") ?? String(cfg.http.port);
+    const token =
+      argValue(rest, "--token") ??
+      process.env.CAR_INGEST_TOKEN ??
+      (cfg.http.ingest_token_envs.generic ? process.env[cfg.http.ingest_token_envs.generic] : undefined) ??
+      (cfg.http.ingest_token_envs["*"] ? process.env[cfg.http.ingest_token_envs["*"]] : undefined) ??
+      cfg.http.ingest_tokens.generic ??
+      cfg.http.ingest_tokens["*"];
+    if (!token) {
+      console.error("card emit: no generic ingest credential; configure http.ingest_token_envs or CAR_INGEST_TOKEN");
+      process.exit(1);
+    }
     const res = await fetch(`http://127.0.0.1:${port}/v1/events`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify(event),
     });
     console.log(JSON.stringify(await res.json()));
@@ -69,8 +80,13 @@ switch (cmd) {
           db: dbPath(cfg),
           events: q("SELECT COUNT(*) n FROM events"),
           pending_triage: q("SELECT COUNT(*) n FROM events WHERE triage_state IN ('pending','coalescing')"),
+          pending_effects: q("SELECT COUNT(*) n FROM effects WHERE state IN ('proposed','pending','running')"),
+          blocked_effects: q("SELECT COUNT(*) n FROM effects WHERE state = 'blocked'"),
+          provider_invocations_running: q("SELECT COUNT(*) n FROM provider_invocations WHERE state = 'running'"),
+          uncertain_delivery: q("SELECT COUNT(*) n FROM outbox WHERE state = 'uncertain'"),
           open_escalations: q("SELECT COUNT(*) n FROM escalations WHERE state = 'pending'"),
           active_sessions: q("SELECT COUNT(*) n FROM sessions WHERE state = 'active'"),
+          panic: store.getPanicState(),
         },
         null,
         2,
@@ -84,6 +100,12 @@ switch (cmd) {
     const checks: [string, boolean, string][] = [];
     checks.push(["state_dir", true, cfg.state_dir]);
     try {
+      validateProviderTopology(cfg);
+      checks.push(["provider topology", true, `${Object.keys(cfg.providers.instances).length} configured instance(s)`]);
+    } catch (err) {
+      checks.push(["provider topology", false, String(err)]);
+    }
+    try {
       openStore(dbPath(cfg)).db.close();
       checks.push(["sqlite", true, dbPath(cfg)]);
     } catch (err) {
@@ -91,27 +113,70 @@ switch (cmd) {
     }
     checks.push([
       "telegram",
-      !cfg.telegram.enabled || Boolean(process.env[cfg.telegram.token_env]),
-      cfg.telegram.enabled ? `token via $${cfg.telegram.token_env}` : "disabled",
+      !cfg.telegram.enabled ||
+        (Boolean(process.env[cfg.telegram.token_env]) &&
+          Boolean(cfg.telegram.chat_id) &&
+          cfg.telegram.allowed_user_ids.length > 0),
+      cfg.telegram.enabled
+        ? `token via $${cfg.telegram.token_env}; chat ${cfg.telegram.chat_id || "MISSING"}; allowed users ${cfg.telegram.allowed_user_ids.length}`
+        : "disabled",
     ]);
-    /*
-     * Without a provider key CAR still runs, and still fails safe — but every
-     * event the rules pass cannot settle escalates, which looks like a busy day
-     * rather than a broken install. Name it here instead.
-     */
-    const providerEnv = cfg.providers.triage.startsWith("openai/") ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+    const configuredIngestCredentials = new Set([
+      ...Object.values(cfg.http.ingest_tokens),
+      ...Object.values(cfg.http.ingest_token_envs)
+        .map((name) => process.env[name])
+        .filter((value): value is string => Boolean(value)),
+    ]);
     checks.push([
-      "triage llm",
-      Boolean(process.env[providerEnv]),
-      process.env[providerEnv]
-        ? `${cfg.providers.triage} via $${providerEnv}`
-        : `$${providerEnv} not set — triage escalates everything the rules pass cannot settle`,
+      "write authentication",
+      configuredIngestCredentials.size > 0,
+      configuredIngestCredentials.size > 0
+        ? `${configuredIngestCredentials.size} credential(s) available`
+        : "no write caller can authenticate; configure http.ingest_token_envs",
+    ]);
+    const hermesInstances = Object.entries(cfg.providers.instances).filter(([, instance]) => instance.adapter === "hermes");
+    for (const [name, instance] of hermesInstances) {
+      const executable = instance.executable ?? "hermes";
+      const argv = [executable, "-p", instance.profile!, "acp", "--check"];
+      try {
+        const result = Bun.spawnSync(argv, { stdout: "pipe", stderr: "pipe" });
+        const detail = new TextDecoder().decode(result.stdout).trim() || new TextDecoder().decode(result.stderr).trim();
+        checks.push([`Hermes ${name}`, result.exitCode === 0, detail || `${argv.join(" ")} exited ${result.exitCode}`]);
+      } catch (err) {
+        checks.push([`Hermes ${name}`, false, String(err)]);
+      }
+    }
+    checks.push([
+      "dead-man observer",
+      !cfg.deadman.enabled || Boolean(process.env[cfg.deadman.token_env]),
+      cfg.deadman.enabled ? `credential via $${cfg.deadman.token_env}` : "disabled",
     ]);
     for (const [name, ok, detail] of checks) console.log(`${ok ? "ok " : "FAIL"} ${name}: ${detail}`);
     process.exit(checks.every(([, ok]) => ok) ? 0 : 1);
   }
 
+  case "migration-audit": {
+    const sourceRoot = argValue(rest, "--v2-root");
+    if (!sourceRoot) {
+      console.error("card migration-audit: --v2-root is required");
+      process.exit(1);
+    }
+    const cfg = loadConfig(argValue(rest, "--config"));
+    mkdirSync(cfg.state_dir, { recursive: true });
+    const store = openStore(dbPath(cfg));
+    const now = new Date();
+    const output = argValue(rest, "--output") ?? defaultCutoverReportPath(cfg.state_dir, now);
+    try {
+      const report = writeV2CutoverReport(store, sourceRoot, output, now);
+      console.log(JSON.stringify({ output, verdict: report.verdict, blockers: report.blockers }, null, 2));
+      process.exitCode = report.verdict === "blocked" ? 2 : report.verdict === "review_required" ? 3 : 0;
+    } finally {
+      store.db.close();
+    }
+    break;
+  }
+
   default:
-    console.log("card <serve|emit|status|doctor> — CAR v3 (see v3/DESIGN.md)");
+    console.log("card <serve|emit|status|doctor|migration-audit> — CAR v3 (see v3/DESIGN.md)");
     process.exit(cmd ? 1 : 0);
 }

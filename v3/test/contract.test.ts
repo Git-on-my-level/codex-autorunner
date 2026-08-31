@@ -1,6 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { CONTRACT_VERSION, computedIdempotencyKey, parseEvent } from "../src/contract/events.ts";
-import { ulid } from "../src/contract/ids.ts";
+import { humanFactId, payloadSha256, stableJson, ulid } from "../src/contract/ids.ts";
+import {
+  EffectProposal,
+  EffectState,
+  EffectTerminalOutcome,
+  GrantStatus,
+  InteractionState,
+  OutboxState,
+  ProviderEvent,
+  ProviderEventType,
+} from "../src/contract/lifecycle.ts";
 
 const valid = {
   contract: CONTRACT_VERSION,
@@ -26,6 +36,7 @@ describe("car.event.v1", () => {
     const ev = parseEvent(valid);
     expect(ev.body).toBe("");
     expect(ev.severity).toBe("attention");
+    expect(ev.session?.repo_verified).toBe(false);
   });
 
   test("minimal sessionless event", () => {
@@ -57,5 +68,45 @@ describe("car.event.v1", () => {
     const ids = Array.from({ length: 100 }, () => ulid(1700000000000));
     const sorted = [...ids].sort();
     expect(ids).toEqual(sorted);
+  });
+
+  test("canonical hashes do not depend on object insertion order", () => {
+    expect(stableJson({ b: 2, a: 1 })).toBe(stableJson({ a: 1, b: 2 }));
+    expect(payloadSha256({ b: 2, a: 1 })).toBe(payloadSha256({ a: 1, b: 2 }));
+    expect(humanFactId()).toStartWith("fact_");
+  });
+
+  test("provider and effect contracts use closed lifecycle vocabularies", () => {
+    const proposal = EffectProposal.parse({
+      contract: "car.effect-proposal.v1",
+      intent_id: "intent-1",
+      effect_type: "notify",
+      args: { text: "hello" },
+      lineage_id: "lineage-1",
+    });
+    expect(proposal.effect_type).toBe("notify");
+    expect(() => EffectProposal.parse({ ...proposal, effect_type: "shell" })).toThrow();
+    expect(EffectState.options).toContain("terminal_recorded");
+    expect(EffectTerminalOutcome.options).toContain("uncertain");
+    expect(GrantStatus.options).toContain("revoked");
+    expect(InteractionState.options).toContain("consumed");
+    expect(OutboxState.options).toContain("uncertain");
+  });
+
+  test("provider event contract preserves typed sequence semantics", () => {
+    const event = ProviderEvent.parse({
+      contract: "car.provider-event.v1",
+      invocation_id: "pinv-1",
+      request_id: "req-1",
+      provider_id: "hermes",
+      provider_instance: "hermes:work",
+      type: "progress_snapshot",
+      seq: 2,
+      ts: "2026-08-26T18:04:11Z",
+      payload: { text: "cumulative" },
+    });
+    expect(event.type).toBe("progress_snapshot");
+    expect(ProviderEventType.options).not.toContain("unknown");
+    expect(() => ProviderEvent.parse({ ...event, type: "done" })).toThrow();
   });
 });

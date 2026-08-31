@@ -20,7 +20,7 @@ function ev(overrides: Record<string, unknown> = {}) {
 }
 
 describe("web inbox", () => {
-  test("GET /ui renders seeded events with core columns", async () => {
+  test("GET /ui renders task-first event rows with accessible filters", async () => {
     const deps = buildDeps();
     deps.store.ingestEvent(ev({ idempotency_key: "k1", title: "Approve deploy?" }));
     deps.store.ingestEvent(
@@ -34,8 +34,15 @@ describe("web inbox", () => {
     expect(body).toContain("Approve deploy?");
     expect(body).toContain("Build failed");
     expect(body).toContain("claude-code");
-    expect(body).toContain("attention.question");
+    expect(body).toContain("Question");
     expect(body).toContain("urgent");
+    expect(body).toContain('label for="inbox-source"');
+    expect(body).toContain('aria-current="page"');
+    const style = body.match(/<style>([\s\S]*?)<\/style>/)?.[1] ?? "";
+    expect(style).toContain('"Segoe UI"');
+    expect(style).toContain('[aria-current="page"]');
+    expect(style).toContain('content:""');
+    expect(style).not.toContain("&quot;");
   });
 
   test("filters by vendor", async () => {
@@ -52,6 +59,34 @@ describe("web inbox", () => {
     const body = await res.text();
     expect(body).toContain("Codex thing");
     expect(body).not.toContain("Claude thing");
+  });
+
+  test("agentctl transport displays and filters by the native agent", async () => {
+    const deps = buildDeps();
+    deps.store.ingestEvent(ev({
+      idempotency_key: "agentctl-cursor",
+      title: "Cursor-native signal",
+      source: { vendor: "agentctl", host: "mac", adapter: "agentctl-subscribe" },
+      session: { vendor: "agentctl", native_id: "exec-cursor", host: "mac" },
+      payload: { agentctl: { adapter: "cursor" } },
+    }));
+    deps.store.ingestEvent(ev({
+      idempotency_key: "agentctl-omp",
+      title: "OMP-native signal",
+      source: { vendor: "agentctl", host: "mac", adapter: "agentctl-subscribe" },
+      session: { vendor: "agentctl", native_id: "exec-omp", host: "mac" },
+      payload: { agentctl: { adapter: "omp" } },
+    }));
+    const app = mountApp(deps);
+
+    const cursor = await (await app.request("/ui?vendor=cursor")).text();
+    expect(cursor).toContain("Cursor-native signal");
+    expect(cursor).not.toContain("OMP-native signal");
+    expect(cursor).toContain(">Cursor<");
+
+    const transport = await (await app.request("/ui?vendor=agentctl")).text();
+    expect(transport).not.toContain("Cursor-native signal");
+    expect(transport).not.toContain("OMP-native signal");
   });
 
   test("filters by severity", async () => {
@@ -147,5 +182,17 @@ describe("web inbox", () => {
     const res = await app.request("/ui");
     const body = await res.text();
     expect(body).toContain("/ui/incidents/inc_test1");
+  });
+
+  test("keeps heartbeat and raw progress evidence out of the human Inbox", async () => {
+    const deps = buildDeps();
+    deps.store.ingestEvent(ev({ idempotency_key: "technical-progress", type: "progress", requires_response: false, title: "token stream update" }));
+    deps.store.ingestEvent(ev({ idempotency_key: "technical-heartbeat", type: "heartbeat", requires_response: false, title: "poll heartbeat" }));
+    deps.store.ingestEvent(ev({ idempotency_key: "meaningful-artifact", type: "artifact", requires_response: false, title: "Review bundle ready" }));
+
+    const body = await (await mountApp(deps).request("/ui")).text();
+    expect(body).toContain("Review bundle ready");
+    expect(body).not.toContain("token stream update");
+    expect(body).not.toContain("poll heartbeat");
   });
 });

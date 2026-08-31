@@ -238,11 +238,13 @@ describe("deliver — agentctl-run", () => {
 
     expect(result).toBe("delivered");
     expect(h.runner.lines()).toContain(
-      "agentctl run --background --label car-continuation -- codex exec resume uuid-9 continue please",
+      "agentctl run --background --label car-continuation --label car-observe -- codex exec resume uuid-9 continue please",
     );
-    expect(h.runner.lines()).toContain(
-      `agentctl subscribe create --execution exec-77 --destination webhook --target http://127.0.0.1:${h.state.config.http.port}/v1/ingest/agentctl`,
-    );
+    expect(h.runner.lines().some((line) =>
+      line.startsWith(
+        `agentctl subscribe create --execution exec-77 --destination webhook --target http://127.0.0.1:${h.state.config.http.port}/v1/ingest/agentctl/callback/exec-77/`,
+      ),
+    )).toBe(true);
     expect(auditVerbs(h.store, sid)).toContain("agentctl.subscribed");
     // The continuation is linked as another ref of the same CAR session.
     const refs = h.store.db
@@ -257,7 +259,7 @@ describe("deliver — agentctl-run", () => {
     const result = await h.bus.deliver(sid, { kind: "agentctl-run" }, { approval: true });
     expect(result).toBe("delivered");
     expect(h.runner.lines()).toContain(
-      "agentctl run --background --label car-continuation -- claude -p --resume sess-k APPROVED",
+      "agentctl run --background --label car-continuation --label car-observe -- claude -p --resume sess-k APPROVED",
     );
   });
 

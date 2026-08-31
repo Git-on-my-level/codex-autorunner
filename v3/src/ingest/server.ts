@@ -10,8 +10,8 @@
  *   POST /v1/ingest/claude       Claude Code hook HTTP payloads (parks PermissionRequest)
  *   POST /v1/ingest/multica      Multica issue/card webhooks
  *
- * Auth: localhost is trusted; every other peer needs a per-source bearer token
- * from config.http.ingest_tokens (see auth.ts — it fails closed).
+ * Auth: every write caller, including localhost, needs a per-source bearer token
+ * from config or its configured environment variable (see auth.ts).
  */
 import { Hono, type Context } from "hono";
 import type { DaemonDeps, Loop } from "../ports.ts";
@@ -19,7 +19,7 @@ import type { CarEvent } from "../contract/events.ts";
 import type { IngestResult } from "../store/db.ts";
 import { parseEvent } from "../contract/events.ts";
 import { hasParkedPermission, parkPermission, releaseAllParks } from "../permission_park.ts";
-import { authorize, type SourceId } from "./auth.ts";
+import { authorize, authorizeAgentctlCallback, type SourceId } from "./auth.ts";
 import { BatchLineError, BodyError, decodeBody } from "./batch.ts";
 import { eventJsonSchema } from "./schema.ts";
 import { makeContext, NormalizeError } from "./normalize.ts";
@@ -33,6 +33,7 @@ import {
   readHookTimeoutHint,
 } from "./claude.ts";
 import { normalizeMultica } from "./multica.ts";
+import { resolveLocalRepoIdentity } from "./repo_identity.ts";
 
 export interface IngestOptions {
   /**
@@ -40,6 +41,8 @@ export interface IngestOptions {
    * short value to exercise the park-timeout path without waiting a minute.
    */
   defaultHookTimeoutMs?: number;
+  /** Adapter-owned VCS resolver; injected by tests, local Git by default. */
+  repoResolver?: (cwd: string | null | undefined) => string | null;
 }
 
 /* ------------------------------------------------------------------- app */
@@ -62,8 +65,8 @@ export function createIngestApp(
   /* ------------------------------------------------------ generic envelope */
 
   app.post("/v1/events", async (c) => {
-    const denied = guard(c, deps, "generic");
-    if (denied) return denied;
+    const auth = guard(c, deps, "generic");
+    if (!auth.ok) return auth.response;
 
     let decoded;
     try {
@@ -80,7 +83,8 @@ export function createIngestApp(
       } catch (err) {
         return c.json({ error: "invalid_event", detail: describeError(err) }, 400);
       }
-      return c.json(deps.store.ingestEvent(event), 200);
+      // Generic envelopes cannot self-attest authorization-grade repository identity.
+      return c.json(deps.store.ingestEvent(event, { sourceId: auth.principal, verifiedRepo: null }), 200);
     }
 
     // Batch: one bad line must not discard the good ones (at-least-once
@@ -95,7 +99,7 @@ export function createIngestApp(
         return;
       }
       try {
-        const result = deps.store.ingestEvent(parseEvent(item));
+        const result = deps.store.ingestEvent(parseEvent(item), { sourceId: auth.principal, verifiedRepo: null });
         accepted++;
         results.push({ index, ok: true, ...result });
       } catch (err) {
@@ -113,49 +117,29 @@ export function createIngestApp(
   /* ----------------------------------------------------------- agentctl */
 
   app.post("/v1/ingest/agentctl", async (c) => {
-    const denied = guard(c, deps, "agentctl");
-    if (denied) return denied;
+    const auth = guard(c, deps, "agentctl");
+    if (!auth.ok) return auth.response;
+    return ingestAgentctl(c, deps, opts, auth.principal);
+  });
 
-    let decoded;
-    try {
-      decoded = decodeBody(await c.req.text(), c.req.header("content-type"));
-    } catch (err) {
-      if (err instanceof BodyError) return c.json({ error: err.code, detail: err.message }, 400);
-      throw err;
+  // agentctl's public webhook CLI cannot attach headers. Continuations receive
+  // an execution-scoped HMAC capability in their callback URL; it cannot post
+  // events for any other execution and the primary ingest token is never exposed.
+  app.post("/v1/ingest/agentctl/callback/:executionId/:capability", async (c) => {
+    const executionId = c.req.param("executionId");
+    const scoped = authorizeAgentctlCallback(deps.config, executionId, c.req.param("capability"));
+    if (!scoped) {
+      deps.store.audit("daemon", "ingest.denied", "source", "agentctl-callback", { execution_id: executionId });
+      return c.json({ error: "unauthorized", detail: "invalid_callback_capability" }, 401);
     }
-
-    const ctx = makeContext(deps.store.clock.now());
-    const results: IngestResult[] = [];
-    const errors: Record<string, unknown>[] = [];
-
-    for (const [index, item] of decoded.items.entries()) {
-      if (item instanceof BatchLineError) {
-        errors.push({ index, error: "invalid_json", detail: item.detail });
-        continue;
-      }
-      try {
-        for (const event of normalizeAgentctl(item, ctx)) {
-          results.push(deps.store.ingestEvent(event));
-        }
-      } catch (err) {
-        errors.push({ index, error: "invalid_agentctl_event", detail: describeError(err) });
-      }
-    }
-
-    if (results.length === 0) {
-      return c.json({ error: "invalid_agentctl_event", errors }, 400);
-    }
-    return c.json(
-      { accepted: results.length, rejected: errors.length, results, ...(errors.length ? { errors } : {}) },
-      200,
-    );
+    return ingestAgentctl(c, deps, opts, scoped.principal, executionId);
   });
 
   /* ------------------------------------------------------------- claude */
 
   app.post("/v1/ingest/claude", async (c) => {
-    const denied = guard(c, deps, "claude");
-    if (denied) return denied;
+    const auth = guard(c, deps, "claude");
+    if (!auth.ok) return auth.response;
 
     let raw: unknown;
     try {
@@ -186,7 +170,10 @@ export function createIngestApp(
       return c.json({ error: "invalid_claude_hook", detail: describeError(err) }, 400);
     }
 
-    const result = deps.store.ingestEvent(normalized.event);
+    const result = deps.store.ingestEvent(normalized.event, {
+      sourceId: auth.principal,
+      verifiedRepo: resolveAdapterRepo(normalized.event, opts),
+    });
 
     if (!normalized.park) {
       // Non-decision hooks: ACK only after the insert committed, with no body
@@ -225,8 +212,8 @@ export function createIngestApp(
   /* ------------------------------------------------------------ multica */
 
   app.post("/v1/ingest/multica", async (c) => {
-    const denied = guard(c, deps, "multica");
-    if (denied) return denied;
+    const auth = guard(c, deps, "multica");
+    if (!auth.ok) return auth.response;
 
     let decoded;
     try {
@@ -246,7 +233,11 @@ export function createIngestApp(
         continue;
       }
       try {
-        results.push(deps.store.ingestEvent(normalizeMultica(item, ctx)));
+        const event = normalizeMultica(item, ctx);
+        results.push(deps.store.ingestEvent(event, {
+          sourceId: auth.principal,
+          verifiedRepo: resolveAdapterRepo(event, opts),
+        }));
       } catch (err) {
         errors.push({ index, error: "invalid_multica_event", detail: describeError(err) });
       }
@@ -272,6 +263,50 @@ export function createIngestApp(
   });
 
   return app;
+}
+
+async function ingestAgentctl(
+  c: Context,
+  deps: DaemonDeps,
+  opts: IngestOptions,
+  principal: string,
+  expectedExecutionId?: string,
+): Promise<Response> {
+  let decoded;
+  try {
+    decoded = decodeBody(await c.req.text(), c.req.header("content-type"));
+  } catch (err) {
+    if (err instanceof BodyError) return c.json({ error: err.code, detail: err.message }, 400);
+    throw err;
+  }
+
+  const ctx = makeContext(deps.store.clock.now());
+  const results: IngestResult[] = [];
+  const errors: Record<string, unknown>[] = [];
+  for (const [index, item] of decoded.items.entries()) {
+    if (item instanceof BatchLineError) {
+      errors.push({ index, error: "invalid_json", detail: item.detail });
+      continue;
+    }
+    try {
+      for (const event of normalizeAgentctl(item, ctx)) {
+        if (expectedExecutionId && event.session?.native_id !== expectedExecutionId) {
+          throw new NormalizeError(`callback capability is scoped to ${expectedExecutionId}`);
+        }
+        results.push(deps.store.ingestEvent(event, {
+          sourceId: principal,
+          verifiedRepo: resolveAdapterRepo(event, opts),
+        }));
+      }
+    } catch (err) {
+      errors.push({ index, error: "invalid_agentctl_event", detail: describeError(err) });
+    }
+  }
+  if (results.length === 0) return c.json({ error: "invalid_agentctl_event", errors }, 400);
+  return c.json(
+    { accepted: results.length, rejected: errors.length, results, ...(errors.length ? { errors } : {}) },
+    200,
+  );
 }
 
 /* ----------------------------------------------------------------- loop */
@@ -309,13 +344,20 @@ export function createIngestServer(
 
 /* -------------------------------------------------------------- helpers */
 
-function guard(c: Context, deps: DaemonDeps, source: SourceId): Response | null {
+function guard(
+  c: Context,
+  deps: DaemonDeps,
+  source: SourceId,
+): { ok: true; principal: string } | { ok: false; response: Response } {
   const verdict = authorize(c, deps.config, source);
-  if (verdict.ok) return null;
+  if (verdict.ok) return { ok: true, principal: verdict.principal };
   deps.store.audit("daemon", "ingest.denied", "source", source, { reason: verdict.reason });
-  return c.json({ error: "unauthorized", detail: verdict.reason }, 401, {
-    "WWW-Authenticate": `Bearer realm="car-ingest", scope="${source}"`,
-  });
+  return {
+    ok: false,
+    response: c.json({ error: "unauthorized", detail: verdict.reason }, 401, {
+      "WWW-Authenticate": `Bearer realm="car-ingest", scope="${source}"`,
+    }),
+  };
 }
 
 function describeError(err: unknown): string {
@@ -330,4 +372,8 @@ function safeUrl(url: string): URL | undefined {
   } catch {
     return undefined;
   }
+}
+
+function resolveAdapterRepo(event: CarEvent, opts: IngestOptions): string | null {
+  return (opts.repoResolver ?? resolveLocalRepoIdentity)(event.session?.cwd);
 }

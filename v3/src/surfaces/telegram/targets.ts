@@ -15,6 +15,7 @@ export interface SessionRow {
   title: string | null;
   cwd: string | null;
   repo: string | null;
+  repo_verified: number;
   state: string;
   last_event_at: string;
   last_heartbeat_at: string | null;

@@ -163,12 +163,13 @@ function bodyText(bodyJson: string): string {
   }
 }
 
-/** Mark held rows as folded into the digest, so they are not re-listed tomorrow. */
-export function markHeldDelivered(store: Store, ids: number[]): void {
-  for (const id of ids) {
-    store.db.query("UPDATE outbox SET state = ? WHERE id = ?").run(OUTBOX_STATE.sent, id);
-    store.audit("daemon", "outbox.folded_into_digest", "outbox", String(id), {});
-  }
+/**
+ * Compatibility entry point for callers that used to fold rows at enqueue
+ * time. The store now performs this only after a canonical digest receipt;
+ * `ids` is intentionally ignored so a caller cannot bypass that boundary.
+ */
+export function markHeldDelivered(store: Store, _ids: number[]): void {
+  store.reconcileDigestReceipts();
 }
 
 function spendSection(store: Store, since: string): SpendSection {

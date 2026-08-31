@@ -2,7 +2,7 @@
  * agentctl reply-back: a reply to agentctl-launched work is a NEW bounded
  * execution, not an injection into the old one (DESIGN §8).
  *
- *   agentctl run --background --label car-continuation -- <vendor resume argv>
+ *   agentctl run --background --label car-continuation --label car-observe -- <vendor resume argv>
  *
  * The resume argv is built from the vendor of the underlying session ref
  * (`session_refs` — a CAR session wrapping a codex process holds both the
@@ -11,15 +11,18 @@
  * and links the new exec id as another ref of the same CAR session.
  *
  * Subscription is best-effort: a failure is audited, not fatal — the
- * continuation is already running and the `recent --unreconciled` sweep is the
- * belt-and-braces path.
+ * continuation is already running. The optional local observer may still show
+ * its compact lifecycle metadata when the execution matches the configured
+ * observer scope; it never consumes the result.
  */
 import { probeCapabilities, supports } from "../capabilities.ts";
 import { getSession, pickRef } from "../sessions.ts";
 import type { Adapter, AdapterOutcome, DeliveryContext } from "./types.ts";
 import { AGENTCTL_LAUNCH_TIMEOUT_MS, timeoutFromHint } from "./types.ts";
+import { agentctlCallbackCapability, configuredTokens } from "../../ingest/auth.ts";
 
 export const CONTINUATION_LABEL = "car-continuation";
+export const OBSERVER_LABEL = "car-observe";
 
 /** Vendors we know how to resume, in preference order. */
 export const RESUMABLE_VENDORS = ["codex", "claude-code", "claude"];
@@ -67,8 +70,8 @@ function findExecutionId(node: unknown, depth: number): string | null {
   return null;
 }
 
-export function ingestTarget(port: number): string {
-  return `http://127.0.0.1:${port}/v1/ingest/agentctl`;
+export function ingestTarget(port: number, executionId: string, capability: string): string {
+  return `http://127.0.0.1:${port}/v1/ingest/agentctl/callback/${encodeURIComponent(executionId)}/${encodeURIComponent(capability)}`;
 }
 
 export const agentctlRunAdapter: Adapter = {
@@ -94,6 +97,8 @@ export const agentctlRunAdapter: Adapter = {
       "--background",
       "--label",
       CONTINUATION_LABEL,
+      "--label",
+      OBSERVER_LABEL,
       "--",
       ...resumeArgv,
     ];
@@ -111,7 +116,7 @@ export const agentctlRunAdapter: Adapter = {
 
     const execId = parseExecutionId(res.stdout) ?? parseExecutionId(res.stderr);
     ctx.store.audit("adapter:agentctl", "agentctl.launched", "session", ctx.carSessionId, {
-      label: CONTINUATION_LABEL,
+      labels: [CONTINUATION_LABEL, OBSERVER_LABEL],
       vendor: ref.vendor,
       native_id: ref.native_id,
       execution_id: execId,
@@ -131,12 +136,20 @@ export const agentctlRunAdapter: Adapter = {
         reason: "could not parse an execution id from agentctl run output",
       });
     }
-    return { status: "delivered", detail: { execution_id: execId, label: CONTINUATION_LABEL } };
+    return { status: "delivered", detail: { execution_id: execId, labels: [CONTINUATION_LABEL, OBSERVER_LABEL] } };
   },
 };
 
 async function subscribeBestEffort(ctx: DeliveryContext, execId: string): Promise<void> {
-  const target = ingestTarget(ctx.config.http.port);
+  const secret = configuredTokens(ctx.config, "agentctl")[0];
+  if (!secret) {
+    ctx.store.audit("adapter:agentctl", "agentctl.subscribe_failed", "session", ctx.carSessionId, {
+      execution_id: execId,
+      reason: "no agentctl ingest credential is configured",
+    });
+    return;
+  }
+  const target = ingestTarget(ctx.config.http.port, execId, agentctlCallbackCapability(secret, execId));
   const argv = [
     "agentctl",
     "subscribe",
@@ -161,12 +174,12 @@ async function subscribeBestEffort(ctx: DeliveryContext, execId: string): Promis
   if (code === 0) {
     ctx.store.audit("adapter:agentctl", "agentctl.subscribed", "session", ctx.carSessionId, {
       execution_id: execId,
-      target,
+      target: `http://127.0.0.1:${ctx.config.http.port}/v1/ingest/agentctl/callback/${execId}/<redacted>`,
     });
   } else {
     ctx.store.audit("adapter:agentctl", "agentctl.subscribe_failed", "session", ctx.carSessionId, {
       execution_id: execId,
-      target,
+      target: `http://127.0.0.1:${ctx.config.http.port}/v1/ingest/agentctl/callback/${execId}/<redacted>`,
       code,
       stderr: stderr.slice(0, 2000),
     });

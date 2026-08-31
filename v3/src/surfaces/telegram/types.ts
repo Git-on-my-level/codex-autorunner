@@ -64,14 +64,17 @@ export interface OutboxRow {
   next_attempt_at: string;
   sent_message_id: string | null;
   created_at: string;
+  claim_owner?: string | null;
+  claim_token?: string | null;
+  lease_until?: string | null;
 }
 
 /** Outbox states this module uses. `deferred` = held for the digest. */
 export const OUTBOX_STATE = {
   pending: "pending",
-  sent: "sent",
+  sent: "delivered",
   failed: "failed",
-  dead: "dead",
+  dead: "failed",
   deferred: "deferred",
 } as const;
 

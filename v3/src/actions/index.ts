@@ -24,7 +24,8 @@ import type { Store } from "../store/db.ts";
 import type { CarConfig } from "../config/config.ts";
 import type { ActionBus, DeliveryResult, PolicyPort, ReplyPayload } from "../ports.ts";
 import type { ResponseChannel, ResponseChannelKind } from "../contract/events.ts";
-import { actionId } from "../contract/ids.ts";
+import { actionId, intentId } from "../contract/ids.ts";
+import type { EffectProposal, SafetyKernel } from "../safety/index.ts";
 import { createBunRunner, truncateOutput, type Runner } from "./runner.ts";
 import { probeCapabilities, type CliCapabilities } from "./capabilities.ts";
 import {
@@ -67,9 +68,25 @@ export interface ActionBusDeps {
   httpFetch?: FetchLike;
   /** Environment lookup (CAR_MULTICA_URL / CAR_MULTICA_TOKEN). */
   env?: EnvLike;
+  /** Optional v3 safety kernel. Omitted only for the v2-compatible scaffold path. */
+  safety?: SafetyKernel;
+}
+
+export interface ActionRunOptions {
+  decisionId: string;
+  mutating: boolean;
+  recordedByCaller?: boolean;
+  grantId?: string | null;
+  intentId?: string;
+  scope?: EffectProposal["scope"];
+  lineage?: EffectProposal["lineage"];
+  deadlineAt?: string | null;
+  costUsd?: number;
 }
 
 export interface CarActionBus extends ActionBus {
+  /** v3 callers may carry the core grant and immutable request identity. */
+  runTemplate(templateId: string, args: Record<string, unknown>, opts: ActionRunOptions): Promise<{ ok: boolean; output: string }>;
   /** Probe (or read the 24h-cached probe of) a vendor CLI. */
   probeCapabilities(vendor: string, opts?: { force?: boolean }): Promise<CliCapabilities>;
   /** Ids of the currently loaded templates (file or shipped defaults). */
@@ -265,7 +282,7 @@ export function createActionBus(
   async function runTemplate(
     templateId: string,
     args: Record<string, unknown>,
-    opts: { decisionId: string; mutating: boolean; recordedByCaller?: boolean },
+    opts: ActionRunOptions,
   ): Promise<{ ok: boolean; output: string }> {
     const base = {
       templateId,
@@ -352,6 +369,52 @@ export function createActionBus(
       });
     }
 
+    // The safety kernel is the only v3 authorization boundary. Keep the old
+    // policy-only path above as a compatibility seam until the composition
+    // root has migrated every caller; when supplied, no template can bypass
+    // grants, content rails, deadlines, or panic/budget gates.
+    const safety = deps.safety;
+    const effect = safety
+      ? safety.authorize(
+          {
+            intent_id: opts.intentId ?? intentId("effect"),
+            type: "run_template",
+            args: { template_id: templateId, ...args },
+            scope: opts.scope ?? {},
+            lineage: opts.lineage ?? { source_id: "car-action-bus", request_id: opts.decisionId },
+            provider_policy_verdict: verdict,
+            deadline_at: opts.deadlineAt ?? null,
+            action_class: actionClass,
+            cost_usd: opts.costUsd,
+          },
+          opts.grantId,
+        )
+      : null;
+    if (effect && !effect.verdict.allowed) {
+      return refuse({
+        ...base,
+        actionClass,
+        verdict: `safety_${effect.verdict.code}`,
+        reason: effect.verdict.reason,
+      });
+    }
+    if (effect?.effect.state === "terminal_recorded") {
+      const terminal = effect.effect.terminal_outcome;
+      return { ok: terminal === "ok", output: terminal ? `replayed terminal outcome: ${terminal}` : "replayed terminal effect" };
+    }
+    // Fence the effect before touching the external world. A claim made after
+    // the runner returns would leave a window where a restart/replay worker
+    // could execute the same intent concurrently.
+    const effectClaim = effect ? safety!.claim(effect.effect.intent_id, "car-action-bus") : null;
+    if (effect && !effectClaim) {
+      return refuse({
+        ...base,
+        actionClass,
+        verdict: "safety_lease_lost",
+        reason: "effect could not be exclusively claimed",
+      });
+    }
+
     /* -------------------------------------------------------------- execute */
 
     const startedAt = store.clock.now().toISOString();
@@ -397,6 +460,9 @@ export function createActionBus(
     const finishedAt = store.clock.now().toISOString();
     const ok = code === 0;
     const result = { code, stdout, stderr };
+    if (safety && effect && effectClaim) {
+      safety.recordTerminal(effectClaim.effect.intent_id, "car-action-bus", effectClaim.token, ok ? "ok" : "failed", result);
+    }
     if (!opts.recordedByCaller) {
       store.db
         .query("UPDATE actions SET state = ?, finished_at = ?, result_json = ? WHERE id = ?")

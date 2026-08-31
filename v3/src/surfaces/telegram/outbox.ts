@@ -6,6 +6,7 @@
  * every attempt is a row update, nothing authoritative lives in memory.
  */
 import type { Store } from "../../store/db.ts";
+import { createHash } from "node:crypto";
 import { OUTBOX_STATE, TELEGRAM_CHANNEL, type MessageSpec, type OutboxRow, type TelegramSendFn, type TelegramTarget } from "./types.ts";
 
 export interface DelivererOptions {
@@ -14,6 +15,8 @@ export interface DelivererOptions {
   maxAttempts?: number;
   baseBackoffSeconds?: number;
   maxBackoffSeconds?: number;
+  /** Fault-injection seam used to prove receipt-first crash recovery. */
+  afterReceipt?: (row: OutboxRow) => void;
 }
 
 export interface DelivererStats {
@@ -37,8 +40,24 @@ export function backoffSeconds(attempts: number, base = DEFAULTS.baseBackoffSeco
 }
 
 /** The single enqueue point for this surface: everything outbound is a row first. */
-export function enqueueMessage(store: Store, target: TelegramTarget, spec: MessageSpec): number {
-  return store.enqueueOutbox(TELEGRAM_CHANNEL, target, spec);
+export function enqueueMessage(
+  store: Store,
+  target: TelegramTarget,
+  spec: MessageSpec,
+  opts: { intentId?: string; route?: unknown } = {},
+): number {
+  return store.enqueueOutboxIntent({
+    channel: TELEGRAM_CHANNEL,
+    target,
+    body: spec,
+    ...(opts.intentId ? { intentId: opts.intentId } : {}),
+    ...(opts.route !== undefined ? { route: opts.route } : {}),
+  }).outboxId;
+}
+
+/** Stable identity for the scheduled digest for a local calendar day. */
+export function digestIntentId(day: string): string {
+  return `telegram-digest:${createHash("sha256").update(day).digest("hex").slice(0, 32)}`;
 }
 
 export function pendingOutbox(store: Store, limit: number, now: string): OutboxRow[] {
@@ -63,26 +82,38 @@ export async function deliverOutboxOnce(
 ): Promise<DelivererStats> {
   const cfg = { ...DEFAULTS, ...opts };
   const now = store.clock.now();
-  const rows = pendingOutbox(store, cfg.batchSize, now.toISOString());
+  const owner = "telegram-outbox";
+  const rows = store.claimPendingOutbox(cfg.batchSize, owner, 120) as OutboxRow[];
   const stats: DelivererStats = { sent: 0, retried: 0, dead: 0, deferred: 0 };
 
+  // A previous process may have committed the canonical receipt and died
+  // before creating the callback/edit projections. Rebuild those before doing
+  // any new remote work; no transport call is involved in reconciliation.
+  reconcileTelegramDeliveryProjections(store);
+
   for (const row of rows) {
+    const claim = { owner, token: row.claim_token ?? "" };
+    if (!claim.token) {
+      store.audit("daemon", "outbox.claim_missing", "outbox", String(row.id), {});
+      continue;
+    }
     let target: TelegramTarget;
     let spec: MessageSpec;
     try {
       target = JSON.parse(row.target_json) as TelegramTarget;
       spec = JSON.parse(row.body_json) as MessageSpec;
     } catch (err) {
-      markDead(store, row, `unparseable row: ${String(err)}`);
+      markDead(store, row, claim, `unparseable row: ${String(err)}`);
       stats.dead++;
       continue;
     }
 
     // Quiet hours / policy decided this must not push. Park it for the digest.
     if (target.queue_for_digest) {
-      store.db
-        .query("UPDATE outbox SET state = ? WHERE id = ?")
-        .run(OUTBOX_STATE.deferred, row.id);
+      if (!store.deferOutbox(row.id, claim)) {
+        store.audit("daemon", "outbox.defer_claim_lost", "outbox", String(row.id), {});
+        continue;
+      }
       store.audit("daemon", "outbox.deferred_to_digest", "outbox", String(row.id), {
         kind: target.kind,
       });
@@ -90,46 +121,65 @@ export async function deliverOutboxOnce(
       continue;
     }
 
+    let result;
     try {
-      const result = await send(target, spec);
-      const messageId = result.message_id ?? target.edit_message_id ?? null;
-      store.db
-        .query("UPDATE outbox SET state = ?, attempts = attempts + 1, sent_message_id = ? WHERE id = ?")
-        .run(OUTBOX_STATE.sent, messageId, row.id);
-      applySendSideEffects(store, target, messageId, result.thread_id ?? null);
-      store.audit("daemon", "outbox.sent", "outbox", String(row.id), {
-        kind: target.kind,
-        message_id: messageId,
-      });
-      stats.sent++;
+      result = await send(target, spec);
     } catch (err) {
       const attempts = row.attempts + 1;
       if (attempts >= cfg.maxAttempts) {
-        markDead(store, row, String(err), attempts);
+        markDead(store, row, claim, String(err), attempts);
         stats.dead++;
       } else {
         const nextAt = new Date(
           now.getTime() + backoffSeconds(attempts, cfg.baseBackoffSeconds, cfg.maxBackoffSeconds) * 1000,
         ).toISOString();
-        store.db
-          .query("UPDATE outbox SET attempts = ?, next_attempt_at = ?, state = ? WHERE id = ?")
-          .run(attempts, nextAt, OUTBOX_STATE.pending, row.id);
-        store.audit("daemon", "outbox.retry", "outbox", String(row.id), {
-          attempts,
-          next_attempt_at: nextAt,
-          error: String(err),
-        });
-        stats.retried++;
+        if (store.rescheduleOutbox(row.id, claim, nextAt, err)) stats.retried++;
+        else store.audit("daemon", "outbox.retry_claim_lost", "outbox", String(row.id), { error: String(err) });
       }
+      continue;
+    }
+
+    const messageId = result.message_id ?? target.edit_message_id ?? null;
+    try {
+      // This is the canonical remote receipt. If this write loses its lease or
+      // the process crashes before it, startup recovery leaves `uncertain` and
+      // never turns the row into an ordinary automatic retry. Transport data
+      // required by projections is part of the same durable receipt.
+      store.recordOutboxReceipt(row.id, claim, "delivered", {
+        sentMessageId: messageId,
+        transportResult: { thread_id: result.thread_id ?? null },
+      });
+    } catch (err) {
+      store.audit("daemon", "outbox.receipt_failed", "outbox", String(row.id), {
+        error: String(err),
+        remote_delivery: "possibly_delivered",
+      });
+      continue;
+    }
+
+    stats.sent++;
+    store.audit("daemon", "outbox.sent", "outbox", String(row.id), {
+      kind: target.kind,
+      message_id: messageId,
+    });
+
+    try {
+      cfg.afterReceipt?.(row);
+      // Both are terminal-receipt projections and are independently replayed.
+      store.reconcileDigestReceipts();
+      reconcileTelegramDeliveryProjections(store);
+    } catch (err) {
+      store.audit("daemon", "outbox.projection_failed", "outbox", String(row.id), {
+        error: String(err),
+        remote_delivery: "delivered",
+      });
     }
   }
   return stats;
 }
 
-function markDead(store: Store, row: OutboxRow, error: string, attempts = row.attempts + 1): void {
-  store.db
-    .query("UPDATE outbox SET state = ?, attempts = ? WHERE id = ?")
-    .run(OUTBOX_STATE.dead, attempts, row.id);
+function markDead(store: Store, row: OutboxRow, claim: { owner: string; token: string }, error: string, attempts = row.attempts + 1): void {
+  store.recordOutboxReceipt(row.id, claim, "failed", { error: { attempts, error } });
   // Non-negotiable #6: a message that cannot reach David is loud, never silent.
   store.audit("daemon", "outbox.dead", "outbox", String(row.id), { attempts, error });
 }
@@ -143,6 +193,7 @@ function applySendSideEffects(
   target: TelegramTarget,
   messageId: string | null,
   threadId: string | null,
+  receiptAt: string,
 ): void {
   if (threadId && target.car_session_id) {
     store.db
@@ -153,8 +204,8 @@ function applySendSideEffects(
 
   if (target.kind === "escalation" && target.escalation_id) {
     store.db
-      .query("UPDATE escalations SET telegram_message_id = ?, sent_at = ? WHERE id = ?")
-      .run(messageId, store.clock.now().toISOString(), target.escalation_id);
+      .query("UPDATE escalations SET telegram_message_id = COALESCE(telegram_message_id, ?), sent_at = COALESCE(sent_at, ?) WHERE id = ?")
+      .run(messageId, receiptAt, target.escalation_id);
   }
   if (target.kind === "escalation" && target.incident_id) {
     store.db
@@ -179,6 +230,75 @@ function applySendSideEffects(
   if (target.kind === "ticker" && target.car_session_id) {
     store.kvSet(tickerKey(target.car_session_id), messageId);
   }
+}
+
+interface DeliveredProjectionRow {
+  id: number;
+  target_json: string;
+  sent_message_id: string | null;
+  result_json: string | null;
+}
+
+const projectionKey = (outboxId: number): string => `tg.delivery_projection.${outboxId}`;
+
+function parseReceipt(resultJson: string | null): { receiptAt: string; threadId: string | null } {
+  if (!resultJson) throw new Error("delivered Telegram outbox row has no receipt");
+  const parsed = JSON.parse(resultJson) as {
+    receipt_at?: unknown;
+    transport_result?: { thread_id?: unknown } | null;
+  };
+  if (typeof parsed.receipt_at !== "string") throw new Error("delivered Telegram outbox row has no receipt_at");
+  const threadId = parsed.transport_result?.thread_id;
+  return {
+    receiptAt: parsed.receipt_at,
+    threadId: typeof threadId === "string" ? threadId : null,
+  };
+}
+
+/**
+ * Rebuild Telegram callback/edit projections solely from canonical delivered
+ * outbox rows. Each row is one transaction: either every projection and its
+ * marker commit, or a later pass retries the whole deterministic operation.
+ * This function never sends a Telegram message.
+ */
+export function reconcileTelegramDeliveryProjections(store: Store): number {
+  const rows = store.db
+    .query(
+      `SELECT o.id, o.target_json, o.sent_message_id, o.result_json
+       FROM outbox o
+       LEFT JOIN kv marker ON marker.key = 'tg.delivery_projection.' || CAST(o.id AS TEXT)
+       WHERE o.channel = ? AND o.state = 'delivered' AND marker.key IS NULL
+       ORDER BY o.id ASC`,
+    )
+    .all(TELEGRAM_CHANNEL) as DeliveredProjectionRow[];
+  let reconciled = 0;
+
+  for (const row of rows) {
+    try {
+      const target = JSON.parse(row.target_json) as TelegramTarget;
+      const receipt = parseReceipt(row.result_json);
+      const applied = store.db.transaction(() => {
+        if (store.kvGet(projectionKey(row.id)) !== null) return false;
+        applySendSideEffects(store, target, row.sent_message_id, receipt.threadId, receipt.receiptAt);
+        store.kvSet(projectionKey(row.id), {
+          state: "applied",
+          receipt_at: receipt.receiptAt,
+        });
+        store.audit("daemon", "telegram.delivery_projected", "outbox", String(row.id), {
+          message_id: row.sent_message_id,
+          kind: target.kind,
+        });
+        return true;
+      })();
+      if (applied) reconciled++;
+    } catch (err) {
+      // Leave the marker absent so a repaired row/code path can be replayed.
+      store.audit("daemon", "telegram.delivery_projection_failed", "outbox", String(row.id), {
+        error: String(err),
+      });
+    }
+  }
+  return reconciled;
 }
 
 export interface MsgMapEntry {
