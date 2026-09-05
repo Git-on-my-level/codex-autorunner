@@ -46,8 +46,9 @@ def main() -> None:
                 for area in page.locator("textarea").all():
                     identifier = area.get_attribute("id")
                     assert identifier and page.locator(f'label[for="{identifier}"]').count() == 1
-                assert page.locator(".option-card").count() == 2
-                assert page.locator(".option-card .option-answer").first.inner_text().startswith("Preserve API v1 compatibility")
+                assert page.get_by_role("radio").count() == 3
+                assert page.locator(".reply-choice-copy").first.inner_text().startswith("Preserve for one release")
+                assert page.get_by_role("button", name="Send reply").count() == 1
                 assert page.locator(".decision-uncertainty").is_visible()
                 if width < 600:
                     page.locator(".mobile-primary > summary").click()
@@ -55,6 +56,7 @@ def main() -> None:
                     page.locator(".mobile-primary > summary").click()
                 # An input must stay on the page after blur and even after closing all disclosures.
                 editor = page.locator('textarea[name="text"]')
+                page.get_by_role("radio", name=re.compile("Write my own answer")).check()
                 editor.fill("Preserve compatibility; check usage before removal.")
                 page.locator("h1").click()
                 page.evaluate("document.querySelectorAll('details').forEach(d=>d.open=false); window.__draftMarker=42; window.__carTimers.find(fn=>typeof fn==='function'&&fn.name==='refresh')()")
@@ -64,7 +66,7 @@ def main() -> None:
                 page.once("dialog", lambda dialog: dialog.dismiss())
                 page.get_by_role("link", name="Refresh", exact=True).click()
                 assert editor.input_value().startswith("Preserve compatibility")
-                page.locator(".decision-composer > summary").click()
+                page.get_by_role("button", name="Keep editing").click()
                 page.screenshot(path=str(root / f"decision-{width}-{scheme}.png"), full_page=True)
                 assert not errors, errors
                 checks.append(f"{width}px {scheme}: layout, labels, options, uncertainty, menu, draft after blur, refresh cancel")

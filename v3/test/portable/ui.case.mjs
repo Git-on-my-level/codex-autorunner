@@ -15,9 +15,12 @@ function fixture(t){const clock={now:()=>new Date('2026-09-04T12:00:00Z')};const
 function render(service,row,opts={}){return String(RequestCard({view:service.view(row),row,canWrite:true,detail:true,...opts}))}
 test('decision choices expose exact answer, consequences, uncertainty and evidence before commitment',t=>{
  const s=fixture(t),r=s.raise(owner,'one',packet),html=render(s,r);
- for(const o of packet.options){assert.ok(html.includes(o.answer));assert.ok(html.includes(o.consequences));assert.ok(html.indexOf(o.answer)<html.indexOf('Choose: '+o.label))}
- assert.ok(html.indexOf('Before deciding')<html.indexOf('Choose:'));assert.match(html,/Source agent recommends/);assert.match(html,/not independent verification/);
- assert.match(html,/name="expected_revision" value="1"/);assert.match(html,/Every answer is scoped to this request/);
+ for(const o of packet.options){assert.ok(html.includes(o.answer));assert.ok(html.includes(o.consequences));assert.ok(html.indexOf(o.answer)<html.indexOf('Send reply'))}
+ assert.ok(html.indexOf('Before deciding')<html.indexOf('Send reply'));assert.match(html,/Source agent recommends/);assert.match(html,/not independent verification/);
+ assert.match(html,/name="expected_revision" value="1"/);assert.match(html,/Applies to this request only/);
+ assert.equal((html.match(/action="[^"]+\/answer"/g)||[]).length,1);
+ assert.equal((html.match(/type="radio"/g)||[]).length,3);
+ assert.match(html,/Write my own answer/);assert.match(html,/Moves to Watching/);
 });
 test('source-provided HTML remains text in every decision field',t=>{
  const s=fixture(t),evil='<img src=x onerror="window.injected=true">',r=s.raise(owner,'one',{...packet,question:evil,facts:[{statement:evil,source:'javascript:alert(1)'}]});

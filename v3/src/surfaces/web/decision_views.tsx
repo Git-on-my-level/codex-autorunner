@@ -58,20 +58,23 @@ export function RequestCard({ view, row, canWrite, detail = false }: { view: Dec
     {row.reviewed_at && <p><strong>Missed deadline reviewed:</strong> {row.review_note}</p>}
     <PacketEvidence packet={packet}/>
     {row.state === "needs_you" && canWrite && <section class="decision-composer" aria-label="Reply to this decision">
-      <h3 class="reply-heading">Reply</h3><div class="stack">
-      <div class="decision-options">{packet.options.map((option) => <form class="option-card" method="post" action={`/ui/decisions/${row.id}/answer`}>
-        <input type="hidden" name="expected_revision" value={row.revision}/><input type="hidden" name="option_id" value={option.id}/>
-        <h3>{option.label}</h3><p class="option-answer preserve-lines">{option.answer}</p>
-        <p class="muted"><strong>Consequence:</strong> {option.consequences}</p>
-        <button type="submit" class="button">Choose: {option.label}</button>
-      </form>)}</div>
-      <form class="answer-form" method="post" action={`/ui/decisions/${row.id}/answer`}>
+      <form class="answer-form reply-form" method="post" action={`/ui/decisions/${row.id}/answer`}>
         <input type="hidden" name="expected_revision" value={row.revision}/>
-        <label for={`answer-${row.id}`}>Your answer or a different instruction</label>
-        <textarea id={`answer-${row.id}`} name="text" rows={3} maxlength={8000} required placeholder="State the decision and any constraints for this request."/>
-        <button type="submit" class="button primary">Record decision</button>
-        <small class="muted">Every answer is scoped to this request. No standing permission is granted.</small>
-      </form></div>
+        <fieldset class="reply-choices"><legend class="reply-heading">Your reply</legend>
+          <p class="reply-hint muted">{packet.options.length ? "Choose an answer below, or write your own. Nothing is sent until you reply." : "Tell the agent how you’d like to proceed."}</p>
+          {packet.options.map((option) => <label class="reply-choice">
+            <input type="radio" name="option_id" value={option.id} required/>
+            <span class="reply-choice-copy"><strong>{option.label}</strong><span class="preserve-lines">{option.answer}</span><span class="muted reply-tradeoff">{option.consequences}</span></span>
+          </label>)}
+          {packet.options.length > 0 && <label class="reply-choice custom-choice"><input type="radio" name="option_id" value="" required/><span class="reply-choice-copy"><strong>Write my own answer</strong><span class="muted">Give a different direction or include specific conditions.</span></span></label>}
+          <div class={packet.options.length ? "custom-reply" : "custom-reply always-visible"}>
+            <label for={`answer-${row.id}`}>Your answer</label>
+            <textarea id={`answer-${row.id}`} name="text" rows={3} maxlength={8000} required={!packet.options.length} placeholder="Tell the agent what to do, including any conditions…"/>
+          </div>
+        </fieldset>
+        <div class="reply-send"><button type="submit" class="button primary">Send reply <span aria-hidden="true">↗</span></button><p class="muted">Moves to Watching while the agent picks up your reply.</p></div>
+        <small class="muted reply-scope">Applies to this request only.</small>
+      </form>
     </section>}
     {row.state === "expired" && !row.reviewed_at && canWrite && <form class="answer-form outcome-review" method="post" action={`/ui/decisions/${row.id}/review-expiry`}>
       <input type="hidden" name="expected_revision" value={row.revision}/>
@@ -79,8 +82,8 @@ export function RequestCard({ view, row, canWrite, detail = false }: { view: Dec
       <textarea id={`review-${row.id}`} name="note" rows={2} maxlength={2000} required placeholder="For example: asked the source for a fresh decision, or this work is no longer needed."/>
       <button type="submit" class="button">Acknowledge missed decision</button><small class="muted">Moves to history as expired, never as approved or resolved.</small>
     </form>}
-    {detail && !terminalRequest(row.state) && canWrite && <details><summary>Withdraw an obsolete request</summary><div class="details-body stack">
-      <p>This prevents further use of this answer through CAR. It cannot undo work the agent has already performed. Check the source when necessary.</p>
+    {detail && !terminalRequest(row.state) && canWrite && <details class="withdraw-request"><summary>No longer needed?</summary><div class="details-body stack">
+      <p>Withdraw this request when a decision is no longer needed. This stops further use of the reply through CAR, but does not undo work the agent has already performed.</p>
       <form class="answer-form" method="post" action={`/ui/decisions/${row.id}/withdraw`}><input type="hidden" name="expected_revision" value={row.revision}/>
         <label for={`withdraw-${row.id}`}>Why is this request no longer needed?</label><textarea id={`withdraw-${row.id}`} name="reason" rows={2} maxlength={2000} required/>
         <button class="button danger" type="submit">Withdraw request</button>

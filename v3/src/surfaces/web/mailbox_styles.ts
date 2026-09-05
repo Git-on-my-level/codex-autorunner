@@ -68,12 +68,6 @@ export const MAILBOX_CSS = `
   .decision-message .details-body p{font-size:13px}
   .decision-message .decision-composer{border-top:1px solid var(--border);padding-top:22px}
   .decision-message .reply-heading{font-size:14px;font-weight:600;margin-bottom:18px}
-  .decision-message .decision-options{display:grid;grid-template-columns:1fr;gap:0;border:1px solid var(--border);border-radius:6px;overflow:hidden}
-  .decision-message .option-card{border:0;border-bottom:1px solid var(--border);border-radius:0;padding:16px;gap:7px;grid-template-columns:minmax(0,1fr);background:var(--raised)}
-  .decision-message .option-card:last-child{border-bottom:0}
-  .decision-message .option-card h3{font-size:13px;font-weight:600}
-  .decision-message .option-card p{font-size:12px;line-height:1.65}
-  .decision-message .option-card button{font-size:12px;min-height:32px;margin-top:4px;background:var(--surface)}
   .decision-message .answer-form{gap:10px}
   .decision-message .answer-form label{font-size:12px}
   .decision-message .answer-form textarea{border-color:var(--border-strong);font-size:14px;line-height:1.6;min-height:108px;border-radius:6px}
@@ -85,8 +79,24 @@ export const MAILBOX_CSS = `
   .mailbox-list .pager{padding:16px 22px;margin:0;justify-content:space-between}
   .mailbox-list .pager .button{min-height:32px;font-size:12px}
   .mailbox-reader>.notice{margin:16px 36px 0;font-size:12px;background:var(--raised);border:1px solid var(--border);border-radius:4px}
-  @media(min-width:1200px){.decision-message .option-card{grid-template-columns:minmax(0,1fr) auto;column-gap:24px}.decision-message .option-card h3,.decision-message .option-card p{grid-column:1}.decision-message .option-card button{grid-column:2;grid-row:1/4;align-self:center;max-width:190px;margin:0}}
-  .mailbox-main>.refresh-paused{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:30;width:max-content;max-width:90vw;margin:0;padding:9px 14px;border:1px solid var(--border-strong);background:var(--surface);box-shadow:var(--shadow);color:var(--muted);font-size:12px}
+  .mailbox-main>.refresh-paused{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+  .reply-choices{border:0;padding:0;margin:0;min-width:0;display:grid;gap:8px}
+  .decision-message .reply-heading{margin:0;padding:0 0 6px;font-size:15px}
+  .decision-message .reply-hint{font-size:12px;margin-bottom:8px}
+  .decision-message .reply-choice{display:flex;align-items:flex-start;gap:12px;padding:14px 16px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:transparent;color:var(--fg)}
+  .reply-choice:hover{background:var(--raised)}
+  .reply-choice:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
+  .reply-choice:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
+  .reply-choice input[type=radio]{flex:0 0 16px;width:16px;height:16px;min-height:0;margin:3px 0 0;accent-color:var(--accent)}
+  .reply-choice-copy{display:grid;gap:5px;min-width:0;line-height:1.6}
+  .reply-choice-copy strong{font-size:13px;font-weight:600}.reply-tradeoff{font-size:12px}
+  .custom-reply{display:none;gap:8px;padding:8px 0 4px}
+  .reply-choices:has(.custom-choice input:checked) .custom-reply,.custom-reply.always-visible{display:grid}
+  .reply-send{display:flex;align-items:center;gap:16px;margin-top:12px}
+  .reply-send .button{min-height:40px;gap:18px;flex-shrink:0}
+  .decision-message .reply-send p{font-size:12px;max-width:34ch;line-height:1.5}
+  .decision-message .reply-scope{margin-top:0}
+  @media(max-width:480px){.reply-send{align-items:flex-start;flex-direction:column;gap:10px}.reply-send .button{width:100%;justify-content:center;min-height:44px}.decision-message .reply-choice{padding:12px}}
   .draft-navigation{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:40;width:380px;max-width:calc(100vw - 32px);padding:20px;border:1px solid var(--border-strong);border-radius:8px;background:var(--surface);box-shadow:0 8px 32px #0002;font-size:13px}.draft-navigation p{margin:5px 0 16px;color:var(--muted)}.draft-navigation[hidden]{display:none}
   @media(min-width:1500px){.app-shell{grid-template-columns:208px minmax(0,1fr)}.mailbox{grid-template-columns:380px minmax(0,1fr)}}
   @media(max-width:1100px) and (min-width:761px){.app-shell{grid-template-columns:150px minmax(0,1fr)}.mailbox{grid-template-columns:280px minmax(0,1fr)}.app-shell .brand{padding:0 8px}.app-shell nav.primary>a{padding:9px 8px}.mailbox-reader .decision-message{padding:24px}.reader-toolbar{padding:16px 24px}.mail-row{padding:16px 18px}.decision-message h2{font-size:21px}}
@@ -105,7 +115,7 @@ export const MAILBOX_CSS = `
     .reader-back{display:inline-flex;align-items:center;min-height:44px}.reader-position{display:none}.reader-navigation{gap:16px}.reader-navigation a{padding:10px 0;min-height:44px;display:inline-flex;align-items:center}.mailbox:not(.mailbox-selected) .reader-skip-link{display:none}
     .mailbox-reader .decision-message{padding:24px 20px 48px;gap:20px}.decision-message h2{font-size:22px}
     .message-sender{padding-bottom:20px}.message-sender time{max-width:110px}.decision-message .answer-form textarea{font-size:16px}
-    .decision-message .option-card button{min-height:44px}.decision-message .option-card{padding:16px}.decision-message summary{min-height:44px;display:list-item}
+    .decision-message summary{min-height:44px;display:list-item}
     .mailbox-reader>.notice{margin:12px 20px 0}.mailbox-main>.refresh-paused{bottom:12px}
   }
 `;

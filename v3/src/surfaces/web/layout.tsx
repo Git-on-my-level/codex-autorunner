@@ -21,10 +21,6 @@ const CSS = `
   .recommended-answer{font-weight:650;color:var(--strong)}
   .decision-uncertainty{padding:12px 14px;border:1px solid var(--border-strong);border-radius:8px}
   .decision-uncertainty p{margin-top:5px}
-  .decision-composer .decision-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:12px;align-items:stretch}
-  .option-card{display:grid;align-content:start;gap:10px;padding:15px;border:1px solid var(--border);border-radius:8px;min-width:0}
-  .option-card button{justify-self:start;max-width:100%;white-space:normal;text-align:left}
-  .option-answer{font-size:14px;overflow-wrap:anywhere}
   .refresh-paused{padding:10px 14px;background:var(--warning-soft);border-radius:8px;margin-bottom:12px}
   .refresh-paused[hidden]{display:none}
   .decision-record-link{font-size:13px}
