@@ -73,6 +73,19 @@ export function createWebUi(deps: DaemonDeps, attention = new AttentionService(d
   const app = new Hono();
   const db = deps.store.db;
 
+  // JSX renders the document element, not its doctype. Without this boundary
+  // browsers enter quirks mode (including legacy form margins and sizing).
+  app.use("*", async (c, next) => {
+    await next();
+    if (c.req.method === "HEAD" || !c.res.headers.get("content-type")?.includes("text/html")) return;
+    const body = await c.res.text();
+    const headers = new Headers(c.res.headers);
+    headers.delete("content-length");
+    c.res = new Response(/^\s*<!doctype html>/i.test(body) ? body : `<!doctype html>${body}`, {
+      status: c.res.status, statusText: c.res.statusText, headers,
+    });
+  });
+
   app.onError(async (error, c) => {
     const status = error instanceof AttentionError ? error.status : error instanceof z.ZodError ? 400 : 500;
     const message = error instanceof AttentionError ? error.message : error instanceof z.ZodError

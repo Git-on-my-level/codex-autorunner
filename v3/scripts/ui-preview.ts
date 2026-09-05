@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { AttentionService } from "../src/attention/service.ts";
 import { DecisionPacket } from "../src/attention/contract.ts";
 /**
@@ -264,16 +263,129 @@ store.db.query("UPDATE outbox SET state = 'delivered', sent_message_id = 'tg-pre
 // Seed the current decision experience as well as the advanced legacy inspectors.
 const attention = new AttentionService(store, config, deps.channel);
 const owner = { workspaceId: config.attention.workspace_id, clientId: "preview-mac", host: "preview-host" };
-const packet = DecisionPacket.parse(JSON.parse(readFileSync(new URL("../examples/attention/migration-decision.json", import.meta.url), "utf8")));
-attention.raise(owner, "preview-needs-you", packet);
-attention.raise(owner, "preview-preparing", DecisionPacket.parse({ goal: "Repair CI", blocker: "Failure cause unknown", question: "Should we change the supported runtime?" }));
-const waiting = attention.raise(owner, "preview-waiting", { ...packet, question: "Approve the staged migration plan?" });
-attention.answer(waiting.id, waiting.revision, "human:preview", { option_id: "preserve" });
-const finished = attention.raise(owner, "preview-complete", { ...packet, question: "Preserve the compatibility test fixture?" });
-const received = attention.answer(finished.id, finished.revision, "human:preview", { text: "Keep the fixture" });
+const releasePacket = DecisionPacket.parse({
+  goal: "Roll out the v3 release safely",
+  blocker: "The canary rollback owner is not recorded",
+  question: "Should Release start a 10% canary today?",
+  project: "Release",
+  why_human: "This changes customer exposure and rollback responsibility; the runbook does not choose an owner.",
+  attempts: ["Read the release runbook", "Checked the staging checklist"],
+  facts: [
+    { statement: "All release checks are green on the candidate build", source: "release/checklist.md:42" },
+    { statement: "The canary rollback command is tested in staging", source: "release/canary.sh:18" },
+  ],
+  recommendation: { answer: "Start the canary with the on-call owning rollback", rationale: "The candidate is verified, and a bounded rollout limits exposure while preserving a clear recovery path." },
+  options: [
+    { id: "canary", label: "Start 10% canary", answer: "Start the 10% canary and keep the on-call as rollback owner", consequences: "Customer exposure begins; pause or roll back on error budget breach" },
+    { id: "hold", label: "Hold release", answer: "Hold the candidate until a named rollback owner is recorded", consequences: "No customer exposure, but the release window may slip" },
+  ],
+  uncertainty: ["The next deploy window is not guaranteed if this canary is deferred."],
+  impact: "Unblocks the release window without turning a green check into an unbounded rollout.",
+  urgency: "urgent",
+});
+const sdkPacket = DecisionPacket.parse({
+  goal: "Publish SDK 5.0 without breaking supported clients",
+  blocker: "One client still calls the deprecated callback API",
+  question: "Should SDK keep the callback shim for one release?",
+  project: "SDK",
+  why_human: "Removing the shim changes the public compatibility promise and no deprecation deadline is recorded.",
+  attempts: ["Searched client call sites", "Read the migration notes"],
+  facts: [
+    { statement: "The mobile sample still imports the callback adapter", source: "sdk/examples/mobile.ts:27" },
+    { statement: "The async replacement is available in 5.0", source: "sdk/README.md:88" },
+  ],
+  recommendation: { answer: "Keep the shim for one release", rationale: "The known client can migrate without blocking the SDK publication, and removal can be a separate explicit decision." },
+  options: [
+    { id: "keep", label: "Keep shim", answer: "Keep the callback shim through SDK 5.0", consequences: "Carry a small compatibility surface and announce removal for 6.0" },
+    { id: "remove", label: "Remove now", answer: "Remove the callback shim in SDK 5.0", consequences: "The remaining client must migrate before upgrading" },
+  ],
+  uncertainty: ["The client inventory may not include private downstream applications."],
+  impact: "Unblocks SDK release planning while making the compatibility cost explicit.",
+});
+const ciPacket = DecisionPacket.parse({
+  goal: "Merge the CI stabilization change",
+  blocker: "One integration job flakes after the new cache step",
+  question: "Should CI block merge until the job is rerun?",
+  project: "CI",
+  why_human: "The rerun policy determines whether a red signal is treated as evidence or noise for this change.",
+  attempts: ["Compared the failed logs", "Checked the cache key change"],
+  facts: [
+    { statement: "The failure is a timeout in the unchanged integration suite", source: ".github/workflows/test.yml:67" },
+    { statement: "The same job passed twice on the prior commit", source: "ci/history/2026-08-30.md:11" },
+  ],
+  recommendation: { answer: "Rerun the job once before deciding", rationale: "A bounded rerun distinguishes a transient timeout from a cache regression without silently ignoring a second failure." },
+  options: [
+    { id: "rerun", label: "Rerun once", answer: "Rerun the integration job once and block on a second failure", consequences: "Adds one CI cycle while preserving a clear failure threshold" },
+    { id: "merge", label: "Merge now", answer: "Merge with the timeout recorded as a transient failure", consequences: "Shortens feedback time but accepts less evidence about the cache change" },
+  ],
+  uncertainty: ["The timeout may be load-related and not reproducible in the next run."],
+  impact: "Unblocks a reliable merge decision without turning one flaky result into a silent pass.",
+});
+
+attention.raise(owner, "preview-release-canary", releasePacket);
+attention.raise(owner, "preview-sdk-shim", sdkPacket);
+attention.raise(owner, "preview-ci-rerun", ciPacket);
+attention.raise(owner, "preview-preparing", DecisionPacket.parse({
+  goal: "Ship the notarized desktop build",
+  blocker: "The signing lane for the release candidate is not identified",
+  question: "Which signing lane should own the notarized build?",
+  project: "Build",
+}));
+const waiting = attention.raise(owner, "preview-waiting", DecisionPacket.parse({
+  goal: "Validate the staged release candidate",
+  blocker: "The smoke-test owner has not confirmed the canary result",
+  question: "Should the release team proceed to the next canary stage?",
+  project: "Release",
+  why_human: "Proceeding changes exposure; the source has supplied evidence but not a human-owned go-ahead.",
+  attempts: ["Read the staged rollout report", "Checked the smoke-test dashboard"],
+  facts: [{ statement: "The first canary stayed within the error budget", source: "release/smoke-report.md:14" }],
+  recommendation: { answer: "Proceed to the next canary stage", rationale: "The bounded first stage stayed healthy and the next step remains reversible." },
+  options: [
+    { id: "proceed", label: "Proceed", answer: "Proceed to the next canary stage", consequences: "Increase exposure while continuing the rollback watch" },
+    { id: "hold", label: "Hold", answer: "Hold at the current canary percentage", consequences: "Preserve the current safety margin and delay the rollout" },
+  ],
+  uncertainty: ["The report does not include the full weekend traffic profile."],
+  impact: "Unblocks the staged rollout decision while keeping the current canary reversible.",
+}));
+attention.answer(waiting.id, waiting.revision, "human:preview", { option_id: "proceed" });
+const finished = attention.raise(owner, "preview-complete", DecisionPacket.parse({
+  goal: "Publish SDK 5.0 with a tested migration path",
+  blocker: "The legacy compatibility fixture is ready to archive",
+  question: "Should SDK retain the fixture through this release?",
+  project: "SDK",
+  why_human: "Archiving the fixture removes a migration guard and needs an explicit release decision.",
+  attempts: ["Ran the compatibility suite", "Reviewed the migration guide"],
+  facts: [{ statement: "All supported clients pass against the async API", source: "sdk/compat.test.ts:112" }],
+  recommendation: { answer: "Retain the fixture for this release", rationale: "Keeping one release of coverage protects the documented migration path at low cost." },
+  options: [
+    { id: "retain", label: "Retain fixture", answer: "Retain the compatibility fixture through SDK 5.0", consequences: "Keep one extra release of coverage before archiving it" },
+    { id: "archive", label: "Archive now", answer: "Archive the fixture with SDK 5.0", consequences: "Reduce maintenance now but remove the migration guard" },
+  ],
+  uncertainty: ["A private downstream may rely on the fixture's exact behavior."],
+  impact: "Closes the release decision with an explicit compatibility outcome.",
+}));
+const received = attention.answer(finished.id, finished.revision, "human:preview", { option_id: "retain" });
 attention.acknowledge(owner, finished.id, received.id, "received");
-attention.acknowledge(owner, finished.id, received.id, "resolved", "Source confirmed work resumed");
+attention.acknowledge(owner, finished.id, received.id, "resolved", "Source confirmed the migration guard remains in place");
 const app = mountApp(deps);
 const port = Number(process.env.CAR_UI_PREVIEW_PORT ?? 7194);
-const server = Bun.serve({ hostname: "127.0.0.1", port, fetch: app.fetch });
+const previewTheme = process.env.CAR_UI_PREVIEW_THEME;
+if (previewTheme !== undefined && previewTheme !== "light" && previewTheme !== "dark") {
+  throw new Error("CAR_UI_PREVIEW_THEME must be light or dark");
+}
+const previewFetch = async (request: Request): Promise<Response> => {
+  const response = await app.fetch(request);
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!previewTheme || !contentType.toLowerCase().includes("text/html")) return response;
+  const html = await response.text();
+  const darkMedia = previewTheme === "dark"
+    ? "@media all"
+    : "@media (prefers-color-scheme: dark) and (min-width: 1000000px)";
+  const themed = html.replaceAll("@media (prefers-color-scheme: dark)", darkMedia)
+    .replace("color-scheme: light dark", `color-scheme: ${previewTheme}`);
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
+  return new Response(themed, { status: response.status, statusText: response.statusText, headers });
+};
+const server = Bun.serve({ hostname: "127.0.0.1", port, fetch: previewFetch });
 console.log(`CAR v3 UI preview: ${server.url}ui`);

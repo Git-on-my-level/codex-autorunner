@@ -1,5 +1,6 @@
 /** Shared chrome for the offline, server-rendered operator console. */
 import type { FC, PropsWithChildren } from "hono/jsx";
+import { MAILBOX_CSS } from "./mailbox_styles.ts";
 
 export const UI_ROOT = "/ui";
 
@@ -35,22 +36,22 @@ const CSS = `
     color-scheme: light dark;
     --font-ui: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-    --bg: #f7f6f1; --surface: #fff; --raised: #fbfbf9; --sunken: #f1f0eb;
-    --fg: #20211f; --strong: #111210; --muted: #666862; --faint: #858780;
-    --border: #deddd7; --border-strong: #c9c8c1; --accent: #0f7666; --accent-soft: #e3f3ef;
+    --bg: #f8f9fa; --surface: #fff; --raised: #f7f8f9; --sunken: #eef0f2;
+    --fg: #35383d; --strong: #191b20; --muted: #686d76; --faint: #6a717b;
+    --border: #e8eaed; --border-strong: #d3d7dc; --accent: #303943; --accent-soft: #f0f2f4;
     --positive: #24734c; --positive-soft: #e5f3e9; --warning: #946312; --warning-soft: #f9eed7;
     --critical: #b63b3b; --critical-soft: #fae8e7; --info: #3566a8; --info-soft: #e8eef8;
-    --focus: #138a72; --control-border: #858780; --on-accent: #fff; --shadow: 0 1px 2px rgba(25,27,23,.045);
+    --focus: #526f9c; --control-border: #c4c9cf; --on-accent: #fff; --shadow: 0 1px 2px rgba(25,27,23,.045);
     --radius-sm: 4px; --radius-md: 7px; --radius-lg: 10px;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #0a0c12; --surface: #10131c; --raised: #141823; --sunken: #0c0f16;
-      --fg: #d9dce5; --strong: #f5f6f9; --muted: #9ba1af; --faint: #777e8d;
-      --border: #262b37; --border-strong: #363d4c; --accent: #6cf5d8; --accent-soft: #123a35;
+      --bg: #17181b; --surface: #1c1d21; --raised: #23252a; --sunken: #292c32;
+      --fg: #d2d4d8; --strong: #f1f2f4; --muted: #a0a5ae; --faint: #959ca7;
+      --border: #2d3036; --border-strong: #424750; --accent: #dde1e7; --accent-soft: #292c32;
       --positive: #7cdea5; --positive-soft: #143626; --warning: #f0bd64; --warning-soft: #3a2c16;
       --critical: #ff8f8a; --critical-soft: #42201f; --info: #8fb8f2; --info-soft: #192c46;
-      --focus: #6cf5d8; --control-border: #667084; --on-accent: #07110f; --shadow: 0 1px 2px rgba(0,0,0,.3);
+      --focus: #a7bfe3; --control-border: #505762; --on-accent: #191b20; --shadow: 0 1px 2px rgba(0,0,0,.3);
     }
   }
   *,*::before,*::after{box-sizing:border-box}
@@ -109,25 +110,30 @@ const CSS = `
   @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important}}
 `;
 
-export const Layout: FC<PropsWithChildren<{ title: string; active?: string; refreshSeconds?: number; navCounts?: NavigationCounts }>> = ({ title, active, refreshSeconds, navCounts, children }) => {
+export const Layout: FC<PropsWithChildren<{ title: string; active?: string; refreshSeconds?: number; navCounts?: NavigationCounts; mailbox?: boolean }>> = ({ title, active, refreshSeconds, navCounts, mailbox, children }) => {
   const refreshMs = refreshSeconds ? Math.max(5, Math.min(60, refreshSeconds)) * 1_000 : 0;
   const navCount = (href: string) => !navCounts ? undefined : href === "/ui" ? navCounts.needs_you : href === "/ui/watching" ? navCounts.watching : href === "/ui/handled" ? navCounts.handled : undefined;
   return <html lang="en">
     <head>
       <meta charSet="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-      <meta name="theme-color" content="#f7f6f1" media="(prefers-color-scheme: light)" />
-      <meta name="theme-color" content="#0a0c12" media="(prefers-color-scheme: dark)" />
-      <title>{title} — CAR</title><style dangerouslySetInnerHTML={{ __html: CSS }} />
+      <meta name="theme-color" content="#f8f9fa" media="(prefers-color-scheme: light)" />
+      <meta name="theme-color" content="#17181b" media="(prefers-color-scheme: dark)" />
+      <title>{title} — CAR</title><style dangerouslySetInnerHTML={{ __html: CSS + MAILBOX_CSS }} />
       {refreshMs ? <script data-live-refresh="true" src="/ui/live-refresh.js" data-refresh-ms={refreshMs} defer /> : null}
     </head>
-    <body>
+    <body class={`app-shell${mailbox ? " mailbox-shell" : ""}`}>
       <a class="skip-link" href="#main-content">Skip to content</a>
       <header class="app-bar"><div class="app-bar-inner">
-        <a class="brand" href={UI_ROOT} aria-label="CAR attention router home"><span>CAR</span><span class="brand-version">v3</span></a>
+        <a class="brand" href={UI_ROOT} aria-label="CAR attention router home"><span>CAR</span><span class="brand-version">Workspace</span></a>
+        <span class="sidebar-caption">Decisions</span>
         <nav class="primary" aria-label="Primary navigation">{PRIMARY_NAV.map((item) => <a href={item.href} aria-current={active === item.href ? "page" : undefined}>{item.label}{navCount(item.href) !== undefined && <span class="nav-count">{navCount(item.href)}</span>}</a>)}</nav>
         <details class="mobile-primary"><summary>Menu</summary><nav class="mobile-primary-links" aria-label="Mobile primary navigation"><span class="nav-group-label">Work</span>{PRIMARY_NAV.map((item) => <a href={item.href} aria-current={active === item.href ? "page" : undefined}>{item.label}{navCount(item.href) !== undefined && <span class="nav-count">{navCount(item.href)}</span>}</a>)}<span class="nav-group-label">System</span>{SYSTEM_NAV.map((item) => <a href={item.href} aria-current={active === item.href ? "page" : undefined}>{item.label}{navCount(item.href) !== undefined && <span class="nav-count">{navCount(item.href)}</span>}</a>)}</nav></details>
       </div></header>
-      <main id="main-content"><p id="refresh-paused" class="refresh-paused" role="status" hidden>Live refresh paused while you review or edit. Your draft stays on this page; refresh when ready.</p>{children}</main>
+      <main id="main-content" class={mailbox ? "mailbox-main" : undefined}><p id="refresh-paused" class="refresh-paused" role="status" hidden>Refresh paused while you read or reply.</p>{children}</main>
+      {refreshMs ? <div id="draft-navigation" class="draft-navigation" role="alert" hidden>
+        <strong>You have an unsent reply</strong><p>Keep editing, or discard it to continue.</p>
+        <div class="actions"><button id="keep-draft" class="button primary" type="button">Keep editing</button><a id="discard-draft" class="button ghost" href="">Discard and continue</a></div>
+      </div> : null}
     </body>
   </html>;
 };
