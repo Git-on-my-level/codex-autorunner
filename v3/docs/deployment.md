@@ -15,15 +15,19 @@ bun run src/cli.ts init
 bun run src/cli.ts serve
 ```
 
-`init` creates private configuration, a server credentials file and an agent
+`init` creates private configuration, an agent credential file and an agent
 connection file under `~/.car/`. It refuses to overwrite existing files. For a
 separate test workspace, use `init --config /absolute/private-directory/config.toml`
 and give `serve` that same `--config` path.
 
-Open `http://127.0.0.1:7171/ui`. Sign in using `CAR_WEB_TOKEN` from the private
-credentials file on the server. Give a calling agent **only** its `agent.json`.
-Never give an agent `credentials.json`: it contains the human token. The default
-client profile is `~/.car/agent.json`; override with `CAR_CONNECTION_FILE`.
+Open `http://127.0.0.1:7171/ui`. Local setup is trusted by default and opens the
+human UI without a token. To require a login, set `http.web_auth = "required"`
+and add a `web` entry to `http.ingest_tokens` or `http.ingest_token_envs`.
+Configured web tokens always enable the login flow, even when `web_auth` is
+`optional`. Tokenless browser writes remain same-origin only. Give a calling
+agent **only** its `agent.json`; never give an agent the server credential file.
+The default client profile is `~/.car/agent.json`; override with
+`CAR_CONNECTION_FILE`.
 
 No model credential or Telegram bot is required. Complete requests reach the human
 without a model. Incomplete requests are returned to the source for bounded context

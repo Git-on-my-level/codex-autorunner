@@ -181,11 +181,14 @@ a binding. Rebinding never retargets an already-created intent implicitly.
   --title "…" ` wraps it for CI/cron.
 - **Telegram**: forwarded/plain messages not matching a reply flow become `note` events.
 
-Auth: every ingest, mutation, or provider-control caller has an explicit source
-identity and credential, including localhost callers. Only explicitly classified safe
-health/read endpoints may be anonymous. Non-local binds additionally require transport
-and Host/Origin protections appropriate to the deployment. Credentials never appear
-in URLs or routine logs. Process locality alone is not authentication.
+Auth: every ingest, provider-control caller and agent mutation has an explicit source
+identity and credential. Human web auth is optional for trusted/local workspaces:
+when no web token is configured, the UI is intentionally open and browser writes
+remain same-origin only; configuring a web token enables the login/session boundary.
+Set `http.web_auth = "required"` to fail closed even without a token. Non-local binds
+should use a token and transport protections appropriate to the deployment.
+Credentials never appear in URLs or routine logs. Process locality alone is not
+authentication for agent or provider callers.
 
 ## 3. Data model (SQLite, WAL, single file `~/.car/car.db`)
 
@@ -665,8 +668,9 @@ Advanced event, incident, provider/policy, grants, digest and run inspection rem
 secondary. The UI projects core state; it cannot mutate lifecycle through its own
 state machine. Counts and rows share predicates. Drafts survive blur and automatic
 refresh. Error pages preserve submitted decision text without claiming success.
-Local and remote authenticated deployments use the same UI; proxy/TLS origin is
-configured explicitly. See `docs/deployment.md` and ADR 0003.
+Local and remote deployments use the same UI. Trusted/local setups may omit human
+web auth; remote deployments should configure a web token and proxy/TLS origin
+explicitly. See `docs/deployment.md` and ADR 0003.
 
 ## 10. Implemented rewrite boundary
 

@@ -50,7 +50,7 @@ import {
 } from "./views.tsx";
 import { archiveMemory, demoteMemory, decideProposal, addNote } from "./writes.ts";
 import { buildBriefMarkdown } from "./brief.ts";
-import { authenticateWebWrite, establishWebSession, hasWebWriteSession, clearWebSession } from "./auth.ts";
+import { authenticateWebWrite, establishWebSession, hasWebWriteSession, clearWebSession, webAuthOptional } from "./auth.ts";
 
 const UI_PATH = "/ui";
 
@@ -135,9 +135,10 @@ export function createWebUi(deps: DaemonDeps, attention = new AttentionService(d
 
   app.get("/live-refresh.js", (c) => c.body(LIVE_REFRESH_JS, 200, { "content-type": "application/javascript; charset=utf-8" }));
 
-  app.get("/login", (c) => c.html(LoginPage()));
+  app.get("/login", (c) => webAuthOptional(deps.config) ? c.redirect(UI_PATH, 303) : c.html(LoginPage()));
 
   app.post("/login", async (c) => {
+    if (webAuthOptional(deps.config)) return c.redirect(UI_PATH, 303);
     const body = await c.req.parseBody();
     const token = typeof body.token === "string" ? body.token : "";
     if (!establishWebSession(c, deps.config, token)) {

@@ -14,16 +14,18 @@ export function initialize(configPath = join(homedir(), ".car", "config.toml")) 
   const connectionPath = join(stateDir, "agent.json");
   for (const path of [configPath, credentialsPath, connectionPath]) if (existsSync(path)) throw new Error(`Refusing to overwrite ${path}. Choose a different empty directory; setup never overwrites existing state.`);
   privateDirectory(stateDir);
-  const secrets = { CAR_WEB_TOKEN: randomBytes(32).toString("base64url"), CAR_AGENT_TOKEN: randomBytes(32).toString("base64url") };
+  // The human web token is opt-in. Local/trusted workspaces open the UI
+  // directly; operators who need a login can add a web token later.
+  const secrets = { CAR_AGENT_TOKEN: randomBytes(32).toString("base64url") };
   if (!writePrivateJson(credentialsPath, secrets) || !writePrivateJson(connectionPath, { url: "http://127.0.0.1:7171", token: secrets.CAR_AGENT_TOKEN, client_id: "local" })) throw new Error("Setup files already exist; nothing was overwritten");
   const config = {
     state_dir: stateDir, credentials_file: credentialsPath,
-    http: { host: "127.0.0.1", port: 7171, private_reads: true, ingest_token_envs: { web: "CAR_WEB_TOKEN" } },
+    http: { host: "127.0.0.1", port: 7171, private_reads: true, web_auth: "optional" },
     attention: { workspace_id: "default", clients: { local: { token_env: "CAR_AGENT_TOKEN", host: hostname() } } },
   };
   writeFileSync(configPath, stringify(config), { flag: "wx", mode: 0o600 });
-  return { config: configPath, agent_connection: connectionPath, human_credentials_file: credentialsPath,
-    next_action: `Start card serve --config ${JSON.stringify(configPath)}; open http://127.0.0.1:7171/ui and sign in with CAR_WEB_TOKEN from the private credentials file. Give agents only agent.json, never credentials.json.` };
+  return { config: configPath, agent_connection: connectionPath, credentials_file: credentialsPath,
+    next_action: `Start card serve --config ${JSON.stringify(configPath)}; open http://127.0.0.1:7171/ui. The local UI is open by default; set http.web_auth = "required" and configure a web token when a login is needed. Give agents only agent.json, never credentials.json.` };
 }
 export function addClient(input: { configPath?: string; name: string; host: string; url: string; output: string; allowHttp?: boolean }) {
   if (!/^[a-zA-Z0-9_-]{1,64}$/.test(input.name) || !input.host || input.host.length > 128) throw new Error("Use a short client name and the source host name");

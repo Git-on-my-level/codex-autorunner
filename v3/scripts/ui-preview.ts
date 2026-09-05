@@ -26,7 +26,7 @@ const clock = new FakeClock(new Date());
 const store = memoryStore(clock);
 const config = testConfig({
   state_dir: "/tmp/car-v3-ui-preview",
-  http: { private_reads: false, ingest_tokens: { web: "preview-token" } },
+  http: { private_reads: true, web_auth: "optional" },
   // The preview has no background poller; keep its seeded health fresh for a
   // normal review session while production retains the 15s default.
   agentctl_observer: { enabled: true, observe_all: true, interval_seconds: 3600 },

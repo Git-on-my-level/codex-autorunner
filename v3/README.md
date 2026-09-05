@@ -19,10 +19,10 @@ bun run src/cli.ts init
 bun run src/cli.ts serve
 ```
 
-Open `http://127.0.0.1:7171/ui`. `init` tells you where it wrote the private human
-credentials file and the separate agent connection file. Give an agent only its
-`agent.json`, never the server's `credentials.json`. No model or Telegram credential
-is needed for the default guided-decision path.
+Open `http://127.0.0.1:7171/ui`. Local setup opens the UI without a human token.
+To require a login, set `http.web_auth = "required"` and configure a web token.
+Give an agent only its `agent.json`, never the server credential file. No model or
+Telegram credential is needed for the default guided-decision path.
 
 The ordinary interface has four places:
 

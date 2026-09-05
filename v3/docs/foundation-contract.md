@@ -23,7 +23,7 @@ more “resolved” rows: missed blockers and false success make those metrics m
 | Local answer persistence precedes exact receipt, not execution | portable client: receipt-before-ACK, mismatched answer identity/receipt, no GET/WAIT acknowledgement |
 | CLI/MCP validate before offline acceptance | required Zod parser in CLI/MCP; integration schema tests; portable MCP validates before client call |
 | Reply payload is exactly one text answer or boolean approval, before persistence or receipt | `test/attention/payload.test.ts`: core/session rejection and malformed server response |
-| Browser sign-in preserves same-origin forms without accepting opaque/cross-origin writes | `test/attention/integration.test.ts`: referrer policy and cookie-origin checks; live browser round trip |
+| Browser sign-in or explicit tokenless trusted mode preserves same-origin forms without accepting opaque/cross-origin writes | `test/web/auth.test.ts`; `test/attention/integration.test.ts`: referrer policy and cookie-origin checks; live browser round trip |
 | Native expiry is durable after routing, preserves in-flight uncertainty and sibling obligations, and cannot be rewritten by reconciliation | `test/attention/native-expiry.test.ts`; native card outcome regression |
 | Multica closure names one exact authenticated source request, never a card-wide or expired outcome | `test/ingest/normalizers.test.ts`; `test/router/router.test.ts` |
 | MCP bounds work and does not falsely undo remote commits | portable MCP: handshake, duplicate in-flight ID, cancelled late response; transport limits in `mcp.ts` |

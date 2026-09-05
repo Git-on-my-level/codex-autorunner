@@ -271,15 +271,17 @@ the underlying problem appeared.
   single-flight attach/start, process and handle budgets, active-turn protection,
   startup reaping, and idempotent shutdown. Surface routing keys never own processes.
 
-### Local is not automatically trusted
+### Local is not automatically trusted by agents
 
 - **Scar:** Remote cookie/bootstrap and URL-token behavior required hardening in
   `83f90e1c` and `69de09e4`; localhost still needs Host/Origin protection.
 - **Evidence:** `docs/web/security.md:7-32,63-84,99-119`.
-- **Adopted invariant:** provider control and core mutation endpoints authenticate
-  independently of grants. Nonlocal access adds HTTPS and explicit Host/Origin policy;
-  credentials never appear in URLs or routine logs; being a local process is not proof
-  of identity.
+- **Adopted invariant:** provider control, ingest and agent mutation endpoints
+  authenticate independently of grants. Human web auth may be intentionally omitted
+  for a trusted/local workspace; tokenless browser writes still require same-origin
+  protection, and `web_auth = "required"` remains available. Nonlocal access should
+  add HTTPS and explicit Host/Origin policy; credentials never appear in URLs or
+  routine logs. Being a local process is not proof of agent or provider identity.
 
 ## 4. Migration and operations
 

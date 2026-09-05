@@ -1,7 +1,8 @@
 /**
  * Daemon configuration: ~/.car/config.toml (+ policy in policy.ts).
- * Defaults are fail-closed: localhost bind, no authenticated write callers,
- * no Telegram, and escalate-only until grants/safety allow effects.
+ * Defaults bind localhost, keep agent/event writes credentialed, allow a trusted
+ * local human UI without a login, disable Telegram, and stay escalate-only until
+ * grants/safety allow effects.
  */
 import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
@@ -18,11 +19,17 @@ export const CarConfig = z.object({
     .object({
       host: z.string().default("127.0.0.1"),
       port: z.number().int().min(0).max(65535).default(7171),
-      /** Private events/context require human authentication, including on localhost. */
+      /** Private event/context reads are gated when web authentication is configured. */
       private_reads: z.boolean().default(true),
+      /**
+       * Human web authentication is enabled by supplying a web token. Optional
+       * mode keeps trusted/local workspaces usable without a login; required
+       * mode fails closed when a token is absent.
+       */
+      web_auth: z.enum(["required", "optional"]).default("optional"),
       /** Explicit public origin when TLS terminates at a trusted reverse proxy. */
       public_origin: z.string().url().optional(),
-      /** Bearer tokens per authenticated write-source id. Localhost is not exempt. */
+      /** Bearer tokens per authenticated write-source id. */
       ingest_tokens: z.record(z.string(), z.string()).prefault({}),
       /** Optional env-var names containing tokens, keyed like ingest_tokens. */
       ingest_token_envs: z.record(z.string(), z.string()).prefault({}),
