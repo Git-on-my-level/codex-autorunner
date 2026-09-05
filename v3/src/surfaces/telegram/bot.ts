@@ -98,7 +98,9 @@ export function createBot(token: string, deps: HandlerDeps): BotHandle {
       }
       msg.from = String(actorId);
       const outcome = await routeIncomingMessage(deps, msg);
-      if (outcome.kind === "delivered") await ctx.reply("→ delivered to the agent.");
+      if (outcome.kind === "recorded") await ctx.reply("Answer recorded. CAR is tracking delivery and agent receipt separately.");
+      else if (outcome.kind === "ignored") await ctx.reply("That message could not answer an active request. Open the current decision card.");
+      else if (outcome.kind === "delivered") await ctx.reply("→ delivered to the agent.");
       else if (outcome.kind === "queued") await ctx.reply("→ queued for the agent.");
       else if (outcome.kind === "note") await ctx.reply("📝 noted.");
     } catch (err) {

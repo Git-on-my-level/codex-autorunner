@@ -27,6 +27,10 @@ import { createProviderObservationLoop } from "./providers/observations.ts";
 import { createRouter } from "./router/index.ts";
 import { createSafetyKernel, SqlSafetyLedger } from "./safety/index.ts";
 import { createEffectExecutor } from "./effects/index.ts";
+import { AttentionService } from "./attention/service.ts";
+import { createAttentionApi, validateAttentionCredentials } from "./attention/http.ts";
+import { createReplyWorker } from "./attention/replies.ts";
+import { createPreparationWorker } from "./attention/triage.ts";
 import { createCoreEffectAdapters } from "./effects/adapters.ts";
 
 /** Provider judgment is advisory; this seam performs no second authorization. */
@@ -40,6 +44,7 @@ const CORE_EXECUTION_POLICY: PolicyPort = {
 export async function startDaemon(configPath?: string): Promise<{ stop: () => Promise<void> }> {
   const config: CarConfig = loadConfig(configPath);
   validateProviderTopology(config);
+  validateAttentionCredentials(config);
   mkdirSync(config.state_dir, { recursive: true });
   mkdirSync(join(config.state_dir, "memory"), { recursive: true });
   mkdirSync(join(config.state_dir, "replies"), { recursive: true });
@@ -49,6 +54,13 @@ export async function startDaemon(configPath?: string): Promise<{ stop: () => Pr
     store.db.close();
     throw new Error(`another CAR v3 daemon owns ${dbPath(config)}`);
   }
+  const workspace = store.kvGet<string>("attention.workspace_id");
+  if (workspace && workspace !== config.attention.workspace_id) {
+    store.releaseDaemonOwner(daemonClaim);
+    store.db.close();
+    throw new Error("This database belongs to another attention workspace; use a separate state directory.");
+  }
+  store.kvSet("attention.workspace_id", config.attention.workspace_id);
   store.recoverExpiredClaims();
 
   const safety = createSafetyKernel({
@@ -90,6 +102,7 @@ export async function startDaemon(configPath?: string): Promise<{ stop: () => Pr
     leaseSeconds: config.triage.lease_seconds,
   });
 
+  const attention = new AttentionService(store, config, channel);
   const deps: DaemonDeps = {
     store,
     config,
@@ -101,9 +114,20 @@ export async function startDaemon(configPath?: string): Promise<{ stop: () => Pr
     policy: legacyPolicy,
   };
 
+  // Intelligence is optional and has no lifecycle or grant authority.
+  const preparationLoops: Loop[] = [];
+  if (config.attention.triage_enabled) {
+    const { createLlmRunner } = await import("./triage/llm.ts");
+    preparationLoops.push(createPreparationWorker(attention, createLlmRunner(config.attention.triage_model!, {
+      timeoutMs: config.attention.triage_timeout_seconds * 1_000, maxOutputTokens: 1_500,
+    })));
+  }
   const loops: Loop[] = [
     daemonOwnershipLoop(store, daemonClaim, safety),
-    createIngestServer(deps, [createWebUi(deps)]),
+    createIngestServer(deps, [createWebUi(deps, attention), createAttentionApi(attention)]),
+    attention.loop(),
+    createReplyWorker(store, actions, channel),
+    ...preparationLoops,
     channel.loop,
     router,
     createProviderObservationLoop({

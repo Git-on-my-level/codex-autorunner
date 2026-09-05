@@ -99,12 +99,33 @@ function ingest(store: Store, overrides: Record<string, unknown> = {}) {
   return store.ingestEvent(event(overrides), { sourceId: "auth:agentctl" });
 }
 
+function ingestMultica(
+  store: Store,
+  sourceId: string,
+  idempotencyKey: string,
+  overrides: Record<string, unknown> = {},
+) {
+  return store.ingestEvent(parseEvent({
+    ...event({
+      idempotency_key: idempotencyKey,
+      source: { vendor: "multica", host: "multica-host", adapter: "multica-webhook" },
+      session: { vendor: "multica", native_id: "M-1", host: "multica-host" },
+      title: "Multica ask",
+      type: "attention.question",
+      severity: "attention",
+      requires_response: true,
+      payload: { multica: { issue_ref: "M-1" } },
+    }),
+    ...overrides,
+  }), { sourceId });
+}
+
 describe("attention router", () => {
   test("native-shaped provider happy path invokes memory before operator and resolves", async () => {
     const store = memoryStore();
     const provider = new FakeProvider();
     const { router } = await setup(store, provider);
-    const inserted = ingest(store);
+    const inserted = ingest(store, { requires_response: false });
     const result = await router.tick();
     expect(result.processed).toBe(1);
     expect(result.resolved).toBe(1);
@@ -252,7 +273,9 @@ describe("attention router", () => {
     ingest(store, { idempotency_key: "agentctl:exec-1:question-2", ts: "2026-08-26T12:01:00Z" });
     const next = await router.tick();
     expect(next.blockedEffects).toBe(0);
-    expect(next.resolved).toBe(1);
+    // A successful adapter return alone is not proof the source received a response.
+    expect(next.resolved).toBe(0);
+    expect(next.escalated).toBe(1);
     expect(store.listEffects().find((effect) => effect.state === "terminal_recorded")).toMatchObject({ state: "terminal_recorded", terminal_outcome: "ok" });
   });
 
@@ -290,7 +313,7 @@ describe("attention router", () => {
     const store = memoryStore();
     const provider = new FakeProvider();
     const first = await setup(store, provider);
-    const inserted = ingest(store);
+    const inserted = ingest(store, { requires_response: false });
     expect((await first.router.tick()).resolved).toBe(1);
 
     store.db.query(
@@ -314,4 +337,90 @@ describe("attention router", () => {
     expect(result.providerFailures).toBe(0);
     expect(store.getEvent(inserted.event_id)?.route_state).toBe("provider_resolved");
   });
+
+  test("Multica closure resolves only its exact live request key", async () => {
+    const store = memoryStore();
+    const provider = new FakeProvider();
+    const { router } = await setup(store, provider);
+    const multicaSource = "auth:multica";
+    const ask = ingestMultica(store, multicaSource, "multica:ask-1");
+    const liveSibling = ingestMultica(store, multicaSource, "multica:ask-sibling", {
+      title: "Same card, separate live ask",
+    });
+    const expiredSibling = ingestMultica(store, multicaSource, "multica:ask-expired", {
+      title: "Same card, older ask",
+      payload: { multica: { issue_ref: "M-1" }, request_idempotency_key: "multica:ask-expired" },
+    });
+    const foreignAsk = ingestMultica(store, "auth:other-multica", "multica:cross-source", {
+      title: "Other authenticated source ask",
+    });
+    for (const row of [ask, liveSibling, expiredSibling, foreignAsk]) {
+      store.db.query("UPDATE events SET triage_state='resolved', route_state='resolved' WHERE id=?").run(row.event_id);
+    }
+    store.db.query("UPDATE events SET obligation_state='expired' WHERE id=?").run(expiredSibling.event_id);
+
+    ingestMultica(store, multicaSource, "multica:close-ask", {
+      type: "attention.cleared",
+      severity: "info",
+      requires_response: false,
+      title: "M-1 (closed)",
+      payload: { request_idempotency_key: "multica:ask-1", multica: { action: "closed", issue_ref: "M-1" } },
+    });
+    ingestMultica(store, multicaSource, "multica:close-expired", {
+      type: "attention.cleared",
+      severity: "info",
+      requires_response: false,
+      title: "M-1 (closed)",
+      payload: { request_idempotency_key: "multica:ask-expired", multica: { action: "closed", issue_ref: "M-1" } },
+    });
+    ingestMultica(store, multicaSource, "multica:close-cross-source", {
+      type: "attention.cleared",
+      severity: "info",
+      requires_response: false,
+      title: "M-1 (closed)",
+      payload: { request_idempotency_key: "multica:cross-source", multica: { action: "closed", issue_ref: "M-1" } },
+    });
+
+    const result = await router.tick();
+    expect(result.processed).toBe(3);
+    expect(store.getEvent(ask.event_id)?.obligation_state).toBe("resolved");
+    expect(store.getEvent(liveSibling.event_id)?.obligation_state).toBe("open");
+    expect(store.getEvent(expiredSibling.event_id)?.obligation_state).toBe("expired");
+    expect(store.getEvent(foreignAsk.event_id)?.obligation_state).toBe("open");
+  });
+  for (const disposition of ["resolve", "keep_informed"] as const) test(`${disposition} cannot discard an unanswered obligation`, async () => {
+    const store = memoryStore();
+    try {
+      const provider = new FakeProvider({ decide: async (input) => ({ contract: "car.operator.v1", request_id: input.request_id, disposition, rationale: "No action", effects: [] }) });
+      const { router, channel } = await setup(store, provider); const row = ingest(store);
+      const result = await router.tick(); expect(result.escalated).toBe(1); expect(result.resolved).toBe(0);
+      expect(store.getEvent(row.event_id)?.obligation_state).toBe("open"); expect(channel.escalations).toHaveLength(1);
+    } finally { store.db.close(); }
+  });
+  test("defer creates a bounded snooze without sending the initial notification", async () => {
+    const store = memoryStore();
+    try {
+      const provider = new FakeProvider({ decide: async (input) => ({ contract: "car.operator.v1", request_id: input.request_id, disposition: "defer", rationale: "Gather context first", effects: [] }) });
+      const { router, channel } = await setup(store, provider); ingest(store);
+      expect((await router.tick()).resolved).toBe(0); expect(channel.escalations).toHaveLength(0);
+      const row = store.db.query("SELECT state, snooze_until FROM incidents LIMIT 1").get() as { state: string; snooze_until: string };
+      expect(row.state).toBe("snoozed"); expect(Date.parse(row.snooze_until)).toBeGreaterThan(store.clock.now().getTime());
+      expect(Date.parse(row.snooze_until) - store.clock.now().getTime()).toBeLessThanOrEqual(60_000);
+    } finally { store.db.close(); }
+  });
+  test("urgent events bypass a normal provider call already in flight", async () => {
+    const store = memoryStore(); let release!: () => void; let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const provider = new FakeProvider({ decide: async (input) => { entered(); await waiting; return { contract: "car.operator.v1", request_id: input.request_id, disposition: "escalate", rationale: "Normal request", effects: [] }; } });
+    const { router, channel } = await setup(store, provider); ingest(store);
+    try {
+      await router.start(); await started;
+      ingest(store, { idempotency_key: "urgent-independent", severity: "urgent", title: "Urgent separate request" });
+      const end = Date.now() + 2_000;
+      while (!channel.escalations.some((x) => x.severity === "urgent") && Date.now() < end) await new Promise((r) => setTimeout(r, 20));
+      expect(channel.escalations.some((x) => x.severity === "urgent")).toBe(true);
+    } finally { release(); await router.stop(); store.db.close(); }
+  });
+
 });

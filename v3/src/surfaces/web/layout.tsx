@@ -3,17 +3,34 @@ import type { FC, PropsWithChildren } from "hono/jsx";
 
 export const UI_ROOT = "/ui";
 
+export interface NavigationCounts { needs_you: number; watching: number; handled: number }
 const PRIMARY_NAV = [
-  { href: UI_ROOT, label: "Inbox" },
-  { href: `${UI_ROOT}/incidents`, label: "Incidents" },
-  { href: `${UI_ROOT}/runs`, label: "Runs" },
-  { href: `${UI_ROOT}/digests`, label: "Digests" },
+  { href: UI_ROOT, label: "Needs you" },
+  { href: `${UI_ROOT}/watching`, label: "Watching" },
+  { href: `${UI_ROOT}/handled`, label: "Handled" },
+  { href: `${UI_ROOT}/settings`, label: "Settings" },
 ];
 const SYSTEM_NAV = [
-  { href: `${UI_ROOT}/policy`, label: "Safety & policy" },
-  { href: `${UI_ROOT}/memory`, label: "Legacy compatibility" },
+  { href: `${UI_ROOT}/events`, label: "Event inspector" },
+  { href: `${UI_ROOT}/runs`, label: "Run inspector" },
 ];
 const CSS = `
+  .nav-count{font-variant-numeric:tabular-nums;margin-left:7px;padding:1px 6px;border-radius:10px;background:var(--raised);font-size:11px}
+  .eyebrow{font-size:12px;font-weight:650;color:var(--muted);letter-spacing:.02em}
+  .recommended-answer{font-weight:650;color:var(--strong)}
+  .decision-uncertainty{padding:12px 14px;border:1px solid var(--border-strong);border-radius:8px}
+  .decision-uncertainty p{margin-top:5px}
+  .decision-composer .decision-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:12px;align-items:stretch}
+  .option-card{display:grid;align-content:start;gap:10px;padding:15px;border:1px solid var(--border);border-radius:8px;min-width:0}
+  .option-card button{justify-self:start;max-width:100%;white-space:normal;text-align:left}
+  .option-answer{font-size:14px;overflow-wrap:anywhere}
+  .refresh-paused{padding:10px 14px;background:var(--warning-soft);border-radius:8px;margin-bottom:12px}
+  .refresh-paused[hidden]{display:none}
+  .decision-record-link{font-size:13px}
+  .decision-card small,.decision-card time{overflow-wrap:anywhere}
+
+  .decision-list{display:grid;gap:20px;max-width:900px}.decision-card{display:grid;gap:14px;padding:24px;margin:16px 0;border:1px solid var(--border);border-radius:12px;background:var(--surface)}.decision-card h2{font-size:21px;line-height:1.4}.decision-card h2 a{color:inherit;text-decoration:none}.decision-card p{margin:0;overflow-wrap:anywhere}.decision-meta{display:flex;gap:12px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--muted)}.recommendation,.answer-record{padding:16px;border-radius:8px;background:var(--accent-soft);border-left:3px solid var(--accent)}.recommendation p,.answer-record p{margin-top:8px}.decision-options{display:flex;flex-wrap:wrap;gap:8px}.answer-form{display:grid;gap:10px}.answer-form button{justify-self:start}.context-warning{padding:12px;background:var(--warning-soft);border-radius:6px;color:var(--fg)}.preserve-lines{white-space:pre-wrap;overflow-wrap:anywhere}.stack{display:grid;gap:16px}.notice{padding:14px;background:var(--positive-soft);margin-bottom:16px;border-radius:6px}
+  @media(max-width:639px){.decision-card{padding:16px}.decision-card h2{font-size:19px}.decision-options{display:grid}.decision-options button{width:100%}.answer-form textarea{font-size:16px}}
   :root {
     color-scheme: light dark;
     --font-ui: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -92,36 +109,25 @@ const CSS = `
   @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important}}
 `;
 
-export const Layout: FC<PropsWithChildren<{ title: string; active?: string; refreshSeconds?: number }>> = ({ title, active, refreshSeconds, children }) => {
+export const Layout: FC<PropsWithChildren<{ title: string; active?: string; refreshSeconds?: number; navCounts?: NavigationCounts }>> = ({ title, active, refreshSeconds, navCounts, children }) => {
   const refreshMs = refreshSeconds ? Math.max(5, Math.min(60, refreshSeconds)) * 1_000 : 0;
-  const refreshScript = refreshMs ? `(() => {
-    const delay = ${refreshMs};
-    const refresh = () => {
-      const editing = document.activeElement && /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
-      if (document.visibilityState === "visible" && !editing && !document.querySelector("details[open]")) {
-        location.reload();
-        return;
-      }
-      window.setTimeout(refresh, delay);
-    };
-    window.setTimeout(refresh, delay);
-  })();` : "";
+  const navCount = (href: string) => !navCounts ? undefined : href === "/ui" ? navCounts.needs_you : href === "/ui/watching" ? navCounts.watching : href === "/ui/handled" ? navCounts.handled : undefined;
   return <html lang="en">
     <head>
       <meta charSet="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
       <meta name="theme-color" content="#f7f6f1" media="(prefers-color-scheme: light)" />
       <meta name="theme-color" content="#0a0c12" media="(prefers-color-scheme: dark)" />
       <title>{title} — CAR</title><style dangerouslySetInnerHTML={{ __html: CSS }} />
-      {refreshScript ? <script data-live-refresh="true" dangerouslySetInnerHTML={{ __html: refreshScript }} /> : null}
+      {refreshMs ? <script data-live-refresh="true" src="/ui/live-refresh.js" data-refresh-ms={refreshMs} defer /> : null}
     </head>
     <body>
       <a class="skip-link" href="#main-content">Skip to content</a>
       <header class="app-bar"><div class="app-bar-inner">
         <a class="brand" href={UI_ROOT} aria-label="CAR attention router home"><span>CAR</span><span class="brand-version">v3</span></a>
-        <nav class="primary" aria-label="Primary navigation">{PRIMARY_NAV.map((item) => <a href={item.href} aria-current={active === item.href ? "page" : undefined}>{item.label}</a>)}<details class="nav-menu"><summary>System</summary><div class="nav-menu-links">{SYSTEM_NAV.map((item) => <a href={item.href} aria-current={active === item.href ? "page" : undefined}>{item.label}<small>{item.href.endsWith("/policy") ? "Core authority and compatibility" : "V2-only context store"}</small></a>)}</div></details></nav>
-        <details class="mobile-primary"><summary>Menu</summary><nav class="mobile-primary-links" aria-label="Mobile primary navigation"><span class="nav-group-label">Work</span>{PRIMARY_NAV.map((item) => <a href={item.href} aria-current={active === item.href ? "page" : undefined}>{item.label}</a>)}<span class="nav-group-label">System</span>{SYSTEM_NAV.map((item) => <a href={item.href} aria-current={active === item.href ? "page" : undefined}>{item.label}</a>)}</nav></details>
+        <nav class="primary" aria-label="Primary navigation">{PRIMARY_NAV.map((item) => <a href={item.href} aria-current={active === item.href ? "page" : undefined}>{item.label}{navCount(item.href) !== undefined && <span class="nav-count">{navCount(item.href)}</span>}</a>)}</nav>
+        <details class="mobile-primary"><summary>Menu</summary><nav class="mobile-primary-links" aria-label="Mobile primary navigation"><span class="nav-group-label">Work</span>{PRIMARY_NAV.map((item) => <a href={item.href} aria-current={active === item.href ? "page" : undefined}>{item.label}{navCount(item.href) !== undefined && <span class="nav-count">{navCount(item.href)}</span>}</a>)}<span class="nav-group-label">System</span>{SYSTEM_NAV.map((item) => <a href={item.href} aria-current={active === item.href ? "page" : undefined}>{item.label}{navCount(item.href) !== undefined && <span class="nav-count">{navCount(item.href)}</span>}</a>)}</nav></details>
       </div></header>
-      <main id="main-content">{children}</main>
+      <main id="main-content"><p id="refresh-paused" class="refresh-paused" role="status" hidden>Live refresh paused while you review or edit. Your draft stays on this page; refresh when ready.</p>{children}</main>
     </body>
   </html>;
 };

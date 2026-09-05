@@ -1,252 +1,125 @@
-# CAR v3 — the attention router
+# CAR v3 — grounded decisions between people and agents
 
-CAR v3 is a cross-vendor attention router. It is the durable layer
-between you and all of your agents (Claude Code, Codex, Hermes, OMP, agentctl-launched
-work, Multica autopilots, CI, cron). It ingests and normalizes attention, groups it into
-durable incidents, routes replies back to the right source, and records every decision
-and delivery. Autonomous operation, policy judgment, and learning are replaceable
-capability providers. Providers propose typed effects; CAR core authorizes and executes
-them through one safety and audit path.
+**Agents bring problems. Humans receive decisions.** CAR does not run your projects
+or replace their harnesses. It makes the questions that need human judgment easier
+to answer, records the answer durably, and tracks whether it reached the source and
+actually unblocked the work.
 
-Full design (binding spec): [`DESIGN.md`](./DESIGN.md). The accepted product boundary
-and provider decisions are recorded in
-[`ADR 0001`](./docs/architecture/0001-attention-router-capability-providers.md).
-The v2 failures and fixes that constrain the rewrite are indexed in
-[`Historical scars`](./docs/architecture/HISTORICAL_SCARS.md).
+V3 is an **unreleased PR**, not an upgrade of a deployed service. It has a clean
+SQLite bootstrap, no v3 migration chain and no v2 cutover command. The v2/Python tree
+is unchanged. See [deployment](docs/deployment.md) and [actual validation](VALIDATION.md).
 
-This is alpha software. It runs side-by-side with CAR v2
-(the ticket/runner product one directory up) — separate state dir (`~/.car/`), separate
-port (`7171`), separate bot token, separate CLI (`card` vs `car`). v2 is deprecated
-immediately and remains runnable only as a migration bridge. The production composition
-now follows ADR 0001: the daemon runs the durable attention router and capability-provider
-host; legacy policy/memory modules are compatibility projections for the current web and
-digest views and have no routing, grant, or execution authority.
+## Start here
 
-## Install
+Requires Bun. From this directory:
 
-Requires [Bun](https://bun.sh) (no Node, no native modules).
-
-```bash
-cd v3
-bun install
-bun run src/cli.ts serve      # or: bun run dev
+```sh
+bun install --frozen-lockfile
+bun run src/cli.ts init
+bun run src/cli.ts serve
 ```
 
-`card serve` starts one canonical owner process: authenticated HTTP ingest + web UI on
-`127.0.0.1:7171`, Telegram (if configured), the attention router, provider host,
-human/outcome observation delivery, digest/watchdog, provider health, and optional
-external dead-man heartbeat. An opt-in agentctl observer powers the compact Runs view
-without making agentctl a dependency of the native setup. Core state lives in SQLite at
-`~/.car/car.db` (WAL mode).
-Claims are fenced and restart-replayed; a second daemon cannot own the same store.
+Open `http://127.0.0.1:7171/ui`. `init` tells you where it wrote the private human
+credentials file and the separate agent connection file. Give an agent only its
+`agent.json`, never the server's `credentials.json`. No model or Telegram credential
+is needed for the default guided-decision path.
 
-Useful commands while developing:
+The ordinary interface has four places:
 
-```bash
-bunx tsc --noEmit   # typecheck
-bun test            # unit tests ("bun run check" / "bun run test" via package.json)
-bun run src/cli.ts status   # event/session/escalation counts from the db
-bun run src/cli.ts doctor   # topology, sqlite, credentials, Hermes, Telegram, dead-man
-bun run src/cli.ts migration-audit --v2-root /path/to/quiesced/v2-state
-bun run scripts/ui-preview.ts   # seeded in-memory UI at http://127.0.0.1:7194/ui
+| View | Meaning |
+|---|---|
+| **Needs you** | Grounded questions plus missed deadlines still needing review |
+| **Watching** | Context gathering, recorded answers and work awaiting receipt or unblocking |
+| **Handled** | Explicit outcomes: source-confirmed resolution, withdrawal or reviewed misses |
+| **Settings** | Connections, optional reviewer status, standing permissions and secondary inspectors |
+
+An empty queue is not a health check for unobserved agents. A recorded answer is
+not delivered work. Source-confirmed resolution is the authenticated source's
+report, not a claim of independent verification.
+
+## Let an agent ask well
+
+```sh
+bun run src/cli.ts raise --key api-migration-compatibility-1 \
+  --file examples/attention/migration-decision.json
+bun run src/cli.ts request get req_RETURNED_ID
+bun run src/cli.ts wait req_RETURNED_ID --timeout 60
+bun run src/cli.ts request receive req_RETURNED_ID
+# After applying this decision and actually clearing the blocker:
+bun run src/cli.ts request ack req_RETURNED_ID --answer reply_RETURNED_ID \
+  --outcome resolved --note 'Migration resumed with compatibility retained'
 ```
 
-The UI preview is seeded and isolated: it never opens the user's CAR database or
-delivery channels. Run timestamps are relative to preview launch so freshness states
-stay realistic. Its write token is `preview-token`; signing in changes only the
-in-memory fixture and is useful for exercising the legacy compatibility controls.
+Use the returned IDs. The example's evidence is illustrative, not evidence about
+this repository. Set `CAR_CONNECTION_FILE` for a nondefault agent profile.
 
-## Configuration: `~/.car/config.toml`
+The tool asks for missing context rather than relying on a skill being read. A
+minimum packet has a goal, blocker and question. CAR returns machine-readable next
+actions for gathering evidence, describing attempts, giving a recommendation and
+explaining why human judgment is needed. A source may explicitly explain why it
+cannot investigate. It should never invent facts just to get through a form.
 
-The daemon runs localhost-only, without Telegram, with the no-dependency native provider
-by default. No write caller is trusted merely for being on localhost: configure at least
-one credential before ingest or web mutation can succeed. See
-[`src/config/config.ts`](./src/config/config.ts) for the authoritative schema.
+Preparation is bounded; urgent requests bypass it. Published decisions are frozen.
+The human sees an attributed recommendation, uncertainties, evidence and the exact
+answer/consequences of each option before choosing. An optional single preparation
+reviewer can improve incomplete packets; it cannot answer, grant authority, execute
+work or hide the obligation. Complete callers bypass model work entirely.
 
-```toml
-# ~/.car/config.toml
-state_dir = "/Users/david/.car"     # default: ~/.car
+Read the [HTTP / CLI / MCP protocol](docs/attention-protocol.md). `card schema`
+exposes the current schemas; `car_guide` is the MCP workflow guide. Standard `receive`
+writes the answer locally before receipt acknowledgment. GET, timeout and silence
+never confer approval or imply receipt.
 
-[http]
-host = "127.0.0.1"                  # default; only change if you know what you're doing
-port = 7171                         # default
-# Every ingest/mutation caller needs an authenticated source identity, even localhost.
-[http.ingest_tokens]
-generic = "replace-me"
-# agentctl = "a-different-source-credential"
+## One server, local or remote clients
 
-[telegram]
-enabled = true                      # default: false
-token_env = "CAR_TELEGRAM_TOKEN"    # default; env var name holding the bot token
-chat_id = "-1001234567890"          # your chat or supergroup id
-allowed_user_ids = ["123456789"]    # Telegram user ids; chat_id is not identity
-forum_mode = false                  # true = topic-per-session in a forum supergroup
-digest_time = "08:30"               # local HH:MM for the unconditional daily digest
+One logical server owns a workspace/database. Outbound-only clients use the same
+HTTP protocol on localhost, across a tailnet, or with a dedicated hosted instance.
+Each host gets a separate authenticated identity. The durable local spool handles
+connectivity failure without inventing server acceptance. A running relay or MCP
+process retries; a powered-off host cannot.
 
-[triage]
-lease_seconds = 120                 # default; claimed-event lease before a crashed worker's claim is reclaimed
+This is not an active-active control plane or a shared-database multi-tenant SaaS.
+See [first installation and remote deployment](docs/deployment.md) for credentials,
+TLS/proxy origin, tailnet opt-in and the isolated-hosted boundary.
 
-[safety]
-max_effects_per_hour = 60
-max_failures_per_10m = 5
-max_effect_spend_usd = 25             # rolling 24-hour core effect budget
-effect_lease_seconds = 120
-dedupe_minutes = 30
+## Existing native integrations
 
-[watchdog]
-pending_response_hours = 4          # default; a pending requires_response event silent this long -> escalate
-default_heartbeat_multiple_warn = 2      # default
-default_heartbeat_multiple_escalate = 4  # default
+The guided request lane and native event adapters share incidents, escalation,
+audit and durable reply plumbing. Native inputs continue through the router and
+typed provider/effect safety boundary; they do not need to be relaunched by CAR.
+The event stream and diagnostic views are secondary, not the human home page.
 
-# Optional, read-only local run discovery. Off by default. Keep an exact label
-# scope, or set observe_all=true deliberately. CAR never collects agentctl results.
-[agentctl_observer]
-enabled = false
-required_labels = ["car-observe"]
-observe_all = false
-interval_seconds = 15
-discovery_limit = 100
-retention_days = 30
-retention_max_terminal = 2000
+Integration references: [generic events](docs/generic-events.md),
+[reply-file contract](docs/replies-file-contract.md), and the source-specific guides
+in [docs](docs/). The configuration schema is in `src/config/config.ts`.
 
-[providers.defaults]
-operator = "native"
-policy = "native"
-memory = "native"
+Native delivery can remain staged or uncertain when a harness cannot provide a
+receipt. Watching exposes evidence-based reconciliation rather than blind resend.
+Existing provider judgment remains advisory; grants, deterministic safety, budgets,
+leases and audit remain core-owned. A one-off human answer creates no standing grant.
 
-[providers.instances.native]
-adapter = "native"
-continuity = "global"
-scope = []
+## Maintain the foundation
 
-# First supported non-native provider. Hermes profile selection uses its public
-# `-p <profile> acp` interface; CAR never reads Hermes-private state.
-# [providers.instances.hermes_work]
-# adapter = "hermes"
-# profile = "work"
-# continuity = "scoped"             # or global / incident
-# scope = ["repo"]
-# executable = "hermes"
-
-[deadman]
-enabled = false
-# url = "https://independent-observer.example/car"
-# token_env = "CAR_DEADMAN_TOKEN"
+```sh
+bun run check:foundation
+bun run check
+bun test
+bun run test:portable
+bun run test:smoke
 ```
 
-`agentctl_observer.discovery_limit` accepts `1..200`, matching agentctl's
-public query ceiling. The Runs page reports incomplete active coverage
-separately from partial older history.
+Read [AGENTS.md](AGENTS.md), the [invariant-to-test map](docs/foundation-contract.md),
+and [ADR 0003](docs/architecture/0003-pre-release-foundation.md) before changing the
+lifecycle. Architecture/import checks run in CI beside the Bun suite and supplemental
+portable tests. Runtime correctness, negative/replay cases and UI evidence matter
+more than a larger checklist of product features.
 
-Provider policy judgment is advisory. Human grants, canonical argument/scope matching,
-dangerous-content rails, limits, budgets, leases, and panic remain core-owned. The
-universal reply-back fallback
-writes to `~/.car/replies/<car_session_id>/` — see
-[`docs/replies-file-contract.md`](./docs/replies-file-contract.md).
+Architecture history: [ADR 0001](docs/architecture/0001-attention-router-capability-providers.md),
+[ADR 0002](docs/architecture/0002-grounded-decisions.md),
+[historical scars](docs/architecture/HISTORICAL_SCARS.md), and the detailed native
+router [design](DESIGN.md). ADR 0003 supersedes old migration and power-user UI plans.
 
-## One-way v2 cutover evidence
-
-Stop v2 writers before qualification, then run `card migration-audit --v2-root <root>`.
-The command reads but never mutates the supplied v2 tree, hashes the exact inventory,
-inspects SQLite lifecycle columns, records active and unclassified rows, writes a
-mode-0600 immutable JSON report beneath `~/.car/migration/`, and audits the report in
-the v3 database. It exits 2 when active/live/error evidence blocks cutover, 3 when
-nonempty tables still require human classification, and 0 only when the source is
-ready for explicit human approval and read-only archival. It does not invent v3 events
-from ambiguous legacy rows and is not a dual-write bridge.
-
-## Send your first event
-
-With the daemon running (`card serve`), from another shell:
-
-```bash
-curl -s http://127.0.0.1:7171/v1/events \
-  -H 'content-type: application/json' \
-  -H 'authorization: Bearer replace-me' \
-  -d '{
-    "contract": "car.event.v1",
-    "idempotency_key": "manual:hello-1",
-    "ts": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'",
-    "source": { "vendor": "other", "host": "'"$(hostname)"'", "adapter": "manual-curl" },
-    "session": null,
-    "type": "note",
-    "severity": "info",
-    "title": "Hello CAR",
-    "body": "First manual event.",
-    "payload": {}
-  }'
-```
-
-Or use the CLI wrapper, meant for CI/cron scripts (it fills in `contract`, `ts`,
-`source`, and a computed idempotency key for you):
-
-```bash
-CAR_INGEST_TOKEN=replace-me bun run src/cli.ts emit --type note --title "Hello CAR" --body "First event from card emit"
-bun run src/cli.ts emit --type attention.error --severity urgent --title "nightly build failed"
-```
-
-Check it landed:
-
-```bash
-curl -s http://127.0.0.1:7171/healthz
-curl -s http://127.0.0.1:7171/ui/brief.md   # open escalations + stuck sessions, markdown
-bun run src/cli.ts status
-```
-
-See [`docs/generic-events.md`](./docs/generic-events.md) for the full envelope and more
-`card emit` examples, and [`docs/`](./docs/) for per-source integration guides
-(Claude Code hooks, agentctl subscribe, Multica webhook).
-
-## Telegram bot setup
-
-1. Talk to [@BotFather](https://t.me/BotFather) on Telegram, `/newbot`, follow the
-   prompts. You get a bot token like `123456:ABC-DEF...`.
-2. Export it in the environment the daemon runs under — do **not** put it in
-   `config.toml`:
-   ```bash
-   export CAR_TELEGRAM_TOKEN="123456:ABC-DEF..."
-   ```
-   (The env var name is configurable via `telegram.token_env` if you want something
-   other than `CAR_TELEGRAM_TOKEN`.)
-3. Add the bot to the chat or supergroup you want escalations in, and get its
-   `chat_id` (e.g. forward a message to `@userinfobot`, or check the `getUpdates`
-   response after messaging the bot).
-4. Set `telegram.enabled = true`, `telegram.chat_id`, and at least one explicit
-   `telegram.allowed_user_ids` entry in `config.toml` (above), then restart
-   `card serve`. Telegram user IDs are the identity allowlist; a permitted chat
-   alone never authorizes an actor. CAR rejects missing or unauthorized actors
-   before they reach any command, message, or callback handler.
-
-**Forum mode.** If your chat is a Telegram **forum-enabled supergroup**, set
-`forum_mode = true`: CAR opens one topic per session and threads all of that
-session's escalations, status, and replies into it. In a flat (non-forum) chat,
-CAR instead keeps one pinned, edited-in-place anchor message per session and
-replies to it — set `forum_mode = false` (default) or omit it. Getting this wrong
-just means messages land in the main chat instead of a topic; it isn't destructive,
-so it's safe to flip and restart if you're not sure which kind of chat you made.
-
-## Running the end-to-end smoke test
-
-`v3/scripts/e2e-smoke.ts` boots a full daemon against a throwaway config (random
-free port, temp `state_dir`), replays a small battery of events over HTTP, and
-asserts against `/healthz`, `/ui/brief.md`, and SQLite directly (authentication,
-event/session durability, router/provider terminals, escalation, audit, and daemon-owner
-release). It's not wired into
-`package.json` (`package.json` is frozen for this build) — run it directly:
-
-```bash
-bun run scripts/e2e-smoke.ts
-```
-
-Exits non-zero on any assertion failure.
-
-## More
-
-- [`DESIGN.md`](./DESIGN.md) — the binding spec: event contract, data model, router
-  loops, capability providers, grants and safety, Telegram UX, reply-back adapters,
-  web UI.
-- [`docs/architecture/0001-attention-router-capability-providers.md`](./docs/architecture/0001-attention-router-capability-providers.md)
-  — the accepted product and core/provider boundary.
-- [`docs/`](./docs/) — integration guides per event source.
-- [`ops/`](./ops/) — launchd (macOS) / systemd (Linux) unit templates to run
-  `card serve` as a supervised background service.
+For an isolated seeded interactive preview: `bun run scripts/ui-preview.ts`. It
+uses in-memory state and no live delivery channels. Its human sign-in credential is
+`preview-token`, useful only for that fixture. Browser fixture checks and their
+limitations are documented in [foundation-contract.md](docs/foundation-contract.md).

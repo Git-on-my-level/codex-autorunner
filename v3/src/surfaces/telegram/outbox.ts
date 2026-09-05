@@ -108,6 +108,17 @@ export async function deliverOutboxOnce(
       continue;
     }
 
+    // A replayed or delayed notification must not resurrect answered, cancelled
+    // or snoozed attention. Edits still flow so old cards can show their outcome.
+    if (target.kind === "escalation" && target.escalation_id) {
+      const esc = store.db.query("SELECT state FROM escalations WHERE id=?").get(target.escalation_id) as { state: string } | null;
+      if (esc && esc.state !== "pending") {
+        store.recordOutboxReceipt(row.id, claim, "superseded", { error: { reason: "escalation_not_pending", state: esc.state } });
+        store.audit("daemon", "outbox.stale_card_suppressed", "outbox", String(row.id), { escalation_id: target.escalation_id });
+        continue;
+      }
+    }
+
     // Quiet hours / policy decided this must not push. Park it for the digest.
     if (target.queue_for_digest) {
       if (!store.deferOutbox(row.id, claim)) {
@@ -194,6 +205,7 @@ function applySendSideEffects(
   messageId: string | null,
   threadId: string | null,
   receiptAt: string,
+  outboxId: number,
 ): void {
   if (threadId && target.car_session_id) {
     store.db
@@ -203,9 +215,12 @@ function applySendSideEffects(
   if (!messageId) return;
 
   if (target.kind === "escalation" && target.escalation_id) {
-    store.db
-      .query("UPDATE escalations SET telegram_message_id = COALESCE(telegram_message_id, ?), sent_at = COALESCE(sent_at, ?) WHERE id = ?")
-      .run(messageId, receiptAt, target.escalation_id);
+    const key = `tg.latest_escalation_receipt.${target.escalation_id}`;
+    if ((store.kvGet<number>(key) ?? -1) < outboxId) {
+      store.db.query("UPDATE escalations SET telegram_message_id = ?, sent_at = ? WHERE id = ?")
+        .run(messageId, receiptAt, target.escalation_id);
+      store.kvSet(key, outboxId);
+    }
   }
   if (target.kind === "escalation" && target.incident_id) {
     store.db
@@ -279,7 +294,7 @@ export function reconcileTelegramDeliveryProjections(store: Store): number {
       const receipt = parseReceipt(row.result_json);
       const applied = store.db.transaction(() => {
         if (store.kvGet(projectionKey(row.id)) !== null) return false;
-        applySendSideEffects(store, target, row.sent_message_id, receipt.threadId, receipt.receiptAt);
+        applySendSideEffects(store, target, row.sent_message_id, receipt.threadId, receipt.receiptAt, row.id);
         store.kvSet(projectionKey(row.id), {
           state: "applied",
           receipt_at: receipt.receiptAt,

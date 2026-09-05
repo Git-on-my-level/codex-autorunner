@@ -1,5 +1,12 @@
+import { AttentionService } from "../../attention/service.ts";
+import { AttentionError } from "../../attention/errors.ts";
+import { z } from "zod";
+import { LIVE_REFRESH_JS } from "./live_refresh.ts";
+import { installDecisionRoutes } from "./decisions.tsx";
+import { DecisionError } from "./decision_views.tsx";
+import { Layout } from "./layout.tsx";
 /**
- * WS-F owns src/surfaces/web/: server-rendered JSX (hono/jsx) power-user UI —
+ * WS-F owns src/surfaces/web/: server-rendered JSX (hono/jsx) decision UI —
  * inbox, incidents, memory browser, policy viewer, digest archive — plus
  * GET /brief.md for other agents to curl. Zero external assets: no CDN
  * scripts, no htmx: plain HTML forms/links + inline CSS in a shared layout,
@@ -10,6 +17,8 @@
  * paired with an explicit store.audit() call (writes.ts) — no bare writes.
  */
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
+import { jsx } from "hono/jsx";
 import { readFileSync } from "node:fs";
 import { parse as parseToml } from "smol-toml";
 import type { DaemonDeps } from "../../ports.ts";
@@ -41,11 +50,11 @@ import {
 } from "./views.tsx";
 import { archiveMemory, demoteMemory, decideProposal, addNote } from "./writes.ts";
 import { buildBriefMarkdown } from "./brief.ts";
-import { authenticateWebWrite, establishWebSession, hasWebWriteSession } from "./auth.ts";
+import { authenticateWebWrite, establishWebSession, hasWebWriteSession, clearWebSession } from "./auth.ts";
 
 const UI_PATH = "/ui";
 
-/** Matches events.triage_state's comment in store/migrations.ts. */
+/** Matches events.triage_state's comment in store/schema.ts. */
 const TRIAGE_STATES = ["pending", "coalescing", "rules_resolved", "llm_resolved", "escalated", "expired", "skipped"];
 
 function readFileSafe(path: string): string | null {
@@ -60,18 +69,58 @@ function optionalQuery(value: string | undefined): string | undefined {
   return value && value.length > 0 ? value : undefined;
 }
 
-export function createWebUi(deps: DaemonDeps): { path: string; app: Hono } {
+export function createWebUi(deps: DaemonDeps, attention = new AttentionService(deps.store, deps.config, deps.channel)): { path: string; app: Hono } {
   const app = new Hono();
   const db = deps.store.db;
 
-  app.use("*", async (c, next) => {
-    if (c.req.method === "GET" || c.req.method === "HEAD" || c.req.path.endsWith("/login")) {
-      return next();
+  app.onError(async (error, c) => {
+    const status = error instanceof AttentionError ? error.status : error instanceof z.ZodError ? 400 : 500;
+    const message = error instanceof AttentionError ? error.message : error instanceof z.ZodError
+      ? "Invalid input. Check the required fields and current revision."
+      : "The operation was not confirmed. Check whether your answer was recorded before retrying.";
+    if (status === 500) deps.store.audit("web", "web.request_failed", "path", c.req.path, { error: String(error) });
+    // Never echo credentials or arbitrary forms. Retain bounded decision drafts only.
+    const match = c.req.path.match(/^\/ui\/decisions\/([a-zA-Z0-9_-]{1,100})\/(?:answer|withdraw|review-expiry)$/);
+    let draft: string | undefined;
+    if (match && c.req.method === "POST") {
+      try { const body = await c.req.parseBody(); const text = body.text ?? body.note ?? body.reason;
+        if (typeof text === "string") draft = text.slice(0, 8_000);
+      } catch { /* A malformed body is never reflected. */ }
     }
+    // Build an Hono JSX node so the FC's nullable result is normalized before
+    // handing its serialized, escaped output to Hono's string-only helper.
+    const page = jsx(Layout, { title: "Action not confirmed", children: jsx(DecisionError, { message, draft,
+      href: match ? `/ui/decisions/${encodeURIComponent(match[1]!)}` : "/ui" }) });
+    return c.html(await page.toString(), status);
+  });
+  app.use("*", async (c, next) => {
+    c.header("Cache-Control", "no-store");
+    c.header("X-Content-Type-Options", "nosniff");
+    // Same-origin forms need a non-opaque Origin for the CSRF check. Keep
+    // referrers private on cross-origin navigation without stripping local POSTs.
+    c.header("Referrer-Policy", "same-origin");
+    c.header("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+    if (c.req.path.endsWith("/login")) return next();
+    if (c.req.method === "GET" || c.req.method === "HEAD") {
+      if (!deps.config.http.private_reads || hasWebWriteSession(c, deps.config)) return next();
+      return c.redirect("/ui/login", 303);
+    }
+    const length = Number(c.req.header("content-length") ?? "0");
+    if (!Number.isFinite(length) || length > 65_536) return c.text("Form too large", 413);
     if (authenticateWebWrite(c, deps.config)) return next();
-    deps.store.audit("web", "web.write_denied", "path", c.req.path, { reason: "unauthenticated" });
+    const origin = c.req.header("origin");
+    const fetchSite = c.req.header("sec-fetch-site");
+    deps.store.audit("web", "web.write_denied", "path", c.req.path, {
+      reason: "unauthenticated",
+      origin: origin ? origin.slice(0, 512) : null,
+      fetch_site: fetchSite ? fetchSite.slice(0, 128) : null,
+    });
     return c.html('Unauthorized. <a href="/ui/login">Sign in</a>.', 401);
   });
+
+  app.use("*", bodyLimit({ maxSize: 65_536, onError: (c) => c.text("Form too large", 413) }));
+
+  app.get("/live-refresh.js", (c) => c.body(LIVE_REFRESH_JS, 200, { "content-type": "application/javascript; charset=utf-8" }));
 
   app.get("/login", (c) => c.html(LoginPage()));
 
@@ -79,14 +128,22 @@ export function createWebUi(deps: DaemonDeps): { path: string; app: Hono } {
     const body = await c.req.parseBody();
     const token = typeof body.token === "string" ? body.token : "";
     if (!establishWebSession(c, deps.config, token)) {
-      deps.store.audit("web", "web.login_denied", "session", "ui", {});
+      const origin = c.req.header("origin");
+      const fetchSite = c.req.header("sec-fetch-site");
+      deps.store.audit("web", "web.login_denied", "session", "ui", {
+        origin: origin ? origin.slice(0, 512) : null,
+        fetch_site: fetchSite ? fetchSite.slice(0, 128) : null,
+      });
       return c.text("Unauthorized", 401);
     }
     deps.store.audit("web", "web.login", "session", "ui", {});
     return c.redirect(UI_PATH, 303);
   });
 
-  app.get("/", (c) => {
+  app.post("/logout", (c) => { clearWebSession(c); return c.redirect("/ui/login", 303); });
+  installDecisionRoutes(app, attention);
+
+  app.get("/events", (c) => {
     const filters = {
       vendor: optionalQuery(c.req.query("vendor")),
       severity: optionalQuery(c.req.query("severity")),

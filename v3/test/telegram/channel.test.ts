@@ -88,7 +88,7 @@ describe("ChannelPort enqueues rich specs", () => {
       contextLines: [],
     };
     channel.sendEscalation({ ...msg, severity: "attention" });
-    channel.sendEscalation({ ...msg, severity: "urgent" });
+    channel.sendEscalation({ ...msg, severity: "urgent", notificationRevision: "urgent-upgrade" });
 
     const rows = outboxRows(store);
     expect(rows[0]!.target.queue_for_digest).toBe(true);

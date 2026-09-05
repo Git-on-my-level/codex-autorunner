@@ -88,7 +88,9 @@ export function createTelegram(
       applyHold(target, msg.severity, (msg as { queue_for_digest?: boolean }).queue_for_digest);
 
       const spec: MessageSpec = { text: rendered.text, inline_keyboard: rendered.inline_keyboard };
-      enqueueMessage(store, target, spec);
+      enqueueMessage(store, target, spec, {
+        intentId: `escalation:${msg.escalationId}:${msg.notificationRevision ?? "initial"}`,
+      });
       store.audit("daemon", "escalation.enqueued", "escalation", msg.escalationId, {
         severity: msg.severity,
         held: target.queue_for_digest === true,

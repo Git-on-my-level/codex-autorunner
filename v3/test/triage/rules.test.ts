@@ -40,12 +40,12 @@ const ctx = (granted = [] as ReturnType<typeof grantedRule>[]) => ({ now: NOW, g
 describe("trivial types", () => {
   for (const type of [...TRIVIAL_TYPES]) {
     test(`${type} resolves without an incident`, () => {
-      expect(classifyEvent(row({ type }), ctx()).kind).toBe("resolved");
+      expect(classifyEvent(row({ type, requires_response: 0 }), ctx()).kind).toBe("resolved");
     });
   }
 
   test("trivial types resolve even at attention severity", () => {
-    expect(classifyEvent(row({ type: "progress", severity: "attention" }), ctx()).kind).toBe("resolved");
+    expect(classifyEvent(row({ type: "progress", severity: "attention", requires_response: 0 }), ctx()).kind).toBe("resolved");
   });
 });
 
@@ -66,9 +66,9 @@ describe("urgent", () => {
     expect(out.kind).toBe("escalate");
   });
 
-  test("a trivial type at urgent severity is still trivial", () => {
-    // heartbeat/progress carry no decision; severity on them is noise.
-    expect(classifyEvent(row({ type: "heartbeat", severity: "urgent" }), ctx()).kind).toBe("resolved");
+  test("an urgent lifecycle signal must still reach the human", () => {
+    // Urgency is an explicit attention signal even on a lifecycle event.
+    expect(classifyEvent(row({ type: "heartbeat", severity: "urgent", requires_response: 0 }), ctx()).kind).toBe("escalate");
   });
 });
 
@@ -95,7 +95,7 @@ describe("self-event suppression", () => {
 describe("session.ended", () => {
   test("an ok outcome resolves", () => {
     const out = classifyEvent(
-      row({ type: "session.ended", severity: "info", payload_json: JSON.stringify({ outcome: "ok" }) }),
+      row({ type: "session.ended", severity: "info", requires_response: 0, payload_json: JSON.stringify({ outcome: "ok" }) }),
       ctx(),
     );
     expect(out.kind).toBe("resolved");
@@ -114,7 +114,7 @@ describe("session.ended", () => {
   });
 
   test("no outcome reported falls back to severity", () => {
-    expect(sessionEndedOk(row({ type: "session.ended", severity: "info", payload_json: "{}" }))).toBe(true);
+    expect(sessionEndedOk(row({ type: "session.ended", severity: "info", requires_response: 0, payload_json: "{}" }))).toBe(true);
     expect(sessionEndedOk(row({ type: "session.ended", severity: "attention", payload_json: "{}" }))).toBe(false);
   });
 
@@ -127,8 +127,8 @@ describe("session.ended", () => {
 
 describe("notes", () => {
   test("a note below attention resolves", () => {
-    expect(classifyEvent(row({ type: "note", severity: "info" }), ctx()).kind).toBe("resolved");
-    expect(classifyEvent(row({ type: "note", severity: "notice" }), ctx()).kind).toBe("resolved");
+    expect(classifyEvent(row({ type: "note", severity: "info", requires_response: 0 }), ctx()).kind).toBe("resolved");
+    expect(classifyEvent(row({ type: "note", severity: "notice", requires_response: 0 }), ctx()).kind).toBe("resolved");
   });
 
   test("a note at attention or above is triaged", () => {

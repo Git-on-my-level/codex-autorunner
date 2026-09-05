@@ -40,6 +40,22 @@ CAR's `/v1/ingest/multica` normalizer maps a Multica card-event payload onto
   silence watchdog (DESIGN.md §4) rather than anything Multica sends — that's what
   catches a stuck autopilot Multica itself doesn't know is stuck.
 
+### Exact closure identity
+
+A `closed`, `resolved`, or `completed` webhook must identify the one CAR request
+whose native blocker is gone. Send exactly one of these top-level fields:
+
+- `request_event_id`: the canonical CAR event id, when Multica has received it;
+- `request_idempotency_key`: the exact stable CAR request key, when the canonical
+  event id is not available.
+
+CAR scopes either identity to the authenticated Multica source and only clears a
+live response-required event. Card/session ids, titles, and the generic webhook
+`event_id` are not request identity; a missing, malformed, or ambiguous target is
+rejected rather than broad-closing a card's other asks. A source close arriving
+after cancellation or expiry is retained as an ignored lifecycle event and does
+not rewrite that outcome as resolved.
+
 ## 3. Reply-back: env vars for `CAR_MULTICA_URL` / `CAR_MULTICA_TOKEN`
 
 The `multica-api` adapter (DESIGN.md §8) is how CAR answers *back* into a card — a ✅

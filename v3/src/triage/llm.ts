@@ -96,7 +96,8 @@ export function createLlmRunner(spec: string, opts: LlmRunnerOptions = {}): LlmR
         });
       }
 
-      const signal = AbortSignal.timeout(timeoutMs);
+      const ownDeadline = AbortSignal.timeout(timeoutMs);
+      const signal = input.signal ? AbortSignal.any([ownDeadline, input.signal]) : ownDeadline;
       const result = await generateText({
         model: resolveModel(),
         system: input.system,

@@ -204,24 +204,13 @@ The native implementation may run in-process. Non-native agent providers use age
 and their supported public protocol. Future command or HTTP transports may implement
 the same contract without changing router semantics.
 
-### v2 lifecycle
+### v2 lifecycle (superseded by ADR 0003)
 
-CAR v2 is deprecated immediately. It remains runnable during migration, but it is no
-longer a co-equal product and receives no new product investment. Compatibility work is
-limited to security fixes, critical correctness fixes, and migration support.
-
-v3 remains side-by-side during alpha under its own state root, port, bot token, and
-temporary `card` CLI name. Side-by-side operation is a migration mechanism, not a
-permanent two-product strategy. v3 assumes the CAR identity after qualification; v2
-then receives an explicit removal release and state-retention plan.
-
-Qualification is criterion-based rather than time-based: active source adapters use
-v3 without dual writes; native no-dependency and Hermes paths pass contract and restart
-tests; grant/safety and uncertain-delivery fault tests pass; external dead-man alerting
-is proven; every active v2 item is drained or appears in an auditable import report;
-and rollback consists of an immutable v2 archive rather than a second live authority.
-At that gate the `car` name moves to v3, v2 state becomes read-only, and the next
-removal release deletes the v2 runtime while preserving the documented archive/export.
+This PR has no deployed v3 users and requires no migration. V3 has its own clean
+bootstrap and keeps `card` distinct from the untouched v2/Python runtime. Do not
+build a cutover/import bridge or mutate v2 as a prerequisite for this PR. The former
+migration assumptions in this section are superseded by ADR 0003. Native integration
+support is not an excuse to maintain two writers for the same lifecycle.
 
 ## Consequences
 

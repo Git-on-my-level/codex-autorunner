@@ -20,7 +20,7 @@ function ev(overrides: Record<string, unknown> = {}) {
 }
 
 describe("web inbox", () => {
-  test("GET /ui renders task-first event rows with accessible filters", async () => {
+  test("GET /ui/events renders task-first event rows with accessible filters", async () => {
     const deps = buildDeps();
     deps.store.ingestEvent(ev({ idempotency_key: "k1", title: "Approve deploy?" }));
     deps.store.ingestEvent(
@@ -28,7 +28,7 @@ describe("web inbox", () => {
     );
     const app = mountApp(deps);
 
-    const res = await app.request("/ui");
+    const res = await app.request("/ui/events");
     expect(res.status).toBe(200);
     const body = await res.text();
     expect(body).toContain("Approve deploy?");
@@ -55,7 +55,7 @@ describe("web inbox", () => {
     );
     const app = mountApp(deps);
 
-    const res = await app.request("/ui?vendor=codex");
+    const res = await app.request("/ui/events?vendor=codex");
     const body = await res.text();
     expect(body).toContain("Codex thing");
     expect(body).not.toContain("Claude thing");
@@ -79,12 +79,12 @@ describe("web inbox", () => {
     }));
     const app = mountApp(deps);
 
-    const cursor = await (await app.request("/ui?vendor=cursor")).text();
+    const cursor = await (await app.request("/ui/events?vendor=cursor")).text();
     expect(cursor).toContain("Cursor-native signal");
     expect(cursor).not.toContain("OMP-native signal");
     expect(cursor).toContain(">Cursor<");
 
-    const transport = await (await app.request("/ui?vendor=agentctl")).text();
+    const transport = await (await app.request("/ui/events?vendor=agentctl")).text();
     expect(transport).not.toContain("Cursor-native signal");
     expect(transport).not.toContain("OMP-native signal");
   });
@@ -95,7 +95,7 @@ describe("web inbox", () => {
     deps.store.ingestEvent(ev({ idempotency_key: "ks2", severity: "info", title: "Info one" }));
     const app = mountApp(deps);
 
-    const res = await app.request("/ui?severity=urgent");
+    const res = await app.request("/ui/events?severity=urgent");
     const body = await res.text();
     expect(body).toContain("Urgent one");
     expect(body).not.toContain("Info one");
@@ -108,7 +108,7 @@ describe("web inbox", () => {
     deps.store.setEventTriageState(a.event_id, "rules_resolved");
     const app = mountApp(deps);
 
-    const res = await app.request("/ui?state=rules_resolved");
+    const res = await app.request("/ui/events?state=rules_resolved");
     const body = await res.text();
     expect(body).toContain("Resolved one");
     expect(body).not.toContain("Pending one");
@@ -132,7 +132,7 @@ describe("web inbox", () => {
     );
     const app = mountApp(deps);
 
-    const res = await app.request("/ui?repo=github.com%2Fa%2Fa");
+    const res = await app.request("/ui/events?repo=github.com%2Fa%2Fa");
     const body = await res.text();
     expect(body).toContain("Repo A event");
     expect(body).not.toContain("Repo B event");
@@ -145,7 +145,7 @@ describe("web inbox", () => {
     deps.store.ingestEvent(ev({ idempotency_key: "kq3", title: "Unrelated", body: "nothing to see" }));
     const app = mountApp(deps);
 
-    const res = await app.request("/ui?q=force");
+    const res = await app.request("/ui/events?q=force");
     const body = await res.text();
     expect(body).toContain("Force push warning");
     expect(body).toContain("Something else");
@@ -165,7 +165,7 @@ describe("web inbox", () => {
     expect(rows.length).toBe(2);
     const app = mountApp(deps);
 
-    const res = await app.request(`/ui?before=${encodeURIComponent(rows[1]!.received_at)}`);
+    const res = await app.request(`/ui/events?before=${encodeURIComponent(rows[1]!.received_at)}`);
     const body = await res.text();
     expect(body).toContain("Earlier event");
     expect(body).not.toContain("Later event");
@@ -179,7 +179,7 @@ describe("web inbox", () => {
       .run(inserted.event_id);
     const app = mountApp(deps);
 
-    const res = await app.request("/ui");
+    const res = await app.request("/ui/events");
     const body = await res.text();
     expect(body).toContain("/ui/incidents/inc_test1");
   });
@@ -190,7 +190,7 @@ describe("web inbox", () => {
     deps.store.ingestEvent(ev({ idempotency_key: "technical-heartbeat", type: "heartbeat", requires_response: false, title: "poll heartbeat" }));
     deps.store.ingestEvent(ev({ idempotency_key: "meaningful-artifact", type: "artifact", requires_response: false, title: "Review bundle ready" }));
 
-    const body = await (await mountApp(deps).request("/ui")).text();
+    const body = await (await mountApp(deps).request("/ui/events")).text();
     expect(body).toContain("Review bundle ready");
     expect(body).not.toContain("token stream update");
     expect(body).not.toContain("poll heartbeat");

@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { AttentionService } from "../src/attention/service.ts";
+import { DecisionPacket } from "../src/attention/contract.ts";
 /**
  * Seeded local preview for the v3 operator console.
  *
@@ -20,11 +23,11 @@ import {
   seedOutcome,
 } from "../test/web/helpers.ts";
 
-const clock = new FakeClock(new Date("2026-08-30T14:00:00Z"));
+const clock = new FakeClock(new Date());
 const store = memoryStore(clock);
 const config = testConfig({
   state_dir: "/tmp/car-v3-ui-preview",
-  http: { ingest_tokens: { preview: "preview-token" } },
+  http: { private_reads: false, ingest_tokens: { web: "preview-token" } },
   // The preview has no background poller; keep its seeded health fresh for a
   // normal review session while production retains the 15s default.
   agentctl_observer: { enabled: true, observe_all: true, interval_seconds: 3600 },
@@ -258,6 +261,18 @@ store.db.query("UPDATE outbox SET state = 'delivered', sent_message_id = 'tg-pre
   deliveredDigestOutbox,
 );
 
+// Seed the current decision experience as well as the advanced legacy inspectors.
+const attention = new AttentionService(store, config, deps.channel);
+const owner = { workspaceId: config.attention.workspace_id, clientId: "preview-mac", host: "preview-host" };
+const packet = DecisionPacket.parse(JSON.parse(readFileSync(new URL("../examples/attention/migration-decision.json", import.meta.url), "utf8")));
+attention.raise(owner, "preview-needs-you", packet);
+attention.raise(owner, "preview-preparing", DecisionPacket.parse({ goal: "Repair CI", blocker: "Failure cause unknown", question: "Should we change the supported runtime?" }));
+const waiting = attention.raise(owner, "preview-waiting", { ...packet, question: "Approve the staged migration plan?" });
+attention.answer(waiting.id, waiting.revision, "human:preview", { option_id: "preserve" });
+const finished = attention.raise(owner, "preview-complete", { ...packet, question: "Preserve the compatibility test fixture?" });
+const received = attention.answer(finished.id, finished.revision, "human:preview", { text: "Keep the fixture" });
+attention.acknowledge(owner, finished.id, received.id, "received");
+attention.acknowledge(owner, finished.id, received.id, "resolved", "Source confirmed work resumed");
 const app = mountApp(deps);
 const port = Number(process.env.CAR_UI_PREVIEW_PORT ?? 7194);
 const server = Bun.serve({ hostname: "127.0.0.1", port, fetch: app.fetch });

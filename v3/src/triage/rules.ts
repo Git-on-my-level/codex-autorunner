@@ -66,12 +66,12 @@ export function sessionEndedOk(row: EventRow): boolean {
  */
 export function classifyEvent(row: EventRow, ctx: RulesContext): RuleOutcome {
   // 0. Expired events are moot by definition (contract `expires_at`).
-  if (row.expires_at && new Date(row.expires_at).getTime() < ctx.now.getTime()) {
+  if (row.expires_at && new Date(row.expires_at).getTime() <= ctx.now.getTime()) {
     return { kind: "expired", reason: `event expired at ${row.expires_at}` };
   }
 
   // 1. Trivial lifecycle types — $0, no incident, whoever the actor is.
-  if (TRIVIAL_TYPES.has(row.type)) {
+  if (TRIVIAL_TYPES.has(row.type) && row.requires_response !== 1 && row.severity !== "urgent") {
     return { kind: "resolved", reason: `trivial type ${row.type}` };
   }
 
@@ -90,14 +90,14 @@ export function classifyEvent(row: EventRow, ctx: RulesContext): RuleOutcome {
 
   // 4. session.ended that plainly succeeded.
   if (row.type === "session.ended") {
-    return sessionEndedOk(row)
+    return sessionEndedOk(row) && row.requires_response !== 1
       ? { kind: "resolved", reason: "session.ended ok" }
       : { kind: "llm", reason: "session.ended failed" };
   }
 
   // 5. FYI notes below the attention bar.
   if (row.type === "note") {
-    return severityRank(row.severity) < SEVERITY_RANK.attention!
+    return row.requires_response !== 1 && severityRank(row.severity) < SEVERITY_RANK.attention!
       ? { kind: "resolved", reason: `note below attention (severity=${row.severity})` }
       : { kind: "llm", reason: `note at severity=${row.severity}` };
   }

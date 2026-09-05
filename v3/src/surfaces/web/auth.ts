@@ -1,51 +1,47 @@
+/** Human credentials are deliberately separate from agent credentials. */
 import { createHmac } from "node:crypto";
 import type { Context } from "hono";
-import { getCookie, setCookie } from "hono/cookie";
+import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import type { CarConfig } from "../../config/config.ts";
 import { authorize, configuredTokens, timingSafeEqual } from "../../ingest/auth.ts";
 
 const COOKIE = "car_ui_session";
-const COOKIE_PAYLOAD = "car-ui-session-v1";
 const SESSION_SECONDS = 8 * 60 * 60;
-
-function sessionValue(token: string): string {
-  return `v1.${createHmac("sha256", token).update(COOKIE_PAYLOAD).digest("base64url")}`;
+const sign = (token: string, expiry: number) => createHmac("sha256", token).update(`car-ui-v2:${expiry}`).digest("base64url");
+function validCookie(c: Context, config: CarConfig): boolean {
+  const cookie = getCookie(c, COOKIE);
+  const match = cookie?.match(/^v2\.(\d{10})\.([A-Za-z0-9_-]{43})$/);
+  if (!match) return false;
+  const expiry = Number(match[1]);
+  const now = Math.floor(Date.now() / 1_000);
+  if (expiry <= now || expiry > now + SESSION_SECONDS) return false;
+  return configuredTokens(config, "web").some((token) => timingSafeEqual(match[2]!, sign(token, expiry)));
 }
-
+export function webOrigin(c: Context, config: CarConfig): string {
+  // Never trust arbitrary X-Forwarded-* headers. TLS proxies configure the one
+  // externally visible origin explicitly instead.
+  return new URL(config.http.public_origin ?? c.req.url).origin;
+}
+export function sameWebOrigin(c: Context, config: CarConfig): boolean {
+  const origin = c.req.header("origin");
+  if (!origin) return false;
+  try { return new URL(origin).origin === webOrigin(c, config); } catch { return false; }
+}
 export function authenticateWebWrite(c: Context, config: CarConfig): boolean {
-  if (authorize(c, config, "web").ok) return true;
-  const cookie = getCookie(c, COOKIE);
-  if (!cookie || !sameOrigin(c)) return false;
-  return configuredTokens(config, "web").some((token) => timingSafeEqual(cookie, sessionValue(token)));
+  return authorize(c, config, "web").ok || (validCookie(c, config) && sameWebOrigin(c, config));
 }
-
-/** Read-side capability check used to avoid rendering controls that can only 401. */
 export function hasWebWriteSession(c: Context, config: CarConfig): boolean {
-  if (authorize(c, config, "web").ok) return true;
-  const cookie = getCookie(c, COOKIE);
-  return Boolean(cookie && configuredTokens(config, "web").some((token) => timingSafeEqual(cookie, sessionValue(token))));
+  return authorize(c, config, "web").ok || validCookie(c, config);
 }
-
 export function establishWebSession(c: Context, config: CarConfig, presented: string): boolean {
+  if (c.req.header("sec-fetch-site") === "cross-site" || (c.req.header("origin") && !sameWebOrigin(c, config))) return false;
   const token = configuredTokens(config, "web").find((candidate) => timingSafeEqual(candidate, presented));
   if (!token) return false;
-  setCookie(c, COOKIE, sessionValue(token), {
-    httpOnly: true,
-    sameSite: "Strict",
-    path: "/ui",
-    maxAge: SESSION_SECONDS,
+  const expiry = Math.floor(Date.now() / 1_000) + SESSION_SECONDS;
+  setCookie(c, COOKIE, `v2.${expiry}.${sign(token, expiry)}`, {
+    httpOnly: true, sameSite: "Strict", path: "/", maxAge: SESSION_SECONDS,
+    secure: webOrigin(c, config).startsWith("https:"),
   });
   return true;
 }
-
-/** Cookie-authenticated writes must originate from the same browser origin. */
-function sameOrigin(c: Context): boolean {
-  const origin = c.req.header("origin");
-  const host = c.req.header("host");
-  if (!origin || !host) return false;
-  try {
-    return new URL(origin).host === host;
-  } catch {
-    return false;
-  }
-}
+export function clearWebSession(c: Context): void { deleteCookie(c, COOKIE, { path: "/" }); }

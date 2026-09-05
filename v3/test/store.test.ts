@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { memoryStore, FakeClock } from "./fakes.ts";
 import { IdempotencyConflictError, StaleClaimError, openDb } from "../src/store/db.ts";
 import { parseEvent, CONTRACT_VERSION } from "../src/contract/events.ts";
-import { MIGRATIONS } from "../src/store/migrations.ts";
+import { APPLICATION_ID, SCHEMA_VERSION } from "../src/store/schema.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,39 +24,55 @@ function ev(overrides: Record<string, unknown> = {}) {
 }
 
 describe("store", () => {
-  test("additive migration preserves existing v1 events and makes them source-scoped", () => {
-    const dir = mkdtempSync(join(tmpdir(), "car-v3-migration-"));
+  test("fresh schema is marked CAR3 and unknown state is not implicitly migrated", () => {
+    const fresh = openDb(":memory:");
+    expect(fresh.query("PRAGMA application_id").get()).toEqual({ application_id: APPLICATION_ID });
+    expect(fresh.query("PRAGMA user_version").get()).toEqual({ user_version: SCHEMA_VERSION });
+    fresh.close();
+    const dir = mkdtempSync(join(tmpdir(), "car-v3-schema-"));
     const path = join(dir, "car.db");
     try {
-      const v1 = new Database(path, { create: true });
-      v1.exec(MIGRATIONS[0]!);
-      v1.exec("PRAGMA user_version = 1");
-      v1.query(
-        `INSERT INTO events
-         (id, idempotency_key, type, severity, ts, received_at, requires_response,
-          title, body, payload_json, actor, source_vendor, source_host, source_adapter)
-         VALUES ('evt_old', 'old-key', 'note', 'info', '2026-08-26T12:00:00Z',
-          '2026-08-26T12:00:00Z', 0, 'old', '', '{}', 'external', 'cron', 'mac', 'curl')`,
-      ).run();
-      v1.close();
+      const prior = new Database(path, { create: true });
+      prior.exec("CREATE TABLE evidence(value TEXT); INSERT INTO evidence VALUES ('retained'); PRAGMA user_version=8;");
+      prior.close();
+      expect(() => openDb(path)).toThrow("Unsupported CAR state");
+      const unchanged = new Database(path);
+      expect(unchanged.query("SELECT value FROM evidence").get()).toEqual({ value: "retained" });
+      unchanged.close();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
 
-      const migrated = openDb(path);
-      expect((migrated.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(
-        MIGRATIONS.length,
-      );
-      expect(migrated.query("SELECT id, source_id FROM events WHERE id = 'evt_old'").get()).toMatchObject({
-        id: "evt_old",
-      });
-      expect(
-        (migrated.query("SELECT COUNT(*) AS n FROM idempotency WHERE object_id = 'evt_old'").get() as { n: number })
-          .n,
-      ).toBe(1);
-      const effectColumns = (migrated.query("PRAGMA table_info(effects)").all() as { name: string }[]).map((row) => row.name);
-      expect(effectColumns).toEqual(expect.arrayContaining(["scope_json", "lineage_json", "deadline_at", "action_class", "cost_usd"]));
-      migrated.close();
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  test("matching CAR3 headers do not bless a missing or partial schema, while a canonical file reopens", () => {
+    const dir = mkdtempSync(join(tmpdir(), "car-v3-schema-validation-"));
+    const headerOnlyPath = join(dir, "header-only.db");
+    const partialPath = join(dir, "partial.db");
+    const canonicalPath = join(dir, "canonical.db");
+    try {
+      const headerOnly = new Database(headerOnlyPath, { create: true });
+      headerOnly.exec(`PRAGMA application_id = ${APPLICATION_ID}; PRAGMA user_version = ${SCHEMA_VERSION};`);
+      headerOnly.close();
+      expect(() => openDb(headerOnlyPath)).toThrow("Schema validation: missing");
+      const unchangedHeaderOnly = new Database(headerOnlyPath);
+      expect(unchangedHeaderOnly.query("SELECT COUNT(*) AS n FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").get()).toEqual({ n: 0 });
+      unchangedHeaderOnly.close();
+
+      const partial = new Database(partialPath, { create: true });
+      partial.exec(`CREATE TABLE actions (id TEXT PRIMARY KEY); PRAGMA application_id = ${APPLICATION_ID}; PRAGMA user_version = ${SCHEMA_VERSION};`);
+      partial.close();
+      expect(() => openDb(partialPath)).toThrow("Schema validation");
+      const unchangedPartial = new Database(partialPath);
+      expect(unchangedPartial.query("SELECT name FROM sqlite_schema WHERE name = 'actions'").get()).toEqual({ name: "actions" });
+      unchangedPartial.close();
+
+      const firstOpen = openDb(canonicalPath);
+      expect(firstOpen.query("SELECT COUNT(*) AS n FROM sqlite_schema WHERE name = 'events'").get()).toEqual({ n: 1 });
+      firstOpen.close();
+      const reopened = openDb(canonicalPath);
+      expect(reopened.query("PRAGMA application_id").get()).toEqual({ application_id: APPLICATION_ID });
+      expect(reopened.query("PRAGMA user_version").get()).toEqual({ user_version: SCHEMA_VERSION });
+      expect(reopened.query("SELECT COUNT(*) AS n FROM sqlite_schema WHERE name = 'events'").get()).toEqual({ n: 1 });
+      reopened.close();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   test("ingest is idempotent on idempotency_key", () => {

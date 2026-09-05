@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { buildDeps, mountApp } from "./helpers.ts";
+import { buildDeps, mountApp, WEB_AUTH_HEADERS, WEB_TEST_TOKEN } from "./helpers.ts";
 import { FakeClock, memoryStore, testConfig } from "../fakes.ts";
+
+const authenticatedRead = (deps: Parameters<typeof mountApp>[0], path: string) =>
+  mountApp(deps).request(path, { headers: WEB_AUTH_HEADERS });
+const privateReadConfig = (overrides: Record<string, unknown>) => testConfig({
+  ...overrides,
+  http: { private_reads: true, ingest_tokens: { web: WEB_TEST_TOKEN } },
+});
 
 describe("web runs", () => {
   test("renders a compact native-agent run model without guessed metadata", async () => {
@@ -27,7 +34,7 @@ describe("web runs", () => {
       observationState: "stale",
     });
 
-    const res = await mountApp(deps).request("/ui/runs");
+    const res = await authenticatedRead(deps, "/ui/runs");
     expect(res.status).toBe(200);
     const body = await res.text();
     expect(body).toContain("Audit settings flow");
@@ -41,19 +48,19 @@ describe("web runs", () => {
   });
 
   test("surfaces degraded observer health", async () => {
-    const deps = buildDeps({ config: (await import("../fakes.ts")).testConfig({ agentctl_observer: { enabled: true, observe_all: true } }) });
+    const deps = buildDeps({ config: privateReadConfig({ agentctl_observer: { enabled: true, observe_all: true } }) });
     deps.store.kvSet("agentctl.observer.health", { state: "degraded", observed_at: "2026-08-26T12:00:00Z", error: "agentctl unavailable" });
-    const body = await (await mountApp(deps).request("/ui/runs")).text();
+    const body = await (await authenticatedRead(deps, "/ui/runs")).text();
     expect(body).toContain("Observation degraded");
     expect(body).toContain("agentctl unavailable");
   });
 
   test("an old healthy snapshot becomes visibly stale", async () => {
     const { testConfig } = await import("../fakes.ts");
-    const deps = buildDeps({ config: testConfig({ agentctl_observer: { enabled: true, observe_all: true } }) });
+    const deps = buildDeps({ config: privateReadConfig({ agentctl_observer: { enabled: true, observe_all: true } }) });
     deps.store.upsertAgentRun({ executionId: "exec-old", agent: "cursor", state: "running", liveness: "healthy", title: "Old snapshot", updatedAt: "2026-08-20T12:00:00Z" });
     deps.store.kvSet("agentctl.observer.health", { state: "ok", observed_at: "2026-08-20T12:00:00Z" });
-    const body = await (await mountApp(deps).request("/ui/runs")).text();
+    const body = await (await authenticatedRead(deps, "/ui/runs")).text();
     expect(body).toContain("Run status may be stale");
     expect(body).toContain("Last seen Running");
   });
@@ -61,10 +68,10 @@ describe("web runs", () => {
   test("native attention and blocked states enter the attention summary", async () => {
     const now = new Date();
     const store = memoryStore(new FakeClock(now));
-    const deps = buildDeps({ store, config: testConfig({ agentctl_observer: { enabled: true, observe_all: true } }) });
+    const deps = buildDeps({ store, config: privateReadConfig({ agentctl_observer: { enabled: true, observe_all: true } }) });
     deps.store.upsertAgentRun({ executionId: "exec-attention", agent: "cursor", title: "Permission needed", state: "attention", liveness: "blocked", updatedAt: now.toISOString() });
     deps.store.kvSet("agentctl.observer.health", { state: "ok", observed_at: now.toISOString() });
-    const body = await (await mountApp(deps).request("/ui/runs?state=attention")).text();
+    const body = await (await authenticatedRead(deps, "/ui/runs?state=attention")).text();
     expect(body).toContain("Permission needed");
     expect(body).toContain("Needs attention");
     expect(body).toContain(">0</span><span class=\"overview-label\">active");
@@ -74,9 +81,9 @@ describe("web runs", () => {
   test("distinguishes partial terminal history from incomplete active coverage", async () => {
     const now = new Date();
     const store = memoryStore(new FakeClock(now));
-    const deps = buildDeps({ store, config: testConfig({ agentctl_observer: { enabled: true, observe_all: true } }) });
+    const deps = buildDeps({ store, config: privateReadConfig({ agentctl_observer: { enabled: true, observe_all: true } }) });
     deps.store.kvSet("agentctl.observer.health", { state: "ok", observed_at: now.toISOString(), coverage_degraded: false, history_truncated: true });
-    const body = await (await mountApp(deps).request("/ui/runs")).text();
+    const body = await (await authenticatedRead(deps, "/ui/runs")).text();
     expect(body).toContain("Older history is partial");
     expect(body).toContain("Active coverage is complete");
     expect(body).not.toContain("Active coverage is incomplete");
@@ -85,7 +92,7 @@ describe("web runs", () => {
   test("renders reliable active work with live refresh and useful details", async () => {
     const now = new Date();
     const store = memoryStore(new FakeClock(now));
-    const deps = buildDeps({ store, config: testConfig({ agentctl_observer: { enabled: true, required_labels: ["car-observe"] } }) });
+    const deps = buildDeps({ store, config: privateReadConfig({ agentctl_observer: { enabled: true, required_labels: ["car-observe"] } }) });
     deps.store.upsertAgentRun({
       executionId: "exec-live",
       agent: "cursor",
@@ -100,7 +107,7 @@ describe("web runs", () => {
       runtime: "cursor/current",
     });
     deps.store.kvSet("agentctl.observer.health", { state: "ok", observed_at: now.toISOString(), run_count: 1, coverage_degraded: false });
-    const body = await (await mountApp(deps).request("/ui/runs")).text();
+    const body = await (await authenticatedRead(deps, "/ui/runs")).text();
     expect(body).toContain("Runs Live Truth");
     expect(body).toContain("Live · refreshed just now");
     expect(body).toContain('data-live-refresh="true"');
@@ -113,13 +120,13 @@ describe("web runs", () => {
   test("filters runs without changing full-set summary counts", async () => {
     const now = new Date();
     const store = memoryStore(new FakeClock(now));
-    const deps = buildDeps({ store, config: testConfig({ agentctl_observer: { enabled: true, observe_all: true } }) });
+    const deps = buildDeps({ store, config: privateReadConfig({ agentctl_observer: { enabled: true, observe_all: true } }) });
     for (const [id, agent, title] of [["exec-cursor-done", "cursor", "Cursor finished"], ["exec-omp-done", "omp", "OMP finished"]] as const) {
       deps.store.upsertAgentRun({ executionId: id, agent, title, state: "completed", liveness: "exited", updatedAt: now.toISOString(), terminalAt: now.toISOString() });
     }
     deps.store.upsertAgentRun({ executionId: "exec-active", agent: "omp", title: "OMP active", state: "running", liveness: "alive", updatedAt: now.toISOString() });
     deps.store.kvSet("agentctl.observer.health", { state: "ok", observed_at: now.toISOString() });
-    const body = await (await mountApp(deps).request("/ui/runs?state=finished&agent=cursor")).text();
+    const body = await (await authenticatedRead(deps, "/ui/runs?state=finished&agent=cursor")).text();
     expect(body).toContain("Cursor finished");
     expect(body).not.toContain("OMP finished");
     expect(body).not.toContain("OMP active");
@@ -130,14 +137,14 @@ describe("web runs", () => {
   test("pins active work ahead of paginated terminal history", async () => {
     const now = new Date();
     const store = memoryStore(new FakeClock(now));
-    const deps = buildDeps({ store, config: testConfig({ agentctl_observer: { enabled: true, observe_all: true } }) });
+    const deps = buildDeps({ store, config: privateReadConfig({ agentctl_observer: { enabled: true, observe_all: true } }) });
     deps.store.upsertAgentRun({ executionId: "exec-active", agent: "cursor", title: "Pinned active work", state: "running", liveness: "alive", updatedAt: new Date(now.getTime() - 86_400_000).toISOString() });
     for (let i = 0; i < 51; i++) {
       const at = new Date(now.getTime() - i * 1_000).toISOString();
       deps.store.upsertAgentRun({ executionId: `exec-done-${i}`, agent: "omp", title: `Finished ${i}`, state: "completed", liveness: "exited", updatedAt: at, terminalAt: at });
     }
     deps.store.kvSet("agentctl.observer.health", { state: "ok", observed_at: now.toISOString() });
-    const body = await (await mountApp(deps).request("/ui/runs")).text();
+    const body = await (await authenticatedRead(deps, "/ui/runs")).text();
     expect(body).toContain("Pinned active work");
     expect(body).toContain("Older");
     expect(body).toContain("Finished <span class=\"count\">51");

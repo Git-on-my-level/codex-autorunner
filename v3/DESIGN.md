@@ -1,3 +1,11 @@
+> **Current foundation:** ADR 0002 adds grounded decisions; ADR 0003 supersedes
+> migration/cutover assumptions and the power-user-first UI. This is an unreleased
+> PR with a clean schema bootstrap. Read `AGENTS.md`, `docs/foundation-contract.md`,
+> `docs/deployment.md` and `VALIDATION.md` before changing the implementation.
+> Details below describe the native router/provider design; target capabilities
+> are not claims of completed shared SaaS, live deployment validation or universal
+> receipt support. Guided packets and native events share core handoff plumbing.
+
 # CAR v3 — Target Design
 
 **CAR v3 is a cross-vendor attention router.** It is the durable layer between you and
@@ -75,7 +83,7 @@ v3/
     surfaces/web/        # Hono server-rendered JSX + htmx; /brief.md
     digest/       # digest builder + silence watchdog
     daemon.ts     # composition root (router loops, below)
-    cli.ts        # `card` CLI: serve | emit | status | doctor | migration-audit
+    cli.ts        # `card` CLI: serve | raise | request | mcp | status | doctor
   test/           # mirrors src/; test/fixtures/ = golden wire events per source
   ops/            # launchd plist + systemd unit templates + install notes
 ```
@@ -646,19 +654,19 @@ and `superseded` are visible terminal outcomes, not successful delivery.
 
 ## 9. Web UI
 
-Hono server-rendered JSX + htmx. No build step, no SPA. Localhost bind (tailnet
-exposure via tailscale serve is deliberately out of scope). Stateless views over
-SQLite. It is a power-user viewport onto the same tables the bot uses — no chat.
+Hono server-rendered JSX, ordinary HTML forms, no SPA or external assets. Minimal
+JavaScript only protects live refresh and localizes readable UTC timestamps. The
+normal views are **Needs you / Watching / Handled / Settings**, not a power-user
+console. A decision card includes why the human is needed, attributed recommendation,
+uncertainty, evidence, exact option answers/consequences and revision-bound input.
+Missing deadlines are reviewed as misses, never silently relabelled as resolution.
 
-v1 pages: **Inbox** (event stream; filters vendor/repo/severity/state; FTS),
-**Incident detail** (full context → decision → outcome → audit rows; the "why did CAR
-do that" page, including provider/grant/safety/effect provenance), **Providers**
-(resolved capability routes, health, versions, instance topology, and provider-owned
-memory links or exports), **Grants** (core-owned create, constrain, revoke, and audit),
-**Safety** (core rails and current breaker/budget state; provider policy shown
-separately),
-**Digest archive**, **`GET /brief.md`** (open escalations + stuck sessions +
-yesterday's digest as markdown — for other agents to curl).
+Advanced event, incident, provider/policy, grants, digest and run inspection remains
+secondary. The UI projects core state; it cannot mutate lifecycle through its own
+state machine. Counts and rows share predicates. Drafts survive blur and automatic
+refresh. Error pages preserve submitted decision text without claiming success.
+Local and remote authenticated deployments use the same UI; proxy/TLS origin is
+configured explicitly. See `docs/deployment.md` and ADR 0003.
 
 ## 10. Implemented rewrite boundary
 
@@ -685,35 +693,17 @@ compatibility projection only. It is not consulted for routing, provider selecti
 grant creation, safety authorization, or effect execution and can be removed as those
 views move to provider/core projections.
 
-Migration is one-way and auditable: import/replay into the one v3 database, verify
-readiness, then archive v2 state. There is no steady-state dual writer, bidirectional
-sync, or legacy fallback that can create two lifecycle authorities.
+There is no existing v3 deployment to migrate. The pre-release implementation uses
+one complete bootstrap schema and refuses unknown/nonempty database identities
+without conversion or deletion. The old cutover auditor and synthetic migration
+chain were removed. The v2 tree is unchanged; operating/importing a real v2 service
+would require a separate explicit scope, not an implicit v3 fallback.
 
-`card migration-audit --v2-root <quiesced-root>` produces the immutable
-`car.v2-cutover-report.v1` artifact used at this gate. It hashes the source inventory,
-inspects SQLite lifecycle columns, fails closed on active rows or live journal evidence,
-and preserves unclassified nonempty tables for human review. It deliberately does not
-synthesize v3 facts from ambiguous v2 rows; an explicit import must cite the report,
-and the audit must be rerun against the final drained/imported source tree before
-read-only archival.
-
-The cutover gate is criterion-based, not time-based:
-
-- all active source adapters write v3 only, and every active v2 item is drained or
-  represented in an import report with unknown/contradictory facts preserved;
-- native no-dependency and Hermes modes pass shared contract, restart, timeout, and
-  scope-isolation tests;
-- grant/safety, stale-claim, idempotency-race, interaction-replay, and
-  uncertain-delivery fault tests pass;
-- all localhost write/provider-control paths reject unauthenticated callers; verified
-  VCS identity cannot be substituted by cwd basename; distinct native permission
-  requests retain distinct immutable lineages; and canonical dangerous-content rails
-  block protected arguments even under a matching grant;
-- the external dead-man observer and independent alert destination are proven;
-- rollback is an immutable v2 state archive/export, never a second live writer.
-
-When the gate passes, v3 takes the `car` name and v2 state becomes read-only. The next
-removal release deletes the v2 runtime while preserving the documented archive/export.
+Release qualification must establish full runtime tests, fresh installation,
+credential isolation, restart/replay behavior, exact receipt and deadline semantics,
+source-scoped authority and real human round trips across intended deployment modes.
+The test matrix and actual validation status are recorded separately, not inferred
+from a design paragraph or a daemon health endpoint.
 
 **Tests:** golden wire fixtures per source; `:memory:` core SQLite; scripted provider
 fakes that assert typed proposals rather than prose; contract tests shared by native

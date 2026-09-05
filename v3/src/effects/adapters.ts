@@ -59,11 +59,16 @@ export function createCoreEffectAdapters(store: Store, actions: CarActionBus, ch
       responseChannel(source.response_channel_json),
       type === "reply" ? { text } : { approval: type === "approve", ...(text ? { text } : {}) },
     );
+    if (effect.lineage.event_id) {
+      store.db.query("UPDATE events SET obligation_state = ? WHERE id = ? AND obligation_state NOT IN ('resolved','cancelled','expired')")
+        .run(result === "delivered" ? "delivered" : result === "failed" ? "open" : "staged", effect.lineage.event_id);
+      store.audit("effects", "reply.delivery_observed", "event", effect.lineage.event_id, { delivery: result });
+    }
     return {
-      ok: result !== "failed",
-      // queued/degraded means the durable fallback accepted delivery work; it
-      // is not the remote-send crash window represented by outbox `uncertain`.
-      outcome: result === "failed" ? "failed" : "ok",
+      ok: result === "delivered",
+      // Fallback acceptance is not completed delivery. This coarse effect
+      // outcome stays uncertain; the result preserves queued vs degraded.
+      outcome: result === "delivered" ? "ok" : result === "failed" ? "failed" : "uncertain",
       output: result,
       result: { delivery: result },
     };

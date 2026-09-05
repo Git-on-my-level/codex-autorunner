@@ -312,7 +312,11 @@ describe("multica normalizer", () => {
   });
 
   test("action vocabularies map onto the contract", () => {
-    const type = (action: string) => normalizeMultica({ action, issue: { ref: "M-1" } }, ctx()).type;
+    const type = (action: string) => normalizeMultica({
+      action,
+      issue: { ref: "M-1" },
+      ...(action === "closed" || action === "resolved" || action === "completed" ? { request_event_id: "evt-1" } : {}),
+    }, ctx()).type;
     expect(type("question")).toBe("attention.question");
     expect(type("assigned")).toBe("attention.question");
     expect(type("review_requested")).toBe("attention.question");
@@ -320,6 +324,30 @@ describe("multica normalizer", () => {
     expect(type("failed")).toBe("attention.error");
     expect(type("closed")).toBe("attention.cleared");
     expect(type("updated")).toBe("note");
+  });
+
+  test("a closure forwards one explicit CAR request identity", () => {
+    const byEvent = normalizeMultica(
+      { action: "closed", request_event_id: "evt_car_123", issue: { ref: "M-1" } },
+      ctx(),
+    );
+    expect(byEvent.type).toBe("attention.cleared");
+    expect(byEvent.payload).toMatchObject({ request_event_id: "evt_car_123" });
+
+    const byKey = normalizeMultica(
+      { action: "closed", request_idempotency_key: "multica:M-1:question:abc", issue: { ref: "M-1" } },
+      ctx(),
+    );
+    expect(byKey.payload).toMatchObject({ request_idempotency_key: "multica:M-1:question:abc" });
+  });
+
+  test("an ambiguous or unbound closure is rejected", () => {
+    expect(() => normalizeMultica({ action: "closed", issue: { ref: "M-1" } }, ctx()))
+      .toThrow(/missing request_event_id or request_idempotency_key/);
+    expect(() => normalizeMultica({ action: "closed", request_event_id: "evt-1", request_idempotency_key: "key-1", issue: { ref: "M-1" } }, ctx()))
+      .toThrow(/ambiguous request target/);
+    expect(() => normalizeMultica({ action: "closed", request_event_id: 42, issue: { ref: "M-1" } }, ctx()))
+      .toThrow(/request_event_id must be a nonempty string/);
   });
 
   test("a comment ending in a question mark escalates; otherwise it is a note", () => {

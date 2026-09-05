@@ -27,7 +27,7 @@ export const WEB_AUTH_HEADERS = { authorization: `Bearer ${WEB_TEST_TOKEN}` };
 export function buildDeps(opts: { store?: Store; config?: CarConfig } = {}): DaemonDeps {
   const store = opts.store ?? memoryStore();
   const config =
-    opts.config ?? testConfig({ http: { ingest_tokens: { web: WEB_TEST_TOKEN } } });
+    opts.config ?? testConfig({ http: { private_reads: false, ingest_tokens: { web: WEB_TEST_TOKEN } } });
   const { writer } = createMemory(store, config);
   const noopTriage: TriagePort = { tick: async () => 0 };
   return {

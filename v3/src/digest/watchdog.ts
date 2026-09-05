@@ -76,10 +76,13 @@ export function runWatchdog(
        WHERE e.requires_response = 1
          AND e.car_session_id IS NOT NULL
          AND e.received_at < ?
-         AND (i.id IS NULL OR i.state IN ('open', 'escalated'))
+         AND e.obligation_state NOT IN ('resolved','cancelled','expired')
+         AND (e.expires_at IS NULL OR e.expires_at > ?)
+         AND (i.state IS NULL OR i.state != 'snoozed' OR i.snooze_until IS NULL OR i.snooze_until <= ?)
+
        GROUP BY e.car_session_id`,
     )
-    .all(pendingCutoff) as { car_session_id: string; oldest: string; n: number }[];
+    .all(pendingCutoff, now.toISOString(), now.toISOString()) as { car_session_id: string; oldest: string; n: number }[];
 
   for (const row of pendingRows) {
     const session = getSessionSummary(store, row.car_session_id);

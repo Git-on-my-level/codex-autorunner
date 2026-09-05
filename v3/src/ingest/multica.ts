@@ -73,6 +73,11 @@ export function normalizeMultica(raw: unknown, ctx: NormalizeContext): CarEvent 
   const issueBody = str(issue, "body", "description", "text", "content");
 
   const mapped = classify(action, issue);
+  // A lifecycle close is not a request identity.  A card ref/session can have
+  // several asks over its lifetime, so only an explicit CAR event id or the
+  // exact CAR idempotency key may be forwarded to the router.  Do this before
+  // building the event so a malformed/ambiguous close is rejected at ingest.
+  const clearanceTarget = mapped.type === "attention.cleared" ? readClearanceTarget(raw) : null;
   const ts = isoTs(
     raw["ts"] ?? raw["timestamp"] ?? raw["created_at"] ?? raw["occurred_at"] ?? issue["updated_at"],
     ctx.now,
@@ -121,9 +126,42 @@ export function normalizeMultica(raw: unknown, ctx: NormalizeContext): CarEvent 
         ...(url ? { url } : {}),
         ...(actor ? { actor } : {}),
       },
-      raw: raw,
+      ...(clearanceTarget ?? {}),
+      // Do not allow a large vendor blob to truncate the exact target fields
+      // above.  Closure evidence is intentionally limited to the normalized
+      // metadata and target identity; non-closure events retain the raw input.
+      ...(clearanceTarget ? {} : { raw }),
     },
   });
+}
+
+type ClearanceTarget =
+  | { request_event_id: string }
+  | { request_idempotency_key: string };
+
+/**
+ * Read the only two supported Multica closure target fields.  `event_id` is
+ * deliberately not accepted: Multica's delivery id uses that generic name,
+ * and treating it as a CAR request id could resolve the closure itself or a
+ * different delivery.  A closure with both fields is rejected rather than
+ * guessing which identity is authoritative.
+ */
+function readClearanceTarget(raw: Record<string, unknown>): ClearanceTarget {
+  const hasEventId = Object.hasOwn(raw, "request_event_id");
+  const hasRequestKey = Object.hasOwn(raw, "request_idempotency_key");
+  if (hasEventId === hasRequestKey) {
+    throw new NormalizeError(
+      hasEventId
+        ? "multica closure has ambiguous request target; provide only request_event_id or request_idempotency_key"
+        : "multica closure is missing request_event_id or request_idempotency_key",
+    );
+  }
+  const field = hasEventId ? "request_event_id" : "request_idempotency_key";
+  const value = raw[field];
+  if (typeof value !== "string" || value.length === 0 || value.length > 512) {
+    throw new NormalizeError(`multica closure ${field} must be a nonempty string of at most 512 characters`);
+  }
+  return hasEventId ? { request_event_id: value } : { request_idempotency_key: value };
 }
 
 function classify(

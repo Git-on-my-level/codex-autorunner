@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { ATTENTION_COMMANDS, ATTENTION_HELP, runAttentionCli } from "./attention/cli.ts";
 /** `card` — CAR v3 daemon, authenticated event emitter, status, and diagnostics. */
 import { startDaemon } from "./daemon.ts";
 import { loadConfig, dbPath } from "./config/config.ts";
@@ -7,7 +8,6 @@ import { openStore } from "./store/db.ts";
 import { CONTRACT_VERSION, computedIdempotencyKey, parseEvent } from "./contract/events.ts";
 import { hostname } from "node:os";
 import { mkdirSync } from "node:fs";
-import { defaultCutoverReportPath, writeV2CutoverReport } from "./migration/cutover.ts";
 
 function argValue(args: string[], flag: string): string | undefined {
   const i = args.indexOf(flag);
@@ -16,7 +16,15 @@ function argValue(args: string[], flag: string): string | undefined {
 
 const [cmd, ...rest] = process.argv.slice(2);
 
-switch (cmd) {
+if (cmd && ATTENTION_COMMANDS.has(cmd)) {
+  try { await runAttentionCli(cmd, rest); }
+  catch (error) {
+    const result = { error: (error as { code?: string }).code ?? "command_failed", message: error instanceof Error ? error.message : String(error) };
+    // MCP stdout is reserved exclusively for JSON-RPC.
+    if (cmd === "mcp") console.error(JSON.stringify(result)); else console.log(JSON.stringify(result));
+    process.exitCode = 1;
+  }
+} else switch (cmd) {
   case "serve": {
     const daemon = await startDaemon(argValue(rest, "--config"));
     const shutdown = async () => {
@@ -155,28 +163,8 @@ switch (cmd) {
     process.exit(checks.every(([, ok]) => ok) ? 0 : 1);
   }
 
-  case "migration-audit": {
-    const sourceRoot = argValue(rest, "--v2-root");
-    if (!sourceRoot) {
-      console.error("card migration-audit: --v2-root is required");
-      process.exit(1);
-    }
-    const cfg = loadConfig(argValue(rest, "--config"));
-    mkdirSync(cfg.state_dir, { recursive: true });
-    const store = openStore(dbPath(cfg));
-    const now = new Date();
-    const output = argValue(rest, "--output") ?? defaultCutoverReportPath(cfg.state_dir, now);
-    try {
-      const report = writeV2CutoverReport(store, sourceRoot, output, now);
-      console.log(JSON.stringify({ output, verdict: report.verdict, blockers: report.blockers }, null, 2));
-      process.exitCode = report.verdict === "blocked" ? 2 : report.verdict === "review_required" ? 3 : 0;
-    } finally {
-      store.db.close();
-    }
-    break;
-  }
 
   default:
-    console.log("card <serve|emit|status|doctor|migration-audit> — CAR v3 (see v3/DESIGN.md)");
-    process.exit(cmd ? 1 : 0);
+    console.log(ATTENTION_HELP + "\nAdvanced: card emit | status | doctor");
+    process.exit(cmd && cmd !== "--help" && cmd !== "help" ? 1 : 0);
 }

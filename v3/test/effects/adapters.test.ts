@@ -60,4 +60,34 @@ describe("core effect adapters", () => {
       payload: { text: "Use option A" },
     }]);
   });
+  for (const delivery of ["queued", "degraded"] as const) {
+    test(`${delivery} fallback cannot complete a native reply effect`, async () => {
+      const store = memoryStore();
+      try {
+        const inserted = store.ingestEvent(parseEvent({
+          contract: CONTRACT_VERSION, idempotency_key: `fallback-${delivery}`,
+          ts: "2026-09-04T12:00:00Z", source: {vendor: "codex", host: "mac", adapter: "test"},
+          session: {vendor: "codex", native_id: "thread-1", host: "mac"},
+          type: "attention.question", requires_response: true, title: "Proceed?",
+        }), {sourceId: "auth:test"});
+        const actions = new Actions();
+        const adapter = createCoreEffectAdapters(store, {...actions,
+          deliver: async () => delivery,
+          runTemplate: actions.runTemplate.bind(actions),
+          probeCapabilities: actions.probeCapabilities.bind(actions),
+          listTemplates: actions.listTemplates.bind(actions),
+        }, new FakeChannel()).find(a => a.type === "reply")!;
+        const kernel = createSafetyKernel({ledger: new SqlSafetyLedger(store), clock: store.clock});
+        const proposal: EffectProposal = {intent_id: `fallback-${delivery}`, type: "reply", args: {text: "Keep"},
+          scope: {vendor: "codex"}, lineage: {source_id: "auth:test", request_id: "r", event_id: inserted.event_id}};
+        const grant = kernel.createGrant({intent_id: `g-${delivery}`, lineage: proposal.lineage,
+          scope: proposal.scope, effect_type: "reply", constraints: {args: proposal.args}, created_by: "human"});
+        const result = await createEffectExecutor({kernel, adapters: [adapter]}).execute(proposal, grant.id);
+        expect(result).toMatchObject({ok: false, outcome: "uncertain"});
+        expect(store.db.query("SELECT obligation_state FROM events WHERE id=?").get(inserted.event_id))
+          .toEqual({obligation_state: "staged"});
+      } finally { store.db.close(); }
+    });
+  }
+
 });

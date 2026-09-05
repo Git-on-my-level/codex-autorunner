@@ -6,20 +6,44 @@
 import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
 import { homedir } from "node:os";
+import { readPrivateJson } from "../attention/files.ts";
+import { dirname, resolve } from "node:path";
 import { join } from "node:path";
 
 export const CarConfig = z.object({
   state_dir: z.string().default(join(homedir(), ".car")),
+  /** Optional private JSON map of declared token environment variables. */
+  credentials_file: z.string().optional(),
   http: z
     .object({
       host: z.string().default("127.0.0.1"),
-      port: z.number().int().default(7171),
+      port: z.number().int().min(0).max(65535).default(7171),
+      /** Private events/context require human authentication, including on localhost. */
+      private_reads: z.boolean().default(true),
+      /** Explicit public origin when TLS terminates at a trusted reverse proxy. */
+      public_origin: z.string().url().optional(),
       /** Bearer tokens per authenticated write-source id. Localhost is not exempt. */
       ingest_tokens: z.record(z.string(), z.string()).prefault({}),
       /** Optional env-var names containing tokens, keyed like ingest_tokens. */
       ingest_token_envs: z.record(z.string(), z.string()).prefault({}),
     })
     .prefault({}),
+  attention: z.object({
+    /** One isolated workspace per daemon/database; never a client-supplied tenant id. */
+    workspace_id: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/).default("default"),
+    max_active_per_client: z.number().int().min(1).max(10000).default(100),
+    prepare_seconds: z.number().int().min(1).max(600).default(120),
+    max_context_rounds: z.number().int().min(1).max(5).default(2),
+    triage_enabled: z.boolean().default(false),
+    triage_model: z.string().min(1).optional(),
+    triage_max_runs_per_day: z.number().int().min(1).max(10000).default(20),
+    triage_timeout_seconds: z.number().int().min(1).max(60).default(20),
+    /** Clients can raise/read/ack only their own requests, never answer as a human. */
+    clients: z.record(z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/), z.object({
+      token_env: z.string().regex(/^[A-Z_][A-Z0-9_]*$/),
+      host: z.string().min(1).max(128),
+    })).prefault({}),
+  }).prefault({}),
   telegram: z
     .object({
       enabled: z.boolean().default(false),
@@ -132,13 +156,23 @@ export type CarConfig = z.infer<typeof CarConfig>;
 
 export function loadConfig(path?: string): CarConfig {
   const configPath = path ?? join(homedir(), ".car", "config.toml");
-  const file = Bun.file(configPath);
-  // Bun.file(...).size is 0 for missing files; treat missing as defaults.
+  let configRead = false;
   try {
     const text = require("node:fs").readFileSync(configPath, "utf8") as string;
-    return CarConfig.parse(parseToml(text));
+    configRead = true;
+    const config = CarConfig.parse(parseToml(text));
+    if (config.credentials_file) {
+      const values = readPrivateJson(resolve(dirname(configPath), config.credentials_file)) as Record<string, unknown>;
+      if (!values || typeof values !== "object" || Array.isArray(values)) throw new Error("credentials_file must contain a JSON object");
+      const names = new Set([...Object.values(config.http.ingest_token_envs), ...Object.values(config.attention.clients).map((client) => client.token_env), config.telegram.token_env, config.deadman.token_env]);
+      for (const name of names) {
+        if (values[name] !== undefined && typeof values[name] !== "string") throw new Error(`Credential ${name} must be a string`);
+        if (!process.env[name] && typeof values[name] === "string") process.env[name] = values[name] as string;
+      }
+    }
+    return config;
   } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return CarConfig.parse({});
+    if (!configRead && (err as NodeJS.ErrnoException).code === "ENOENT") return CarConfig.parse({});
     throw err;
   }
 }

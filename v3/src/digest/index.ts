@@ -195,6 +195,7 @@ export function expireSnoozes(deps: DaemonDeps): number {
     if (esc) {
       deps.channel.sendEscalation({
         escalationId: esc.id,
+        notificationRevision: `wake:${now}`,
         incidentId: row.id,
         carSessionId: row.car_session_id,
         severity: esc.severity as EscalationMessage["severity"],

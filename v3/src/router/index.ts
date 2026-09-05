@@ -44,7 +44,7 @@ import { dedupeClassFor } from "../triage/dedupe.ts";
 import { TriageRepo, type IncidentRow } from "../triage/repo.ts";
 import { loadTemplates, policyClassFor } from "../actions/templates.ts";
 import type { ChannelPort } from "../ports.ts";
-import type { Claim, EventRow, Store } from "../store/db.ts";
+import { StaleClaimError, type Claim, type EventRow, type Store } from "../store/db.ts";
 
 const DEFAULT_LIMIT = 20;
 const DEFAULT_LEASE_SECONDS = 120;
@@ -128,6 +128,30 @@ function parsePayload(row: EventRow): Record<string, unknown> {
   }
 }
 
+/**
+ * Resolve a source clearance to one authenticated, still-live native ask.
+ * Session/card identity is only correlation metadata: it is not safe as a
+ * target because one native session can contain multiple asks.  The Multica
+ * adapter forwards either the canonical CAR event id or the source-scoped
+ * request idempotency key; generic/malformed payloads fail closed here too.
+ */
+function exactClearanceTarget(store: Store, row: EventRow): EventRow | null {
+  if (!row.source_id) return null;
+  const payload = parsePayload(row);
+  const requestEventId = payload.request_event_id;
+  const requestKey = payload.request_idempotency_key;
+  if ((typeof requestEventId === "string") === (typeof requestKey === "string")) return null;
+  const target = typeof requestEventId === "string"
+    ? store.db.query("SELECT * FROM events WHERE id = ? AND source_id = ?").get(requestEventId, row.source_id) as EventRow | null
+    : store.db.query("SELECT * FROM events WHERE idempotency_key = ? AND source_id = ?").get(requestKey as string, row.source_id) as EventRow | null;
+  if (!target || target.requires_response !== 1) return null;
+  if (["resolved", "cancelled", "expired"].includes(target.obligation_state ?? "")) return null;
+  // A sweeper may not have visited an expired row yet.  A late native close
+  // must never rewrite that missed outcome as a successful resolution.
+  if (target.expires_at && Date.parse(target.expires_at) <= store.clock.now().getTime()) return null;
+  return target;
+}
+
 function sessionFor(store: Store, row: EventRow): SessionCore | null {
   if (!row.car_session_id) return null;
   return (store.db.query(
@@ -165,11 +189,17 @@ function requestIdFor(capability: Capability, row: EventRow, incidentId: string,
   return `router_${capability}_${digest}`;
 }
 
-function deadlineFor(row: EventRow, session: SessionCore | null, fallbackMs = 120_000): string {
+function deadlineFor(row: EventRow, nowMs: number, fallbackMs = 120_000): string {
   const payload = parsePayload(row);
   const hint = payload.deadline_at ?? payload.deadlineAt;
-  if (typeof hint === "string" && Number.isFinite(Date.parse(hint))) return hint;
-  return new Date(Date.now() + fallbackMs).toISOString();
+  // Provider invocation enforces `deadline_at` against the process wall clock
+  // (Date.now()). Use the later of that and the Store clock so replay clocks
+  // cannot manufacture an already-expired provider request, while explicit
+  // event/payload deadlines remain authoritative.
+  const fallback = Math.max(Date.now(), nowMs) + fallbackMs;
+  const candidates = [fallback, row.expires_at ? Date.parse(row.expires_at) : NaN,
+    typeof hint === "string" ? Date.parse(hint) : NaN].filter(Number.isFinite);
+  return new Date(Math.min(...candidates)).toISOString();
 }
 
 function safeJson(value: unknown): string {
@@ -338,6 +368,12 @@ export function createRouter(options: RouterOptions): RouterLoop {
   const policyEnabled = options.policyEnabled ?? true;
   let timer: ReturnType<typeof setInterval> | undefined;
   let ticking: Promise<RouterTickResult> | null = null;
+  let urgentTicking: Promise<RouterTickResult> | null = null;
+  let urgentTimer: ReturnType<typeof setInterval> | undefined;
+  let stopped = false;
+  function assertClaim(row: EventRow, claim: Claim): void {
+    if (!store.renewEventLease(row.id, claim, leaseSeconds)) throw new StaleClaimError("event", row.id);
+  }
 
   async function providerFor(resolved: ResolvedProvider, capability: Capability): Promise<CapabilityProvider | null> {
     let provider = registry.get(resolved.instance_id);
@@ -363,8 +399,14 @@ export function createRouter(options: RouterOptions): RouterLoop {
   }
 
   function incidentFor(row: EventRow): IncidentRow {
-    const dedupeClass = dedupeClassFor(row);
-    const existing = repo.findLineageIncident(row.car_session_id, dedupeClass);
+    const attached = row.incident_id ? repo.getIncident(row.incident_id) : null;
+    if (attached) return attached;
+    // Correlation is not request identity. Distinct native asks must not inherit
+    // each other's answer, even when they share a title or idempotency prefix.
+    const dedupeClass = row.requires_response === 1
+      ? `request:${payloadSha256({ source: sourceIdFor(row), event: row.id }).slice(0, 32)}`
+      : dedupeClassFor(row);
+    const existing = repo.findLineageIncident(row.car_session_id, dedupeClass, sourceIdFor(row));
     if (existing) return existing.state === "open" ? existing : repo.reopenIncident(existing.id);
     return repo.openIncident({
       carSessionId: row.car_session_id,
@@ -374,21 +416,24 @@ export function createRouter(options: RouterOptions): RouterLoop {
     });
   }
 
-  function escalation(row: EventRow, incident: IncidentRow, rationale: string, question = row.title || row.body || `${row.type} needs attention`, severity = row.severity, detail: Record<string, unknown> = {}, suggestedAction: Record<string, unknown> | null = null): string {
+  function escalation(row: EventRow, incident: IncidentRow, rationale: string, question = row.title || row.body || `${row.type} needs attention`, severity = row.severity, detail: Record<string, unknown> = {}, suggestedAction: Record<string, unknown> | null = null, notify = true): string {
     const decisionId = repo.recordDecision({
+      id: `dec_${payloadSha256({ escalation_event: row.id, incident: incident.id }).slice(0, 36)}`,
       incidentId: incident.id,
-      decidedBy: "llm",
+      decidedBy: "rules",
       disposition: "escalate",
       rationale,
       model: null,
     });
     const escalationId = repo.createEscalation({
+      id: `esc_${payloadSha256({ event: row.id, incident: incident.id }).slice(0, 36)}`,
+      originEventId: row.id,
       incidentId: incident.id,
       severity,
       question,
       suggestedAction,
     });
-    channel.sendEscalation({
+    if (notify) channel.sendEscalation({
       escalationId,
       incidentId: incident.id,
       carSessionId: incident.car_session_id,
@@ -493,6 +538,12 @@ export function createRouter(options: RouterOptions): RouterLoop {
     if (!claimed) {
       throw new ProviderError("not_ready", `provider invocation ${requestId} is currently owned by another worker`, provider.descriptor, requestId, { retryable: true });
     }
+    const providerClaim = { owner: `${owner}:provider`, token: claimed.claim_token! };
+    const renewTimer = setInterval(() => {
+      if (!store.renewProviderInvocationLease(created.id, providerClaim, leaseSeconds)) {
+        store.audit("router", "provider.lease_lost", "provider_invocation", created.id, {});
+      }
+    }, Math.max(100, Math.floor(leaseSeconds * 1_000 / 3)));
     try {
       const ready = registry.assertReady(resolved.instance_id, requestId);
       const result = await invokeCapability(ready, capability, providerInput);
@@ -514,7 +565,7 @@ export function createRouter(options: RouterOptions): RouterLoop {
       }
       store.audit("router", "router.provider_failure", "provider_invocation", created.id, { capability, failure });
       throw Object.assign(new ProviderError(failure.code, failure.message, provider.descriptor, requestId, { retryable: failure.retryable, details: failure.details, cause: error }), { failure });
-    }
+    } finally { clearInterval(renewTimer); }
   }
 
   async function processEffect(
@@ -526,6 +577,7 @@ export function createRouter(options: RouterOptions): RouterLoop {
     providerEffect: NonNullable<ProviderDecision["effects"]>[number],
     index: number,
     attributedCostUsd: number,
+    claim: Claim,
   ): Promise<{ execution: EffectExecutionResponse; failure?: ProviderFailureResult }> {
     const proposal = wireEffectToSafety(providerEffect, row, session, incident.id, operatorRequestId, operatorProviderInstance, config, attributedCostUsd);
     let advice: PolicyAdvice | null = null;
@@ -574,15 +626,55 @@ export function createRouter(options: RouterOptions): RouterLoop {
     // Providers cannot choose authority. Core may attach only a matching
     // durable human grant, which the kernel revalidates and atomically consumes
     // before the effect worker claims the row.
+    assertClaim(row, claim);
     const grant = safety.findMatchingGrant(safetyProposal);
     const execution = await effects.execute(safetyProposal, grant?.id ?? null);
     return { execution };
   }
 
   async function processEvent(row: EventRow, claim: Claim): Promise<Pick<RouterTickResult, "resolved" | "escalated" | "providerFailures" | "effects" | "blockedEffects"> & { processed: 1 }> {
+    assertClaim(row, claim);
+    const current = store.getEvent(row.id);
+    if (["resolved", "cancelled", "expired"].includes(current?.obligation_state ?? "")) {
+      complete(row, claim, "obligation_closed", row.incident_id ?? undefined);
+      return { processed: 1, resolved: 1, escalated: 0, providerFailures: 0, effects: 0, blockedEffects: 0 };
+    }
+    if (row.type === "attention.cleared") {
+      const target = exactClearanceTarget(store, row);
+      // Only an authenticated originating source can retire its exact native ask.
+      if (target) {
+        const now = store.clock.now().toISOString();
+        store.db.transaction(() => {
+          // Recheck the obligation and expiry inside the same transaction as
+          // the resolution.  A cancellation/expiry can win after the lookup
+          // above; it must never be overwritten by a late native close.
+          const changed = store.db.query(
+            `UPDATE events SET obligation_state='resolved'
+             WHERE id=? AND source_id=? AND requires_response=1
+               AND obligation_state NOT IN ('resolved','cancelled','expired')
+               AND (expires_at IS NULL OR expires_at > ?)`,
+          ).run(target.id, row.source_id!, now);
+          if (!changed.changes) {
+            store.audit("router", "obligation.clearance_ignored", "event", row.id, { reason: "target_changed_before_clearance" });
+            return;
+          }
+          store.db.query("UPDATE human_replies SET revision=revision+1, state='resolved', resolved_at=?, updated_at=? WHERE event_id=?")
+            .run(now, now, target.id);
+          store.db.query("UPDATE escalations SET state='superseded' WHERE origin_event_id=? AND state IN ('pending','snoozed')").run(target.id);
+          if (target.incident_id) {
+            const pending = store.db.query("SELECT 1 FROM events WHERE incident_id=? AND requires_response=1 AND obligation_state NOT IN ('resolved','cancelled','expired') LIMIT 1")
+              .get(target.incident_id);
+            if (!pending) repo.setIncidentState(target.incident_id, "resolved");
+          }
+          store.audit("router", "obligation.source_cleared", "event", target.id, { clearance_event: row.id });
+        })();
+      } else store.audit("router", "obligation.clearance_ignored", "event", row.id, { reason: "missing_or_mismatched_exact_source_lineage" });
+    }
     const session = sessionFor(store, row);
     const rule = classifyEvent(row, { now: store.clock.now(), grantedRules: [] });
     if (rule.kind === "expired") {
+      store.db.query("UPDATE events SET obligation_state='expired' WHERE id=?").run(row.id);
+      store.audit("router", "obligation.expired", "event", row.id, {});
       complete(row, claim, "expired");
       return { processed: 1, resolved: 1, escalated: 0, providerFailures: 0, effects: 0, blockedEffects: 0 };
     }
@@ -615,7 +707,7 @@ export function createRouter(options: RouterOptions): RouterLoop {
     const memoryInput: ContextQuery = {
       contract: "car.memory.v1",
       request_id: memoryRequestId,
-      deadline_at: deadlineFor(row, session),
+      deadline_at: deadlineFor(row, store.clock.now().getTime()),
       provider: syntheticDescriptor(memoryResolved, "memory"),
       incident_id: incident.id,
       vendor: row.source_vendor,
@@ -655,21 +747,17 @@ export function createRouter(options: RouterOptions): RouterLoop {
     const operatorInput: IncidentPacket = {
       contract: "car.operator.v1",
       request_id: operatorRequestId,
-      deadline_at: deadlineFor(row, session),
+      deadline_at: deadlineFor(row, store.clock.now().getTime()),
       provider: syntheticDescriptor(operatorResolved, "operator"),
       incident_id: incident.id,
       car_session_id: row.car_session_id,
       dedupe_class: dedupeClassFor(row),
-      events: [{
-        id: row.id,
-        type: row.type,
-        severity: row.severity,
-        title: row.title,
-        body: row.body,
-        requires_response: row.requires_response === 1,
-        expires_at: row.expires_at,
-        payload: parsePayload(row),
-      }],
+      events: [
+        ...(store.db.query("SELECT * FROM events WHERE incident_id=? AND id != ? AND received_at <= ? ORDER BY received_at DESC, id DESC LIMIT 7")
+          .all(incident.id, row.id, row.received_at) as EventRow[]).reverse(), row,
+      ].map((event) => ({ id: event.id, type: event.type, severity: event.severity,
+        title: event.title, body: event.body.slice(0, 4_000), requires_response: event.requires_response === 1,
+        expires_at: event.expires_at, payload: event.id === row.id ? parsePayload(event) : {} })),
       context: memory.value,
     };
     try {
@@ -686,7 +774,9 @@ export function createRouter(options: RouterOptions): RouterLoop {
       return { processed: 1, resolved: 0, escalated: 1, providerFailures: 1, effects: 0, blockedEffects: 0 };
     }
 
+    assertClaim(row, claim);
     const decisionId = repo.recordDecision({
+      id: `dec_${payloadSha256({ request: operatorRequestId }).slice(0, 36)}`,
       incidentId: incident.id,
       decidedBy: "llm",
       disposition: operator.value.disposition === "resolve" ? "auto_resolve" : operator.value.disposition,
@@ -708,7 +798,7 @@ export function createRouter(options: RouterOptions): RouterLoop {
     let firstBlockedEffect: EffectExecutionResponse["effect"] | null = null;
     for (const [index, providerEffect] of operator.value.effects.entries()) {
       const effectCost = attributedEffectCost(operator.value.usage?.cost_usd, index, operator.value.effects.length);
-      const result = await processEffect(row, session, incident, operatorRequestId, operator.descriptor.provider_instance, providerEffect, index, effectCost);
+      const result = await processEffect(row, session, incident, operatorRequestId, operator.descriptor.provider_instance, providerEffect, index, effectCost, claim);
       if (result.failure) {
         const failure = result.failure.failure;
         const failedBlockedEffects = blockedEffects + (result.execution.state === "blocked" ? 1 : 0);
@@ -727,12 +817,16 @@ export function createRouter(options: RouterOptions): RouterLoop {
         });
       }
     }
-    const needsEscalation = operator.value.disposition === "escalate" || blockedEffects > 0 || effectFailures > 0;
+    const responseState = store.getEvent(row.id)?.obligation_state ?? "open";
+    const responseOutstanding = row.requires_response === 1 && !["delivered", "acknowledged", "resolved", "cancelled", "expired"].includes(responseState);
+    const needsEscalation = operator.value.disposition === "escalate" || blockedEffects > 0 || effectFailures > 0 ||
+      (responseOutstanding && operator.value.disposition !== "defer");
     if (needsEscalation) {
       escalation(
         row,
         incident,
-        blockedEffects > 0 ? "provider proposal was blocked by the core safety kernel" : operator.value.rationale,
+        blockedEffects > 0 ? "provider proposal was blocked by the core safety kernel" : responseOutstanding
+          ? `A native answer is still required. Provider assessment: ${operator.value.rationale}` : operator.value.rationale,
         undefined,
         row.severity,
         { decision_id: decisionId, blocked_effects: blockedEffects },
@@ -747,65 +841,88 @@ export function createRouter(options: RouterOptions): RouterLoop {
       return { processed: 1, resolved: 0, escalated: 1, providerFailures: 0, effects: operator.value.effects.length, blockedEffects };
     }
     if (operator.value.disposition === "defer") {
-      repo.setIncidentState(incident.id, "snoozed", { summary: operator.value.rationale });
+      const wakeAt = new Date(Math.min(store.clock.now().getTime() + 60_000,
+        row.expires_at ? Date.parse(row.expires_at) : Infinity)).toISOString();
+      // Defer means bounded human attention suppression, not request resolution.
+      // Create the card now so the ordinary snooze worker can resurface it.
+      const esc = escalation(row, incident, operator.value.rationale, undefined, row.severity, {}, null, false);
+      store.db.query("UPDATE escalations SET state='snoozed' WHERE id=? AND state='pending'").run(esc);
+      repo.setIncidentState(incident.id, "snoozed", { summary: operator.value.rationale, snoozeUntil: wakeAt });
       complete(row, claim, "deferred", incident.id);
       recordDecisionOutcome(decisionId, row, incident.id, "deferred", { disposition: operator.value.disposition });
+    } else if (row.requires_response === 1 && !["resolved", "cancelled", "expired"].includes(responseState)) {
+      repo.setIncidentState(incident.id, "open", { summary: "Answer delivered; awaiting source-confirmed clearance" });
+      complete(row, claim, "awaiting_clearance", incident.id);
+      recordDecisionOutcome(decisionId, row, incident.id, "awaiting_clearance", { disposition: operator.value.disposition });
     } else {
       repo.setIncidentState(incident.id, "resolved", { summary: operator.value.rationale });
       complete(row, claim, "provider_resolved", incident.id);
       recordDecisionOutcome(decisionId, row, incident.id, "resolved", { disposition: operator.value.disposition });
     }
-    return { processed: 1, resolved: 1, escalated: 0, providerFailures: 0, effects: operator.value.effects.length, blockedEffects };
+    return { processed: 1, resolved: operator.value.disposition === "defer" || row.requires_response === 1 ? 0 : 1,
+      escalated: 0, providerFailures: 0, effects: operator.value.effects.length, blockedEffects };
   }
 
+  const emptyResult = (): RouterTickResult => ({ claimed: 0, processed: 0, resolved: 0, escalated: 0,
+    providerFailures: 0, effects: 0, blockedEffects: 0, failed: 0 });
+  async function drain(lane: "urgent" | "normal"): Promise<RouterTickResult> {
+    const result = emptyResult();
+    for (let n = 0; n < limit && !stopped; n++) {
+      // Claim just in time, rather than letting nineteen claimed events expire
+      // behind one slow model. Urgent work has a separate deterministic lane.
+      const row = store.claimEvents(1, leaseSeconds, `${owner}:${lane}`, lane)[0];
+      if (!row) break;
+      result.claimed++;
+      const claim = { owner: `${owner}:${lane}`, token: row.route_claim_token ?? row.triage_claim_token ?? "" };
+      if (!claim.token) { result.failed++; continue; }
+      const renewal = setInterval(() => {
+        try { store.renewEventLease(row.id, claim, leaseSeconds); }
+        catch (error) { store.audit("router", "router.lease_renewal_failed", "event", row.id, { error: String(error) }); }
+      }, Math.max(50, leaseSeconds * 1_000 / 3));
+      try {
+        const processed = await processEvent(row, claim);
+        for (const key of ["processed", "resolved", "escalated", "providerFailures", "effects", "blockedEffects"] as const) result[key] += processed[key];
+      } catch (error) {
+        result.failed++;
+        store.audit("router", "router.tick_failed", "event", row.id, { error: String(error) });
+      } finally { clearInterval(renewal); }
+    }
+    return result;
+  }
+  async function urgentTick(): Promise<RouterTickResult> {
+    if (urgentTicking) return urgentTicking;
+    urgentTicking = drain("urgent");
+    try { return await urgentTicking; } finally { urgentTicking = null; }
+  }
   async function tick(): Promise<RouterTickResult> {
     if (ticking) return ticking;
     ticking = (async () => {
       store.recoverExpiredClaims();
-      const rows = store.claimEvents(limit, leaseSeconds, owner);
-      const result: RouterTickResult = { claimed: rows.length, processed: 0, resolved: 0, escalated: 0, providerFailures: 0, effects: 0, blockedEffects: 0, failed: 0 };
-      for (const row of rows) {
-        const claim = { owner, token: row.route_claim_token ?? row.triage_claim_token ?? "" };
-        if (!claim.token) {
-          result.failed += 1;
-          store.audit("router", "router.claim_missing", "event", row.id, {});
-          continue;
-        }
-        try {
-          const processed = await processEvent(row, claim);
-          result.processed += processed.processed;
-          result.resolved += processed.resolved;
-          result.escalated += processed.escalated;
-          result.providerFailures += processed.providerFailures;
-          result.effects += processed.effects;
-          result.blockedEffects += processed.blockedEffects;
-        } catch (error) {
-          result.failed += 1;
-          store.audit("router", "router.tick_failed", "event", row.id, { error: String(error) });
-        }
-      }
-      return result;
+      const urgent = await urgentTick();
+      const normal = await drain("normal");
+      for (const key of Object.keys(urgent) as (keyof RouterTickResult)[]) normal[key] += urgent[key];
+      return normal;
     })();
-    try {
-      return await ticking;
-    } finally {
-      ticking = null;
-    }
+    try { return await ticking; } finally { ticking = null; }
   }
-
+  const reportLoopError = (error: unknown) => store.audit("router", "router.loop_failed", "worker", owner, { error: String(error) });
   return {
-    name: "attention-router",
-    tick,
+    name: "attention-router", tick,
     async start(): Promise<void> {
       if (timer) return;
-      await tick();
-      const interval = Math.max(100, options.intervalMs ?? 1_000);
-      timer = setInterval(() => { void tick(); }, interval);
+      stopped = false;
+      urgentTimer = setInterval(() => { void urgentTick().catch(reportLoopError); }, 200);
+      timer = setInterval(() => { void tick().catch(reportLoopError); }, Math.max(100, options.intervalMs ?? 1_000));
+      // Startup must not await a provider while the remaining daemon workers
+      // (deadlines, notifications and human delivery) have not started yet.
+      void tick().catch(reportLoopError);
     },
     async stop(): Promise<void> {
+      stopped = true;
       if (timer) clearInterval(timer);
-      timer = undefined;
-      await ticking;
+      if (urgentTimer) clearInterval(urgentTimer);
+      timer = undefined; urgentTimer = undefined;
+      await Promise.all([ticking, urgentTicking]);
     },
   };
 }

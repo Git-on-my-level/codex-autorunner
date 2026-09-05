@@ -1,3 +1,4 @@
+import { createReplyWorker } from "../../src/attention/replies.ts";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { FakeActionBus, FakeClock, memoryStore, testConfig } from "../fakes.ts";
 import type { Store } from "../../src/store/db.ts";
@@ -41,15 +42,17 @@ const tap = (op: string, id: string, messageText?: string) =>
     messageId: "555",
     ...(messageText ? { messageText } : {}),
   });
+const deliverPending = () => createReplyWorker(store, actions).tick();
+const replyState = (escalationId: string) => (store.db.query("SELECT state FROM human_replies WHERE escalation_id=?").get(escalationId) as { state: string }).state;
 const command = (name: string, args = "") => handleCommand(deps, { command: name, args, from: "david" });
 
 describe("approve / deny", () => {
-  test("approve writes the answer, delivers, records the outcome and edits in place", async () => {
+  test("approve commits the answer and delivery intent before the worker sends", async () => {
     const seeded = seedEscalation(store, { suggested: { approval: true, label: "APPROVE" } });
     markDelivered(store, seeded);
 
     const ack = await tap(CB.approve, seeded.escalationId, "🔴 needs you · claude-code\nforce push?");
-    expect(ack.text).toBe("✅ approved");
+    expect(ack.text).toBe("Approved. Answer recorded; delivery is tracked separately.");
 
     const esc = store.db.query("SELECT * FROM escalations WHERE id = ?").get(seeded.escalationId) as {
       state: string;
@@ -59,16 +62,20 @@ describe("approve / deny", () => {
     };
     expect(esc.state).toBe("answered");
     expect(esc.answered_by).toBe("david");
-    expect(JSON.parse(esc.answer_json)).toEqual({ approval: true, by: "david" });
+    expect(JSON.parse(esc.answer_json)).toEqual({ approval: true });
     expect(esc.answered_at).toBe(clock.current.toISOString());
 
     const inc = store.db.query("SELECT state, closed_at FROM incidents WHERE id = ?").get(seeded.incidentId) as {
       state: string;
       closed_at: string;
     };
-    expect(inc.state).toBe("resolved");
+    expect(inc.state).toBe("open");
+    expect(inc.closed_at).toBeNull();
 
-    // Delivered through the action bus with the session's response channel.
+    // The answer is durable before external I/O; receipt still does not close the incident.
+    expect(actions.delivered).toHaveLength(0);
+    expect(replyState(seeded.escalationId)).toBe("pending");
+    await deliverPending();
     expect(actions.delivered).toEqual([{ carSessionId: seeded.carSessionId, payload: { approval: true } }]);
 
     // The tap IS the learning signal — it matched the suggestion.
@@ -85,7 +92,7 @@ describe("approve / deny", () => {
     const edit = outboxRows(store).find((r) => r.target.kind === "edit");
     expect(edit).toBeDefined();
     expect(edit!.target.edit_message_id).toBe("555");
-    expect(edit!.body.text).toContain("— ✅ approved (david)");
+    expect(edit!.body.text).toContain("Approved; answer recorded, awaiting delivery");
     expect(edit!.body.inline_keyboard).toBeUndefined();
   });
 
@@ -109,26 +116,27 @@ describe("approve / deny", () => {
     await tap(CB.deny, seeded.escalationId);
     const ack = await tap(CB.approve, seeded.escalationId);
     expect(ack.text).toBe("Already answered.");
+    expect(actions.delivered).toHaveLength(0);
+    await deliverPending();
     expect(actions.delivered).toHaveLength(1);
     expect(memory.outcomes).toHaveLength(1);
   });
 
-  test("a failed delivery reopens the incident and says so loudly", async () => {
+  test("failed delivery leaves a durable recovery record and an open incident", async () => {
     const seeded = seedEscalation(store);
     markDelivered(store, seeded);
     actions.deliverResult = "failed";
 
     const ack = await tap(CB.deny, seeded.escalationId);
-    expect(ack.alert).toBe(true);
-    expect(ack.text).toContain("FAILED");
+    expect(ack.text).toContain("Answer recorded");
+    await deliverPending();
+    expect(replyState(seeded.escalationId)).toBe("failed");
 
     const inc = store.db.query("SELECT state FROM incidents WHERE id = ?").get(seeded.incidentId) as {
       state: string;
     };
     expect(inc.state).toBe("open");
-    const notify = outboxRows(store).find((r) => r.body.text.includes("could NOT be delivered"));
-    expect(notify).toBeDefined();
-    expect(auditVerbs(store)).toContain("escalation.delivery_failed");
+    expect(auditVerbs(store)).toContain("reply.delivery_observed");
   });
 
   test("a degraded delivery is honest about being staged", async () => {
@@ -136,7 +144,9 @@ describe("approve / deny", () => {
     markDelivered(store, seeded);
     actions.deliverResult = "degraded";
     const ack = await tap(CB.approve, seeded.escalationId);
-    expect(ack.text).toContain("staged");
+    expect(ack.text).toContain("Answer recorded");
+    await deliverPending();
+    expect(replyState(seeded.escalationId)).toBe("staged");
   });
 
   test("a vanished escalation does not throw", async () => {
@@ -451,11 +461,9 @@ describe("inbound replies", () => {
       from: "david",
     });
 
-    expect(outcome).toEqual({
-      kind: "delivered",
-      carSessionId: seeded.carSessionId,
-      escalationId: seeded.escalationId,
-    });
+    expect(outcome).toMatchObject({ kind: "recorded", escalationId: seeded.escalationId });
+    expect(actions.delivered).toHaveLength(0);
+    await deliverPending();
     expect(actions.delivered[0]!.payload).toEqual({ text: "rebase instead, do not force-push" });
 
     const esc = store.db
@@ -475,7 +483,8 @@ describe("inbound replies", () => {
       .run(seeded.carSessionId);
 
     const outcome = await routeIncomingMessage(deps, { text: "carry on", messageId: "5", threadId: "42", from: "david" });
-    expect(outcome.kind).toBe("delivered");
+    expect(outcome.kind).toBe("recorded");
+    await deliverPending();
     expect(actions.delivered[0]!.carSessionId).toBe(seeded.carSessionId);
   });
 
@@ -497,8 +506,10 @@ describe("inbound replies", () => {
     markDelivered(store, seeded, "900");
     actions.deliverResult = "failed";
     const outcome = await routeIncomingMessage(deps, { text: "hi", messageId: "1", replyToMessageId: "900", from: "david" });
-    expect(outcome.kind).toBe("failed");
-    expect(outboxRows(store).some((r) => r.body.text.includes("Could not deliver"))).toBe(true);
+    expect(outcome.kind).toBe("recorded");
+    await deliverPending();
+    expect(replyState(seeded.escalationId)).toBe("failed");
+    expect(auditVerbs(store)).toContain("reply.delivery_observed");
   });
 
   test("empty messages are ignored", async () => {

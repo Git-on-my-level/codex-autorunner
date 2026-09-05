@@ -1,3 +1,5 @@
+import { recordAnswer, recordSessionReply } from "../../attention/replies.ts";
+import { AttentionError } from "../../attention/errors.ts";
 /**
  * Button taps, replies and commands.
  *
@@ -254,52 +256,23 @@ async function answerEscalation(
   if (esc.state !== "pending") return { text: "That card is stale — the escalation is already handled.", alert: true };
 
   const incident = getIncident(store, esc.incident_id);
-  const now = store.clock.now().toISOString();
-  const answer = { approval, by: actor };
-
-  const answered = store.db
-    .query(
-      "UPDATE escalations SET state = 'answered', answer_json = ?, answered_by = ?, answered_at = ? WHERE id = ? AND state = 'pending' AND telegram_message_id = ?",
-    )
-    .run(JSON.stringify(answer), actor, now, escalationId, input.messageId ?? "");
-  if (answered.changes === 0) {
-    store.audit("telegram", "telegram.stale_card_rejected", "escalation", escalationId, {
-      reason: "lifecycle_cas_failed",
-      message_id: input.messageId ?? null,
-    });
-    return { text: "That card is stale — the escalation changed before this tap was applied.", alert: true };
+  try {
+    recordAnswer(store, { escalationId, actor, payload: { approval }, expectedMessageId: input.messageId ?? "" });
+  } catch (error) {
+    if (error instanceof AttentionError) return { text: error.message, alert: true };
+    throw error;
   }
-  if (incident) {
-    store.db
-      .query("UPDATE incidents SET state = 'resolved', closed_at = ?, snooze_until = NULL WHERE id = ?")
-      .run(now, incident.id);
+  // Learning is a projection, never a prerequisite for committing an answer.
+  try {
+    recordTapOutcome(deps, esc, { approval }, actor);
+    recordHumanTap(deps, input, "feedback", "escalation", esc.id, { approval });
+  } catch (error) {
+    store.audit(actor, "answer.learning_projection_failed", "escalation", esc.id, { error: String(error) });
   }
-  store.audit(actor, "escalation.answered", "escalation", escalationId, answer);
-
-  // The tap IS the learning signal.
-  recordTapOutcome(deps, esc, { approval }, actor);
-  recordHumanTap(deps, input, "feedback", "escalation", esc.id, { approval });
-
-  // Route the answer back to the agent.
-  let delivery = "skipped";
-  if (incident?.car_session_id) {
-    delivery = await deps.actions.deliver(
-      incident.car_session_id,
-      incidentResponseChannel(store, incident),
-      { approval },
-    );
-    store.audit(actor, "escalation.delivered", "escalation", escalationId, { delivery });
-  }
-
-  const verb = approval ? "✅ approved" : "❌ denied";
-  editEscalationCard(deps, esc, incident, renderResolution(cardText(deps, esc, input), verb, actor).text, []);
-
-  if (delivery === "failed") {
-    // Non-negotiable #6: a reply that cannot reach its agent is loud.
-    reEscalateDeliveryFailure(deps, esc, incident);
-    return { text: `${verb}, but delivery FAILED — re-escalated.`, alert: true };
-  }
-  return { text: `${verb}${delivery === "degraded" ? " (staged, not live-delivered)" : ""}` };
+  const verb = approval ? "Approved" : "Denied";
+  editEscalationCard(deps, esc, incident,
+    renderResolution(cardText(deps, esc, input), `${verb}; answer recorded, awaiting delivery`, actor).text, []);
+  return { text: `${verb}. Answer recorded; delivery is tracked separately.` };
 }
 
 function recordTapOutcome(
@@ -805,6 +778,7 @@ export interface IncomingMessage {
 }
 
 export type RouteOutcome =
+  | { kind: "recorded"; replyId: string; escalationId?: string }
   | { kind: "delivered" | "degraded" | "queued" | "failed"; carSessionId: string; escalationId?: string }
   | { kind: "note"; eventId: string }
   | { kind: "ignored"; reason: string };
@@ -832,57 +806,29 @@ export async function routeIncomingMessage(
 
   const incident = route.incidentId ? getIncident(store, route.incidentId) : null;
   const carSessionId = route.carSessionId ?? incident?.car_session_id ?? null;
-  if (!carSessionId) return { kind: "note", eventId: ingestNote(deps, msg) };
-
   const esc = route.escalationId ? getEscalation(store, route.escalationId) : null;
-  if (esc && esc.state === "pending") {
-    const now = store.clock.now().toISOString();
-    const answered = store.db
-      .query(
-        "UPDATE escalations SET state = 'answered', answer_json = ?, answered_by = ?, answered_at = ? WHERE id = ? AND state = 'pending' AND telegram_message_id = ?",
-      )
-      .run(JSON.stringify({ text }), actor, now, esc.id, msg.replyToMessageId ?? "");
-    if (answered.changes === 0) {
-      store.audit("telegram", "telegram.stale_card_rejected", "escalation", esc.id, {
-        reason: "lifecycle_cas_failed",
-        message_id: msg.replyToMessageId ?? null,
-      });
-      return { kind: "ignored", reason: "stale_escalation" };
+  try {
+    if (esc) {
+      // Sessionless remote requests use source polling, not a local file inbox.
+      // A reply to an old card is never reinterpreted as a fresh session command.
+      const reply = recordAnswer(store, { escalationId: esc.id, actor, payload: { text },
+        expectedMessageId: msg.replyToMessageId ?? "" });
+      try { recordTapOutcome(deps, esc, { text }, actor); } catch (error) {
+        store.audit(actor, "answer.learning_projection_failed", "escalation", esc.id, { error: String(error) });
+      }
+      return { kind: "recorded", replyId: reply.id, escalationId: esc.id };
     }
-    if (incident) {
-      store.db.query("UPDATE incidents SET state = 'resolved', closed_at = ? WHERE id = ?").run(now, incident.id);
-    }
-    // Free text instead of a tap: recorded as a correction, never as a confirm.
-    recordTapOutcome(deps, esc, { text }, actor);
-    store.audit(actor, "escalation.answered_text", "escalation", esc.id, { chars: text.length });
+    if (!carSessionId) return { kind: "note", eventId: ingestNote(deps, msg) };
+    const reply = recordSessionReply(store, {
+      idempotencyKey: `${deps.config.telegram.chat_id}:${msg.messageId}`,
+      actor, carSessionId, channel: incident ? incidentResponseChannel(store, incident) : null, payload: { text },
+    });
+    return { kind: "recorded", replyId: reply.id };
+  } catch (error) {
+    if (!(error instanceof AttentionError)) throw error;
+    store.audit(actor, "telegram.stale_reply_rejected", "message", msg.messageId, { code: error.code });
+    return { kind: "ignored", reason: error.code };
   }
-
-  const channel = incident ? incidentResponseChannel(store, incident) : null;
-  recordHumanTap(
-    deps,
-    { data: `message:${msg.messageId}`, messageId: msg.messageId, ...(msg.from ? { from: msg.from } : {}) },
-    "reply",
-    "session",
-    carSessionId,
-    { text, escalation_id: esc?.id ?? null },
-  );
-  const result = await deps.actions.deliver(carSessionId, channel, { text });
-  store.audit(actor, "reply.delivered", "session", carSessionId, {
-    result,
-    escalation_id: esc?.id ?? null,
-  });
-
-  if (result === "failed") {
-    const target = resolveTarget(store, deps.config, "notify", carSessionId);
-    enqueueMessage(store, target, { text: `⚠️ Could not deliver your reply to ${carSessionId}. Nothing was dropped — retry or use the web UI.` });
-  } else if (result === "degraded") {
-    const target = resolveTarget(store, deps.config, "notify", carSessionId);
-    enqueueMessage(store, target, { text: "📝 Reply staged for the agent (no live channel) — it lands on the next hook fire." });
-  }
-
-  const outcome: RouteOutcome = { kind: result, carSessionId };
-  if (esc) outcome.escalationId = esc.id;
-  return outcome;
 }
 
 function resolveRoute(

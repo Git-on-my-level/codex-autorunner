@@ -1,13 +1,10 @@
 /**
- * Store root: opens SQLite (WAL), applies migrations, exposes typed repositories.
- *
- * Schema is FROZEN (see migrations.ts). Repository interfaces below are stable;
- * workstreams may run additional read queries against `store.db` from within
- * their own modules, but all writes MUST go through a repository or be added
- * here by the coordinator, and every state-changing write MUST audit.
+ * Canonical SQLite store. Fresh v3 workspaces use the pre-release bootstrap.
+ * Unknown schemas are rejected without modifying data. State-changing writes
+ * belong to a named repository/service and must record their causal audit.
  */
 import { Database } from "bun:sqlite";
-import { MIGRATIONS } from "./migrations.ts";
+import { APPLICATION_ID, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
 import type { CarEvent, SessionRef } from "../contract/events.ts";
 import { HASH_SEP, sessionKey } from "../contract/events.ts";
 import {
@@ -125,19 +122,95 @@ function grantIdentityHash(input: GrantInput): string {
   });
 }
 
+export class SchemaMismatchError extends Error {
+  readonly name = "SchemaMismatchError";
+  constructor(path: string, version: number, application: number, reason?: string) {
+    super(`Unsupported CAR state at ${path} (schema ${version}, application ${application}). ` +
+      "This is an unreleased v3 bootstrap, not a v2 or earlier-PR migration. " +
+      "Use a new empty state directory for testing. Existing files have not been converted or deleted." +
+      (reason ? ` Schema validation: ${reason}.` : ""));
+  }
+}
+
+interface SchemaObject {
+  type: string;
+  name: string;
+  tbl_name: string;
+  sql: string | null;
+}
+
+function schemaObjects(db: Database): SchemaObject[] {
+  return db.query(`SELECT type, name, tbl_name, sql
+    FROM sqlite_schema
+    WHERE name NOT LIKE 'sqlite_%'
+    ORDER BY type, name`).all() as SchemaObject[];
+}
+
+function schemaFingerprint(objects: readonly SchemaObject[]): string {
+  return objects.map(({ type, name, tbl_name, sql }) => JSON.stringify([type, name, tbl_name, sql])).join("\n");
+}
+
+/**
+ * The headers identify CAR3, but are not a schema proof. Build the expected
+ * object set once from the same canonical bootstrap SQL and compare existing
+ * databases byte-for-byte at the sqlite_schema object-definition boundary.
+ * This catches header-only, partial, and hand-edited databases without ever
+ * modifying the database being inspected.
+ */
+const CANONICAL_SCHEMA_OBJECTS: readonly SchemaObject[] = (() => {
+  const expected = new Database(":memory:", { create: true });
+  try {
+    expected.exec(SCHEMA_SQL);
+    return schemaObjects(expected);
+  } finally {
+    expected.close();
+  }
+})();
+
+function schemaValidationReason(actual: readonly SchemaObject[]): string {
+  const expectedByIdentity = new Map(CANONICAL_SCHEMA_OBJECTS.map((object) => [`${object.type}:${object.name}`, object]));
+  const actualByIdentity = new Map(actual.map((object) => [`${object.type}:${object.name}`, object]));
+  const missing = [...expectedByIdentity.keys()].filter((identity) => !actualByIdentity.has(identity));
+  const unexpected = [...actualByIdentity.keys()].filter((identity) => !expectedByIdentity.has(identity));
+  const changed = [...expectedByIdentity.keys()].filter((identity) => {
+    const expected = expectedByIdentity.get(identity);
+    const observed = actualByIdentity.get(identity);
+    return observed !== undefined && schemaFingerprint([expected!]) !== schemaFingerprint([observed]);
+  });
+  const details = [
+    missing.length ? `missing ${missing.slice(0, 6).join(", ")}${missing.length > 6 ? ", ..." : ""}` : "",
+    unexpected.length ? `unexpected ${unexpected.slice(0, 6).join(", ")}${unexpected.length > 6 ? ", ..." : ""}` : "",
+    changed.length ? `changed ${changed.slice(0, 6).join(", ")}${changed.length > 6 ? ", ..." : ""}` : "",
+  ].filter(Boolean);
+  return details.join("; ") || "canonical object definitions differ";
+}
+
 export function openDb(path: string): Database {
   const db = new Database(path, { create: true });
-  db.exec("PRAGMA journal_mode = WAL;");
-  db.exec("PRAGMA busy_timeout = 5000;");
-  db.exec("PRAGMA foreign_keys = ON;");
-  const current = (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
-  for (let v = current; v < MIGRATIONS.length; v++) {
+  try {
+    db.exec("PRAGMA busy_timeout = 5000;");
+    db.exec("PRAGMA foreign_keys = ON;");
+    // Recheck inside the transaction, so two first starts cannot bootstrap twice.
     db.transaction(() => {
-      db.exec(MIGRATIONS[v]!);
-      db.exec(`PRAGMA user_version = ${v + 1}`);
+      const version = (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
+      const application = (db.query("PRAGMA application_id").get() as { application_id: number }).application_id;
+      const tables = (db.query("SELECT COUNT(*) AS n FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").get() as { n: number }).n;
+      if (version === 0 && application === 0 && tables === 0) {
+        db.exec(SCHEMA_SQL);
+        db.exec(`PRAGMA application_id = ${APPLICATION_ID}`);
+        db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+      } else if (version !== SCHEMA_VERSION || application !== APPLICATION_ID) {
+        throw new SchemaMismatchError(path, version, application);
+      } else {
+        const actual = schemaObjects(db);
+        if (schemaFingerprint(actual) !== schemaFingerprint(CANONICAL_SCHEMA_OBJECTS)) {
+          throw new SchemaMismatchError(path, version, application, schemaValidationReason(actual));
+        }
+      }
     })();
-  }
-  return db;
+    db.exec("PRAGMA journal_mode = WAL;");
+    return db;
+  } catch (error) { db.close(); throw error; }
 }
 
 export type IngestResult =
@@ -156,6 +229,7 @@ export interface EventRow {
   ts: string;
   received_at: string;
   requires_response: number;
+  obligation_state?: string;
   response_channel_json: string | null;
   title: string;
   body: string;
@@ -764,20 +838,22 @@ export class Store {
   }
 
   /** Claim events with an explicit owner and opaque fencing token. */
-  claimEvents(limit: number, leaseSeconds: number, owner: string): EventRow[] {
+  claimEvents(limit: number, leaseSeconds: number, owner: string, lane: "all" | "urgent" | "normal" = "all"): EventRow[] {
     const now = this.clock.now();
     const leaseUntil = new Date(now.getTime() + leaseSeconds * 1000).toISOString();
     return this.db.transaction((): EventRow[] => {
       const rows = this.db
         .query(
           `SELECT * FROM events
-           WHERE (triage_state = 'pending')
+           WHERE ((triage_state = 'pending')
               OR (triage_state = 'coalescing' AND
                   (COALESCE(route_lease_until, triage_lease_until) IS NULL OR
-                   COALESCE(route_lease_until, triage_lease_until) < ?))
-           ORDER BY received_at ASC LIMIT ?`,
+                   COALESCE(route_lease_until, triage_lease_until) < ?)))
+             AND (? = 'all' OR (? = 'urgent' AND severity = 'urgent') OR (? = 'normal' AND severity != 'urgent'))
+           ORDER BY CASE severity WHEN 'urgent' THEN 0 ELSE 1 END,
+                    COALESCE(expires_at, '9999'), received_at ASC LIMIT ?`,
         )
-        .all(now.toISOString(), limit) as EventRow[];
+        .all(now.toISOString(), lane, lane, lane, limit) as EventRow[];
       const claimed: EventRow[] = [];
       for (const row of rows) {
         const token = claimToken("event");

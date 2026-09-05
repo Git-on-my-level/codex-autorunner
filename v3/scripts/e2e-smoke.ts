@@ -63,6 +63,7 @@ async function main(): Promise<void> {
       "",
       "[http.ingest_tokens]",
       'generic = "e2e-secret"',
+      'web = "e2e-human-secret"',
       "",
     ].join("\n"),
   );
@@ -164,12 +165,13 @@ async function main(): Promise<void> {
     );
 
     // Keep the documented root endpoint primary while accepting the UI mount alias.
-    let briefRes = await fetch(`${base}/brief.md`);
-    if (!briefRes.ok) briefRes = await fetch(`${base}/ui/brief.md`);
+    const briefOptions = { headers: { Authorization: "Bearer e2e-human-secret" }, redirect: "manual" as const };
+    let briefRes = await fetch(`${base}/brief.md`, briefOptions);
+    if (briefRes.status === 404) briefRes = await fetch(`${base}/ui/brief.md`, briefOptions);
     const briefText = await briefRes.text().catch(() => "");
     check(
       "GET (/brief.md or /ui/brief.md) -> 200 non-empty markdown",
-      briefRes.ok && briefText.length > 0,
+      briefRes.ok && briefRes.headers.get("content-type")?.includes("text/markdown") === true && briefText.length > 0,
       `url=${briefRes.url} status=${briefRes.status} len=${briefText.length}`,
     );
 

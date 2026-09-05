@@ -70,10 +70,17 @@ export class TriageRepo {
    * window, whatever its state — recurrence of a *resolved* problem is exactly
    * the case the LLM-run cap exists to catch.
    */
-  findLineageIncident(carSessionId: string | null, dedupeClass: string): IncidentRow | null {
+  findLineageIncident(carSessionId: string | null, dedupeClass: string, sourceId?: string): IncidentRow | null {
     const cutoff = new Date(
       this.store.clock.now().getTime() - LINEAGE_WINDOW_HOURS * 3600_000,
     ).toISOString();
+    if (sourceId) {
+      return (this.store.db.query(
+        `SELECT i.* FROM incidents i JOIN events e ON e.id = i.opened_by_event
+          WHERE i.car_session_id IS ? AND i.dedupe_class = ? AND i.state != 'expired'
+            AND e.source_id = ? AND i.opened_at >= ? ORDER BY i.opened_at DESC LIMIT 1`,
+      ).get(carSessionId, dedupeClass, sourceId, cutoff) as IncidentRow | null) ?? null;
+    }
     const sql = carSessionId
       ? `SELECT * FROM incidents WHERE car_session_id = ? AND dedupe_class = ? AND state != 'expired'
            AND opened_at >= ? ORDER BY opened_at DESC LIMIT 1`
@@ -153,7 +160,7 @@ export class TriageRepo {
     const id = input.id ?? decisionId();
     this.store.db
       .query(
-        `INSERT INTO decisions (id, incident_id, decided_by, disposition, action_class, action_args_json,
+        `INSERT OR IGNORE INTO decisions (id, incident_id, decided_by, disposition, action_class, action_args_json,
            rationale, model, tokens_in, tokens_out, cost_usd, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
@@ -217,17 +224,19 @@ export class TriageRepo {
   }
 
   createEscalation(input: {
+    id?: string;
+    originEventId?: string;
     incidentId: string;
     severity: string;
     question: string;
     suggestedAction?: Record<string, unknown> | null;
   }): string {
-    const id = escalationId();
+    const id = input.id ?? escalationId();
     const now = this.now();
     this.store.db
       .query(
-        `INSERT INTO escalations (id, incident_id, severity, question, suggested_action_json, state, sent_at, created_at)
-         VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`,
+        `INSERT OR IGNORE INTO escalations (id, incident_id, severity, question, suggested_action_json, state, sent_at, created_at, origin_event_id)
+         VALUES (?, ?, ?, ?, ?, 'pending', NULL, ?, ?)`,
       )
       .run(
         id,
@@ -236,7 +245,7 @@ export class TriageRepo {
         input.question,
         input.suggestedAction ? JSON.stringify(input.suggestedAction) : null,
         now,
-        now,
+        input.originEventId ?? this.getIncident(input.incidentId)?.opened_by_event ?? null,
       );
     this.store.audit("triage", "escalation.created", "escalation", id, {
       incident_id: input.incidentId,

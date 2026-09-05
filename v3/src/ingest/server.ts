@@ -1,3 +1,4 @@
+import { hasWebWriteSession } from "../surfaces/web/auth.ts";
 /**
  * WS-A owns src/ingest/: the Hono HTTP loop plus per-source normalizers
  * (agentctl, claude hooks, multica, generic).
@@ -256,6 +257,8 @@ export function createIngestApp(
   // UI serves the same markdown under its own prefix. Alias, not a redirect,
   // so `curl` needs no -L.
   app.get("/brief.md", async (c) => {
+    if (deps.config.http.private_reads && !hasWebWriteSession(c, deps.config)) return c.text("Unauthorized", 401);
+    c.header("Cache-Control", "no-store");
     const { buildBriefMarkdown } = await import("../surfaces/web/brief.ts");
     return c.text(buildBriefMarkdown(deps.store), 200, {
       "content-type": "text/markdown; charset=utf-8",
@@ -325,6 +328,7 @@ export function createIngestServer(
       server = Bun.serve({
         hostname: deps.config.http.host,
         port: deps.config.http.port,
+        maxRequestBodySize: 1024 * 1024, // Attention JSON has its own tighter 64 KiB streaming limit.
         // Bun's second argument is the Server; Hono exposes it as c.env, which is
         // how auth.ts reads the real peer address (never a proxy header).
         fetch: (req, bunServer) => app.fetch(req, bunServer),

@@ -6,6 +6,7 @@
  */
 import {
   createSafetyKernel,
+  TERMINAL_OUTCOMES,
   type EffectProposal,
   type EffectRecord,
   type SafetyKernel,
@@ -57,7 +58,13 @@ function outputOf(result: EffectExecutionResult): string {
 
 /** Map adapter outcomes into the closed lifecycle vocabulary. */
 export function terminalOutcome(result: EffectExecutionResult): TerminalOutcome {
-  if (result.outcome) return result.outcome;
+  if (result.outcome) {
+    // An adapter may already have executed externally. An invalid or
+    // contradictory completion cannot become either success or safe retry.
+    if (!(TERMINAL_OUTCOMES as readonly string[]).includes(result.outcome) ||
+        (result.outcome === "ok" && !result.ok)) return "uncertain";
+    return result.outcome;
+  }
   return result.ok ? "ok" : "failed";
 }
 

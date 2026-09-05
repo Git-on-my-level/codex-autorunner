@@ -77,7 +77,7 @@ describe("unanswered requires_response", () => {
     expect(session.carSessionId).toBeTruthy();
   });
 
-  test("a resolved incident silences the ask", () => {
+  test("incident closure cannot silence an unresolved request obligation", () => {
     const session = seedSession(store, { requiresResponse: true });
     backdateEvent(store, session.eventId, 6);
     store.db
@@ -86,6 +86,8 @@ describe("unanswered requires_response", () => {
       )
       .run(session.carSessionId, session.eventId, clock.current.toISOString());
     store.setEventTriageState(session.eventId, "escalated", "inc_1");
+    expect(runWatchdog(store, config).stuck).toHaveLength(1);
+    store.db.query("UPDATE events SET obligation_state='resolved' WHERE id=?").run(session.eventId);
     expect(runWatchdog(store, config).stuck).toHaveLength(0);
   });
 

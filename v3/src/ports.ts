@@ -77,6 +77,8 @@ export interface ActionBus {
 /* ---------------------------------------------------------------- channels */
 
 export interface EscalationMessage {
+  /** A new explicit resurfacing cycle; never random on event replay. */
+  notificationRevision?: string;
   escalationId: string;
   incidentId: string;
   carSessionId: string | null;
@@ -161,6 +163,8 @@ export interface LlmTurnResult {
  */
 export interface LlmRunner {
   turn(input: {
+    /** Abort bounded advisory work when its deadline or lifecycle ends. */
+    signal?: AbortSignal;
     system: string;
     messages: { role: "user" | "assistant" | "tool"; content: string }[];
     tools: { name: string; description: string; schema: Record<string, unknown> }[];
