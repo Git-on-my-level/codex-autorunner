@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  CAR v3 (`card serve`) launchd template — macOS.
+
+  This is a TEMPLATE. Replace every <<PLACEHOLDER>> before installing, then see
+  ops/README.md for the launchctl bootstrap steps. Do not edit in place under
+  ~/Library/LaunchAgents — copy it there first so this template stays generic.
+
+  Placeholders:
+    <<BUN_PATH>>        absolute path to the bun binary, e.g. /Users/you/.bun/bin/bun
+                         (find yours with `which bun`)
+    <<CAR_V3_DIR>>       absolute path to this v3/ checkout, e.g. /Users/you/car-workspace/v3
+    <<HOME_DIR>>         your home directory, e.g. /Users/you
+    <<CAR_TELEGRAM_TOKEN>>  your Telegram bot token from @BotFather (see v3/README.md)
+    <<ANTHROPIC_API_KEY>>   your Anthropic API key (used by the triage/consolidation providers)
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.car.card</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string><<BUN_PATH>></string>
+    <string>run</string>
+    <string><<CAR_V3_DIR>>/src/cli.ts</string>
+    <string>serve</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string><<CAR_V3_DIR>></string>
+
+  <!-- KeepAlive: restart on any crash or non-zero exit; daemon is crash-only by
+       design (DESIGN.md non-negotiable #1) so this is safe. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Throttle restarts so a persistent crash-loop doesn't spin the CPU. -->
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>CAR_TELEGRAM_TOKEN</key>
+    <string><<CAR_TELEGRAM_TOKEN>></string>
+    <key>ANTHROPIC_API_KEY</key>
+    <string><<ANTHROPIC_API_KEY>></string>
+    <key>HOME</key>
+    <string><<HOME_DIR>></string>
+    <key>PATH</key>
+    <string>/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin</string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string><<HOME_DIR>>/.car/log/card.out.log</string>
+  <key>StandardErrorPath</key>
+  <string><<HOME_DIR>>/.car/log/card.err.log</string>
+
+  <!-- ~/.car/config.toml (default location; state_dir/http/telegram config lives
+       there, not here) is read by the daemon itself — no --config flag needed
+       unless you keep config elsewhere. -->
+</dict>
+</plist>

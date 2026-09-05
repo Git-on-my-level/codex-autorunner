@@ -1,0 +1,56 @@
+{
+  "name": "webhook callback envelope carrying an attention/permission event",
+  "note": "ASSUMED SHAPE. agentctl v0.3.9 ships callback-envelope.schema.json inside the binary and `agentctl schema list` only names the files, so the envelope keys (delivery_id / subscription_id / attempt / events[]) and the attention payload discriminator are inferred. The unwrapper is structural: anything with events[]/event{} is treated as an envelope.",
+  "input": {
+    "schema_version": 1,
+    "delivery_id": "delivery-cotton-verse-mimic-orbit-flute-noble",
+    "subscription_id": "sub-arrow-picnic-suspect-prison-monkey-pause",
+    "attempt": 1,
+    "origin_host_id": "host-foster-bitter-palace-talent-gown-glass",
+    "events": [
+      {
+        "schema_version": 1,
+        "id": "event-mirror-canyon-swift-oyster-tunnel-brave",
+        "origin_host_id": "host-foster-bitter-palace-talent-gown-glass",
+        "execution_id": "exec-bottom-barrel-moment-daughter-guess-silly",
+        "sequence": 42,
+        "ordering": "source",
+        "kind": "attention",
+        "state": "running",
+        "source_state": "approval_requested",
+        "authority": "native",
+        "adapter": "codex",
+        "occurred_at": "2026-08-26T11:59:30.000Z",
+        "observed_at": "2026-08-26T11:59:30.500Z",
+        "dedupe_key": "sha256:ffee0011",
+        "dedupe_version": 1,
+        "payload": {
+          "attention_kind": "permission",
+          "question": "Run `gh pr merge 42 --squash`?",
+          "detail": "The agent wants to merge PR 42 into main.",
+          "tool_use_id": "call_01XYZ"
+        }
+      }
+    ]
+  },
+  "expect": [
+    {
+      "type": "attention.permission",
+      "severity": "attention",
+      "requires_response": true,
+      "idempotency_key": "agentctl:event-mirror-canyon-swift-oyster-tunnel-brave",
+      "session_key": "agentctl\u0000host-foster-bitter-palace-talent-gown-glass\u0000exec-bottom-barrel-moment-daughter-guess-silly",
+      "response_channel": {
+        "kind": "agentctl-run",
+        "hint": {
+          "execution_id": "exec-bottom-barrel-moment-daughter-guess-silly",
+          "adapter": "codex",
+          "tool_use_id": "call_01XYZ"
+        }
+      },
+      "ts": "2026-08-26T11:59:30.000Z",
+      "title": "Run `gh pr merge 42 --squash`?",
+      "body": "The agent wants to merge PR 42 into main."
+    }
+  ]
+}
