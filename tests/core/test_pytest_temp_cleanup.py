@@ -5,6 +5,8 @@ import os
 import time
 from pathlib import Path
 
+import pytest
+
 from codex_autorunner.core import pytest_temp_cleanup as cleanup_module
 from codex_autorunner.core.pytest_temp_cleanup import (
     TempPathScanResult,
@@ -245,3 +247,91 @@ def test_cleanup_temp_paths_retries_transient_directory_not_empty(
     assert summary.deleted == 1
     assert summary.failed == 0
     assert target.exists() is False
+
+
+def test_configured_temp_base_returns_none_when_unset_or_blank() -> None:
+    assert cleanup_module.configured_temp_base({}) is None
+    assert cleanup_module.configured_temp_base({"CAR_PYTEST_TEMP_BASE": ""}) is None
+    assert cleanup_module.configured_temp_base({"CAR_PYTEST_TEMP_BASE": "   "}) is None
+
+
+def test_configured_temp_base_resolves_absolute_path(tmp_path: Path) -> None:
+    base = tmp_path / "scratch"
+
+    resolved = cleanup_module.configured_temp_base({"CAR_PYTEST_TEMP_BASE": str(base)})
+
+    assert resolved == base.resolve()
+
+
+def test_configured_temp_base_rejects_relative_path() -> None:
+    with pytest.raises(ValueError) as excinfo:
+        cleanup_module.configured_temp_base({"CAR_PYTEST_TEMP_BASE": "relative/dir"})
+
+    assert "absolute path" in str(excinfo.value)
+
+
+def test_repo_pytest_runtime_root_honours_configured_temp_base(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo_root = tmp_path / "repo"
+    configured = tmp_path / "configured"
+    monkeypatch.setenv("CAR_PYTEST_TEMP_BASE", str(configured))
+
+    runtime_root = cleanup_module.repo_pytest_runtime_root(repo_root)
+
+    assert runtime_root.parent == configured.resolve()
+
+
+def test_explicit_temp_base_overrides_configured_temp_base(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo_root = tmp_path / "repo"
+    monkeypatch.setenv("CAR_PYTEST_TEMP_BASE", str(tmp_path / "configured"))
+    explicit = tmp_path / "explicit"
+
+    runtime_root = cleanup_module.repo_pytest_runtime_root(
+        repo_root, temp_base=explicit
+    )
+
+    assert runtime_root.parent == explicit.resolve()
+
+
+def test_candidate_repo_temp_bases_keeps_system_temp_after_switchover(
+    tmp_path: Path, monkeypatch
+) -> None:
+    system_tmp = tmp_path / "system-tmp"
+    configured = tmp_path / "configured"
+    monkeypatch.setattr(
+        cleanup_module, "candidate_system_temp_roots", lambda: (system_tmp,)
+    )
+    monkeypatch.setenv("CAR_PYTEST_TEMP_BASE", str(configured))
+
+    bases = cleanup_module.candidate_repo_temp_bases()
+
+    assert bases == (configured.resolve(), system_tmp)
+
+
+def test_cleanup_repo_pytest_temp_runs_sweeps_configured_and_system_bases(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    system_tmp = tmp_path / "system-tmp"
+    configured = tmp_path / "configured"
+    monkeypatch.setattr(
+        cleanup_module, "candidate_system_temp_roots", lambda: (system_tmp,)
+    )
+
+    legacy_run = repo_pytest_temp_root(repo_root, temp_base=system_tmp) / "old-run"
+    legacy_run.mkdir(parents=True)
+    (legacy_run / "leftover.txt").write_text("x")
+    configured_run = repo_pytest_temp_root(repo_root, temp_base=configured) / "new-run"
+    configured_run.mkdir(parents=True)
+    (configured_run / "leftover.txt").write_text("x")
+
+    monkeypatch.setenv("CAR_PYTEST_TEMP_BASE", str(configured))
+    summary = cleanup_repo_pytest_temp_runs(repo_root)
+
+    assert summary.deleted == 2
+    assert not legacy_run.exists()
+    assert not configured_run.exists()

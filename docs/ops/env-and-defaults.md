@@ -180,6 +180,23 @@ Local provider:
 | `CODEX_FAST_TEST_VERIFY_NODEIDS` | Verify collected test node IDs match the JUnit report. | `0` |
 | `CODEX_LOCAL_CHECK_INCLUDE_DEADCODE` | Enable dead-code checks during local development (normally only in CI). | `0` |
 
+## Pytest hermetic temp roots
+
+The test suite builds a per-run, per-worker temp tree (basetemp, `HOME`, XDG
+dirs) under `<base>/cp-<repo-hash>/t/<run-token>/`. `<base>` is the OS temp dir
+by default; `TMPDIR`/`TMP`/`TEMP` are deliberately ignored when choosing it, so
+an ambient per-process temp dir cannot fragment the roots the cleanup pass has
+to find again later.
+
+| Env var | Purpose | Default |
+| --- | --- | --- |
+| `CAR_PYTEST_TEMP_BASE` | Absolute path to place the temp tree somewhere other than the OS temp dir -- a different volume, or a host that forbids worktrees under the system temp dir. Relative values are rejected. | unset (use the OS temp dir) |
+| `CAR_PYTEST_RUN_TOKEN` | Names the per-run subdirectory. Two pytest sessions sharing a token share a basetemp, and pytest wipes an explicit basetemp at session start -- so concurrent runs need distinct tokens. | random per run; set by `Makefile` and `scripts/check.sh` |
+| `CAR_PYTEST_TEMP_ROOT_MAX_BYTES` | Size ceiling for the repo temp root before the session-end cleanup prunes it. | `5368709120` (5 GiB) |
+
+Setting `CAR_PYTEST_TEMP_BASE` does not orphan roots created before the change:
+cleanup still sweeps the OS temp dir as well as the configured base.
+
 ## Workspace PATH bootstrap
 
 For app-server-backed agent runtimes (web terminal/PMA and Telegram) and Discord `!<shell command>` passthrough, CAR prepends workspace-local paths to `PATH`:

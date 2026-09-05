@@ -105,7 +105,8 @@ def test_prune_inactive_pytest_temp_runs_routes_through_cleanup_module(
         roots_module,
         "_load_pytest_temp_cleanup_module",
         lambda _repo: SimpleNamespace(
-            cleanup_repo_pytest_temp_runs=_cleanup_repo_pytest_temp_runs
+            cleanup_repo_pytest_temp_runs=_cleanup_repo_pytest_temp_runs,
+            configured_temp_base=lambda _environ: None,
         ),
     )
 
@@ -135,7 +136,8 @@ def test_prune_inactive_repo_temp_roots_routes_through_cleanup_module(
         roots_module,
         "_load_pytest_temp_cleanup_module",
         lambda _repo: SimpleNamespace(
-            cleanup_repo_managed_temp_paths=_cleanup_repo_managed_temp_paths
+            cleanup_repo_managed_temp_paths=_cleanup_repo_managed_temp_paths,
+            configured_temp_base=lambda _environ: None,
         ),
     )
 
@@ -147,3 +149,40 @@ def test_prune_inactive_repo_temp_roots_routes_through_cleanup_module(
     roots.prune_inactive_repo_temp_roots(min_age_seconds=321.0)
 
     assert calls == [(roots.repo_root, {"run-q"}, 321.0)]
+
+
+def test_from_repo_root_honours_configured_temp_base(
+    tmp_path: Path, monkeypatch
+) -> None:
+    system_tmp = tmp_path / "system-tmp"
+    configured = tmp_path / "configured"
+    monkeypatch.setattr(roots_module, "_system_temp_root", lambda _repo: system_tmp)
+
+    repo_root = tmp_path / "repo"
+    env = {
+        "CAR_PYTEST_RUN_TOKEN": "run-123",
+        "CAR_PYTEST_TEMP_BASE": str(configured),
+    }
+
+    roots = roots_module.HermeticTestRoots.from_repo_root(repo_root, environ=env)
+
+    assert roots.temp_base == configured.resolve()
+    assert roots.pytest_runtime_root.parent == configured.resolve()
+    assert roots.pytest_basetemp_root == (
+        configured.resolve() / f"cp-{roots.runtime_key}" / "t" / "run-123" / "basetemp"
+    )
+
+
+def test_from_repo_root_falls_back_to_system_temp_when_base_unset(
+    tmp_path: Path, monkeypatch
+) -> None:
+    system_tmp = tmp_path / "system-tmp"
+    monkeypatch.setattr(roots_module, "_system_temp_root", lambda _repo: system_tmp)
+
+    repo_root = tmp_path / "repo"
+    env = {"CAR_PYTEST_RUN_TOKEN": "run-123"}
+
+    roots = roots_module.HermeticTestRoots.from_repo_root(repo_root, environ=env)
+
+    assert roots.temp_base is None
+    assert roots.pytest_runtime_root.parent == system_tmp
