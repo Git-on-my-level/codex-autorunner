@@ -50,6 +50,56 @@ function nativeEvent() {
 }
 
 describe("decision mailbox routing", () => {
+  test("sending from the inbox selects the next pending decision, including on mobile", async () => {
+    const f = fixture();
+    const first = f.service.raise(owner, "triage-first", packet({ question: "First decision?" }));
+    f.clock.advance(1000);
+    const next = f.service.raise(owner, "triage-next", packet({ question: "Next decision?" }));
+    const html = await (await f.app.request(`/ui/decisions/${first.id}`, { headers: WEB_AUTH_HEADERS })).text();
+    const continuation = html.match(/name="continue_to" value="([^"]+)"/)![1]!.replaceAll("&amp;", "&");
+    expect(continuation).toContain(next.id);
+    const response = await f.app.request(`/ui/decisions/${first.id}/answer`, {
+      method: "POST", headers: { ...WEB_AUTH_HEADERS, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ expected_revision: "1", text: "Proceed with the bridge.", continue_to: continuation }),
+    });
+    expect(response.status).toBe(303);
+    const location = response.headers.get("location")!;
+    expect(location).toStartWith("/ui?");
+    const page = await (await f.app.request(location)).text();
+    expect(page).toContain('class="mailbox mailbox-selected"');
+    expect(page).toContain(`aria-labelledby="question-${next.id}"`);
+    expect(page).not.toContain(`aria-labelledby="question-${first.id}"`);
+    expect(page).toContain("Reply recorded.");
+    expect(f.service.get(first.id)!.state).toBe("answered");
+  });
+
+  test("triage recovers when the next item was answered elsewhere or the page emptied", async () => {
+    const f = fixture();
+    const gone = f.service.raise(owner, "gone", packet());
+    const remaining = f.service.raise(owner, "remaining", packet({ question: "Still waiting?" }));
+    f.service.answer(gone.id, 1, "human:web", { text: "Already answered" });
+    const page = await (await f.app.request(`/ui?triage=1&selected=${gone.id}&completed=answered`)).text();
+    expect(page).toContain(`aria-labelledby="question-${remaining.id}"`);
+    expect(page).not.toContain("This item is no longer in this mailbox");
+    const emptyPage = await f.app.request("/ui?triage=1&page=9&completed=answered");
+    expect(emptyPage.status).toBe(303);
+    expect(emptyPage.headers.get("location")).toBe("/ui?triage=1&completed=answered");
+    f.service.answer(remaining.id, 1, "human:web", { text: "Done" });
+    const empty = await (await f.app.request("/ui?triage=1&completed=answered")).text();
+    expect(empty).toContain("No decisions waiting here.");
+    expect(empty).toContain("Reply recorded.");
+  });
+
+  test("withdrawal continues triage and supplied continuation cannot redirect off site", async () => {
+    const f = fixture();
+    const row = f.service.raise(owner, "withdraw-triage", packet());
+    const response = await f.app.request(`/ui/decisions/${row.id}/withdraw`, {
+      method: "POST", headers: { ...WEB_AUTH_HEADERS, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ expected_revision: "1", reason: "No longer needed", continue_to: "https://example.com/steal?selected=//evil" }),
+    });
+    expect(response.headers.get("location")).toBe("/ui?triage=1&completed=withdrawn");
+    expect(f.service.get(row.id)!.state).toBe("cancelled");
+  });
   test("reconciling a native reply returns to its exact handled message", async () => {
     const f = fixture();
     const event = f.store.ingestEvent(nativeEvent());

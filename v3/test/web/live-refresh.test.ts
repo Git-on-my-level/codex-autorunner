@@ -4,6 +4,7 @@ import { LIVE_REFRESH_JS } from "../../src/surfaces/web/live_refresh.ts";
 type ListenerEvent = {
   target?: unknown; preventDefault?: () => void;
   metaKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean; altKey?: boolean;
+  key?: string; defaultPrevented?: boolean; isComposing?: boolean; repeat?: boolean;
 };
 type Listener = (event: ListenerEvent) => void;
 
@@ -24,6 +25,7 @@ class MockElement {
   }
   matches(selector: string): boolean { return selector.split(",").some((part) => this.selectors.includes(part.trim())); }
   closest(selector: string): object | null {
+    if (this.selectors.includes(selector)) return this;
     if (this.options.form && selector === "form") return {};
     if (this.options.manualRefresh && selector === "[data-manual-refresh]") return this;
     if (this.options.href !== undefined && selector === "a[href]") return this;
@@ -38,6 +40,7 @@ class MockElement {
 }
 
 function harness() {
+  const queries = new Map<string, MockElement>();
   const listeners = new Map<string, Listener[]>();
   const timers: (() => void)[] = [];
   const notice = { hidden: true };
@@ -58,7 +61,7 @@ function harness() {
     addEventListener(type: string, listener: Listener) {
       listeners.set(type, [...(listeners.get(type) ?? []), listener]);
     },
-    querySelector(selector: string) { return selector === "details[open]" ? null : null; },
+    querySelector(selector: string) { return queries.get(selector) ?? null; },
     querySelectorAll(selector: string) { return selector === "time[datetime]" ? times : []; },
   };
   let reloads = 0;
@@ -89,6 +92,7 @@ function harness() {
   const runTimer = () => timers.shift()?.();
   return {
     document: documentMock,
+    queries,
     notice,
     times,
     draftGuard,
@@ -114,6 +118,28 @@ function harness() {
 }
 
 describe("live refresh progressive enhancement", () => {
+  test("keyboard navigation uses the draft guard and ignores typing, repeat, and modifier keys", () => {
+    const page = harness();
+    try {
+      const next = new MockElement([], { href: "/ui/decisions/next" });
+      let navigations = 0;
+      next.addEventListener("click", () => { if (!page.click(next)) navigations++; });
+      page.queries.set('.reader-navigation a[aria-label="Next decision"]', next);
+      const key = (target: MockElement, extra: Partial<ListenerEvent> = {}) => page.dispatch("keydown", { target, key: "j", preventDefault() {}, ...extra });
+      key(new MockElement());
+      expect(navigations).toBe(1);
+      key(new MockElement(), { repeat: true });
+      key(new MockElement(), { isComposing: true });
+      key(new MockElement(), { ctrlKey: true });
+      key(new MockElement(['input:not([type="radio"]),textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"]']));
+      expect(navigations).toBe(1);
+      page.dispatch("input", { target: new MockElement([], true) });
+      key(new MockElement());
+      expect(navigations).toBe(1);
+      expect(page.draftGuard.hidden).toBe(false);
+      expect(page.discardLink.href).toBe("/ui/decisions/next");
+    } finally { page.restore(); }
+  });
   test("clean pages reload, but dirty forms stay paused after blur", () => {
     const clean = harness();
     try {

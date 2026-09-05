@@ -35,7 +35,7 @@ function PacketEvidence({ packet }: { packet: DecisionPacket }) {
       {packet.cannot_investigate && <p><strong>Investigation limit:</strong> {packet.cannot_investigate}</p>}</div>
   </div></details>;
 }
-export function RequestCard({ view, row, canWrite, detail = false }: { view: DecisionView; row: RequestRow; canWrite: boolean; detail?: boolean }) {
+export function RequestCard({ view, row, canWrite, detail = false, continueTo }: { view: DecisionView; row: RequestRow; canWrite: boolean; detail?: boolean; continueTo?: string }) {
   const packet = view.packet;
   const missing = assessPacket(packet);
   const reviewer = view.preparation.triage?.proposal as { recommendation?: { answer: string; rationale: string }; uncertainty?: string[] } | null;
@@ -59,6 +59,7 @@ export function RequestCard({ view, row, canWrite, detail = false }: { view: Dec
     <PacketEvidence packet={packet}/>
     {row.state === "needs_you" && canWrite && <section class="decision-composer" aria-label="Reply to this decision">
       <form class="answer-form reply-form" method="post" action={`/ui/decisions/${row.id}/answer`}>
+        {continueTo && <input type="hidden" name="continue_to" value={continueTo}/>}
         <input type="hidden" name="expected_revision" value={row.revision}/>
         <fieldset class="reply-choices"><legend class="reply-heading">Your reply</legend>
           <p class="reply-hint muted">{packet.options.length ? "Choose an answer below, or write your own. Nothing is sent until you reply." : "Tell the agent how you’d like to proceed."}</p>
@@ -72,11 +73,12 @@ export function RequestCard({ view, row, canWrite, detail = false }: { view: Dec
             <textarea id={`answer-${row.id}`} name="text" rows={3} maxlength={8000} required={!packet.options.length} placeholder="Tell the agent what to do, including any conditions…"/>
           </div>
         </fieldset>
-        <div class="reply-send"><button type="submit" class="button primary">Send reply <span aria-hidden="true">↗</span></button><p class="muted">Moves to Watching while the agent picks up your reply.</p></div>
+        <div class="reply-send"><button type="submit" class="button primary">{continueTo ? "Send & next" : "Send reply"} <span aria-hidden="true">↗</span></button><p class="muted">{continueTo ? "Continue triaging. Track this reply in Watching." : "Moves to Watching while the agent picks up your reply."}</p></div>
         <small class="muted reply-scope">Applies to this request only.</small>
       </form>
     </section>}
     {row.state === "expired" && !row.reviewed_at && canWrite && <form class="answer-form outcome-review" method="post" action={`/ui/decisions/${row.id}/review-expiry`}>
+      {continueTo && <input type="hidden" name="continue_to" value={continueTo}/>}
       <input type="hidden" name="expected_revision" value={row.revision}/>
       <label for={`review-${row.id}`}>This decision was missed. What should be recorded?</label>
       <textarea id={`review-${row.id}`} name="note" rows={2} maxlength={2000} required placeholder="For example: asked the source for a fresh decision, or this work is no longer needed."/>
@@ -85,6 +87,7 @@ export function RequestCard({ view, row, canWrite, detail = false }: { view: Dec
     {detail && !terminalRequest(row.state) && canWrite && <details class="withdraw-request"><summary>No longer needed?</summary><div class="details-body stack">
       <p>Withdraw this request when a decision is no longer needed. This stops further use of the reply through CAR, but does not undo work the agent has already performed.</p>
       <form class="answer-form" method="post" action={`/ui/decisions/${row.id}/withdraw`}><input type="hidden" name="expected_revision" value={row.revision}/>
+        {continueTo && <input type="hidden" name="continue_to" value={continueTo}/>}
         <label for={`withdraw-${row.id}`}>Why is this request no longer needed?</label><textarea id={`withdraw-${row.id}`} name="reason" rows={2} maxlength={2000} required/>
         <button class="button danger" type="submit">Withdraw request</button>
       </form></div></details>}
@@ -92,7 +95,7 @@ export function RequestCard({ view, row, canWrite, detail = false }: { view: Dec
     {!detail && <a class="decision-record-link" href={`/ui/decisions/${row.id}`}>Open decision record</a>}
   </article>;
 }
-export function NativeCard({ row, canWrite }: { row: NativeDecision; canWrite: boolean }) {
+export function NativeCard({ row, canWrite, continueTo }: { row: NativeDecision; canWrite: boolean; continueTo?: string }) {
   // The obligation is the source-of-truth outcome. Delivery is separate
   // evidence: a reply may have been delivered before the source's deadline
   // elapsed, but that does not turn a missed obligation into success.
@@ -113,10 +116,11 @@ export function NativeCard({ row, canWrite }: { row: NativeDecision; canWrite: b
     {terminalObligation && row.reply_state && <p class="muted">Delivery record: {decisionLabels[row.reply_state] ?? row.reply_state}. This evidence does not change the source obligation outcome.</p>}
     {row.last_error && <p class="context-warning">{row.last_error}</p>}
     {row.snooze_until && <p>Returns to Needs you at <Timestamp value={row.snooze_until}/>.</p>}
-    {row.state === "pending" && !terminalObligation && !row.reply_state && row.event_type === "attention.permission" && canWrite && <div class="actions">{[true, false].map((approval) => <form method="post" action={`/ui/escalations/${row.id}/answer`}><input type="hidden" name="approval" value={String(approval)}/><button class="button" type="submit">{approval ? "Approve this request" : "Deny this request"}</button></form>)}</div>}
+    {row.state === "pending" && !terminalObligation && !row.reply_state && row.event_type === "attention.permission" && canWrite && <div class="actions">{[true, false].map((approval) => <form method="post" action={`/ui/escalations/${row.id}/answer`}>{continueTo && <input type="hidden" name="continue_to" value={continueTo}/>}<input type="hidden" name="approval" value={String(approval)}/><button class="button" type="submit">{approval ? "Approve this request" : "Deny this request"}</button></form>)}</div>}
     {row.state === "pending" && !terminalObligation && !row.reply_state && canWrite && <form class="answer-form" method="post" action={`/ui/escalations/${row.id}/answer`}>
+      {continueTo && <input type="hidden" name="continue_to" value={continueTo}/>}
       <label for={`native-${row.id}`}>Reply to this request</label><textarea id={`native-${row.id}`} name="text" rows={3} maxlength={8000} required/>
-      <button class="button primary" type="submit">Record answer</button><small class="muted">Delivery is tracked separately. This creates no standing permission.</small>
+      <button class="button primary" type="submit">{continueTo ? "Send & next" : "Send reply"}</button><small class="muted">Track this reply in Watching. Applies to this request only.</small>
     </form>}
     {row.reply_id && !terminalObligation && ["failed","uncertain","staged","delivered"].includes(row.reply_state ?? "") && canWrite && <details><summary>Check delivery at the source</summary><div class="details-body stack">
       <p>Do not resend an uncertain answer without checking whether it arrived.</p>

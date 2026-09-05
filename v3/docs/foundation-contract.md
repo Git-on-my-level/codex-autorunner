@@ -33,6 +33,8 @@ more “resolved” rows: missed blockers and false success make those metrics m
 | Read-only views have no action forms; mobile controls accessible | portable UI; development browser checks at 320/390/1440, light/dark |
 | Mailbox selection preserves canonical tabs, pagination, exact native replies, and recovery for stale links | `test/web/mailbox.test.ts`; `test/web/native-message.test.ts` |
 | Browsers use standards mode; drafts survive blur, scroll, and protected in-app navigation | `test/web/document.test.ts`; `test/web/live-refresh.test.ts` |
+| Triage advances within Needs you; stale next targets and empty pages recover without changing outcome | `test/web/mailbox.test.ts`: continuation, concurrent answer, exhausted page, empty inbox, withdrawal and redirect confinement |
+| Shortcuts use ordinary links and validated forms; typing and drafts remain protected | `test/web/live-refresh.test.ts`: key routing and draft guard; in-app browser: preset/custom Ctrl+Enter and empty custom validation |
 | Blur and automatic refresh preserve typed drafts | `scripts/check-ui-browser.py`: close all disclosures, run refresh callback, cancel manual refresh |
 
 ## Required commands

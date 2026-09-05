@@ -40,6 +40,17 @@ function selectionFromQuery(raw: string | undefined): Selection | null {
   return { kind: "request", id: raw };
 }
 function selectionKey(selection: Selection): string { return `${selection.kind}:${selection.id}`; }
+// A form may continue triage only within the inbox. Never follow a supplied URL.
+function triageDestination(raw: unknown, outcome: string): string | null {
+  if (typeof raw !== "string") return null;
+  const params = new URLSearchParams(raw);
+  const next = new URLSearchParams({ triage: "1", completed: outcome });
+  const selected = params.get("selected");
+  if (selected && /^(?:native:)?[a-zA-Z0-9_-]+$/.test(selected)) next.set("selected", selected);
+  const page = Number(params.get("page"));
+  if (Number.isSafeInteger(page) && page > 0) next.set("page", String(page));
+  return `/ui?${next}`;
+}
 function displayTime(value: string): string {
   return Number.isFinite(Date.parse(value))
     ? new Date(value).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })
@@ -115,7 +126,7 @@ export function installDecisionRoutes(app: Hono, service: AttentionService): voi
       ORDER BY CASE json_extract(packet_json,'$.urgency') WHEN 'urgent' THEN 0 ELSE 1 END,
       CASE WHEN ?='handled' THEN -strftime('%s',COALESCE(closed_at,created_at)) ELSE strftime('%s',COALESCE(due_at,created_at)) END, id
       LIMIT 51 OFFSET ?`).all(workspace, tab, page * 50) as RequestRow[];
-    const selection = forcedSelection ?? selectionFromQuery(c.req.query("selected"));
+    let selection = forcedSelection ?? selectionFromQuery(c.req.query("selected"));
     const nativeCondition = NATIVE_CONDITION[tab];
     const native = store.db.query(`SELECT s.*, e.type AS event_type, e.severity AS event_severity, e.body, e.title, e.source_host, e.received_at AS created_at, e.obligation_state,
         h.state AS reply_state, h.payload_json AS reply_payload_json, h.last_error, h.id AS reply_id, h.revision AS reply_revision, i.snooze_until
@@ -167,20 +178,35 @@ export function installDecisionRoutes(app: Hono, service: AttentionService): voi
       const direction = tab === "handled" ? -1 : 1;
       return direction * (Date.parse(a.sortTime) - Date.parse(b.sortTime)) || a.key.localeCompare(b.key);
     });
+    if (tab === "needs_you" && c.req.query("triage")) {
+      if (!entries.length && page > 0) {
+        const query = new URLSearchParams({ triage: "1", completed: c.req.query("completed") ?? "" });
+        return c.redirect(`/ui?${query}`, 303);
+      }
+      if (!selection || !entries.some((entry) => entry.key === selectionKey(selection!))) {
+        const first = entries[0];
+        selection = first ? { kind: first.key.startsWith("native:") ? "native" : "request", id: first.value.id } : null;
+      }
+    }
     const readerEntry = selection
       ? entries.find((entry) => entry.key === selectionKey(selection))
       : entries[0];
+    const currentIndex = readerEntry ? entries.indexOf(readerEntry) : -1;
+    const nextEntry = entries[currentIndex + 1] ?? entries.find((entry) => entry !== readerEntry);
+    const nextQuery = new URLSearchParams({ page: String(page) });
+    if (nextEntry) nextQuery.set("selected", nextEntry.key.startsWith("request:") ? nextEntry.value.id : nextEntry.key);
+    const continueTo = tab === "needs_you" ? nextQuery.toString() : undefined;
     const readerValue = forcedRequest ?? (readerEntry?.value as RequestRow | undefined);
     const reader = selection?.kind === "request" && readerValue && "packet_json" in readerValue
-      ? <RequestCard view={service.view(readerValue)} row={readerValue} canWrite={canWrite} detail/>
+      ? <RequestCard view={service.view(readerValue)} row={readerValue} canWrite={canWrite} continueTo={continueTo} detail/>
       : readerEntry?.value && selection?.kind === "native"
-        ? <NativeCard row={readerEntry.value as NativeDecision} canWrite={canWrite}/>
+        ? <NativeCard row={readerEntry.value as NativeDecision} canWrite={canWrite} continueTo={continueTo}/>
         : readerEntry?.value && selection?.kind === "delivery"
           ? <DeliveryReader row={readerEntry.value as ReplyRow} canWrite={canWrite}/>
           : !selection && readerEntry?.value && "packet_json" in readerEntry.value
-            ? <RequestCard view={service.view(readerEntry.value as RequestRow)} row={readerEntry.value as RequestRow} canWrite={canWrite} detail/>
+            ? <RequestCard view={service.view(readerEntry.value as RequestRow)} row={readerEntry.value as RequestRow} canWrite={canWrite} continueTo={continueTo} detail/>
             : !selection && readerEntry?.value && "event_type" in readerEntry.value
-              ? <NativeCard row={readerEntry.value as NativeDecision} canWrite={canWrite}/>
+              ? <NativeCard row={readerEntry.value as NativeDecision} canWrite={canWrite} continueTo={continueTo}/>
               : !selection && readerEntry?.value
               ? <DeliveryReader row={readerEntry.value as ReplyRow} canWrite={canWrite}/>
               : null;
@@ -198,11 +224,15 @@ export function installDecisionRoutes(app: Hono, service: AttentionService): voi
             : "Action recorded. CAR is still tracking this item."} {navCounts.needs_you > 0 ? <a href="/ui">Next decision</a> : <a href={tabHref(tab)}>Back to inbox</a>}.
     </p> : null;
     const waiting = tab === "needs_you" ? waitingWithoutContact() : 0;
+    const completed = c.req.query("completed");
+    const triageNotice = c.req.query("triage") && completed ? <p class="notice" role="status">
+      {completed === "withdrawn" ? "Request withdrawn." : completed === "reviewed" ? "Missed decision reviewed." : "Reply recorded."} {completed === "answered" && <a href="/ui/watching">Track in Watching</a>}
+    </p> : null;
     return c.html(<Layout mailbox title={tabNames[tab]} active={tabHref(tab)} refreshSeconds={15} navCounts={navCounts}>
       <Mailbox title={tabNames[tab]} refreshHref={page > 0 ? `?page=${page}` : ""} items={mailboxItems} explicitSelection={Boolean(selection)}
-        backHref={`${tabHref(tab)}${page > 0 ? `?page=${page}` : ""}`} backLabel={`Back to ${tabNames[tab]}`} reader={(reader || recovery) && <>{recordedNotice}{reader ?? recovery}</>}
-        beforeList={<>{attentionErrors > 0 && <p class="context-warning"><a href="/ui/watching">{attentionErrors} reply delivery issue(s) need review.</a> CAR has not assumed they succeeded.</p>}{waiting > 0 && <p class="notice"><a href="/ui/watching">{waiting} answered request(s) have no recent source check-in.</a> They remain in Watching, not marked successful.</p>}</>}
-        afterList={<nav class="pager actions" aria-label="Decision pages">{page > 0 && <a class="button" href={`?page=${page - 1}`}>Previous</a>}{(rows.length > 50 || native.length > 50 || deliveries.length > 50) && <a class="button" href={`?page=${page + 1}`}>Next</a>}</nav>}
+        backHref={`${tabHref(tab)}${page > 0 ? `?page=${page}` : ""}`} backLabel={`Back to ${tabNames[tab]}`} reader={(reader || recovery) && <>{triageNotice}{recordedNotice}{reader ?? recovery}</>}
+        beforeList={<>{!reader && triageNotice}{attentionErrors > 0 && <p class="context-warning"><a href="/ui/watching">{attentionErrors} reply delivery issue(s) need review.</a> CAR has not assumed they succeeded.</p>}{waiting > 0 && <p class="notice"><a href="/ui/watching">{waiting} {waiting === 1 ? "reply is" : "replies are"} waiting for an agent update.</a></p>}</>}
+        afterList={<nav class="pager actions" aria-label="Decision pages">{page > 0 && <a class="button" data-previous-page href={`${tabHref(tab)}?page=${page - 1}`}>Previous</a>}{(rows.length > 50 || native.length > 50 || deliveries.length > 50) && <a class="button" data-next-page href={`${tabHref(tab)}?page=${page + 1}`}>Next</a>}</nav>}
         emptyMessage={tab === "needs_you" ? "No decisions waiting here." : "Nothing in this view."}/>
     </Layout>);
   };
@@ -219,16 +249,22 @@ export function installDecisionRoutes(app: Hono, service: AttentionService): voi
     const input = HumanAnswer.parse({ expected_revision: Number(body.expected_revision),
       ...(typeof body.option_id === "string" && body.option_id ? { option_id: body.option_id } : { text: body.text }) });
     service.answer(c.req.param("id"), input.expected_revision, "human:web", input);
+    const continuation = triageDestination(body.continue_to, "answered");
+    if (continuation) return c.redirect(continuation, 303);
     return c.redirect(`/ui/decisions/${encodeURIComponent(c.req.param("id"))}?recorded=1`, 303);
   });
   app.post("/decisions/:id/withdraw", async (c) => {
     const body = await c.req.parseBody();
     service.withdraw(c.req.param("id"), Number(body.expected_revision), String(body.reason ?? ""), "human:web");
+    const continuation = triageDestination(body.continue_to, "withdrawn");
+    if (continuation) return c.redirect(continuation, 303);
     return c.redirect(`/ui/decisions/${encodeURIComponent(c.req.param("id"))}`, 303);
   });
   app.post("/decisions/:id/review-expiry", async (c) => {
     const body = await c.req.parseBody();
     service.reviewExpiry(c.req.param("id"), Number(body.expected_revision), "human:web", String(body.note ?? ""));
+    const continuation = triageDestination(body.continue_to, "reviewed");
+    if (continuation) return c.redirect(continuation, 303);
     return c.redirect(`/ui/decisions/${encodeURIComponent(c.req.param("id"))}`, 303);
   });
   app.post("/escalations/:id/answer", async (c) => {
@@ -243,6 +279,8 @@ export function installDecisionRoutes(app: Hono, service: AttentionService): voi
       if (event?.type !== "attention.permission") throw new AttentionError("answer_type", "This question requires a text answer", 400);
     }
     recordAnswer(store, { escalationId: c.req.param("id"), actor: "human:web", payload: approval === undefined ? { text } : { approval } });
+    const continuation = triageDestination(body.continue_to, "answered");
+    if (continuation) return c.redirect(continuation, 303);
     return c.redirect(`/ui/watching?selected=${encodeURIComponent(`native:${c.req.param("id")}`)}&recorded=1`, 303);
   });
   app.post("/replies/:id/reconcile", async (c) => {

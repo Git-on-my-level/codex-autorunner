@@ -81,6 +81,10 @@ export const MAILBOX_CSS = `
   .mailbox-reader>.notice{margin:16px 36px 0;font-size:12px;background:var(--raised);border:1px solid var(--border);border-radius:4px}
   .mailbox-main>.refresh-paused{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
   .reply-choices{border:0;padding:0;margin:0;min-width:0;display:grid;gap:8px}
+  .shortcut-help{border:0;border-radius:0;background:none;font-size:12px}
+  .shortcut-help[hidden]{display:none}.shortcut-help summary{padding:10px;color:var(--muted);font-size:11px;white-space:nowrap}
+  .shortcut-list{position:fixed;z-index:60;top:64px;right:20px;width:320px;max-width:calc(100vw - 40px);display:grid;gap:12px;padding:20px;border:1px solid var(--border-strong);border-radius:8px;background:var(--surface);box-shadow:var(--shadow)}.shortcut-list p{margin:0;line-height:1.8}.shortcut-list label{display:flex;align-items:center;gap:8px;font-size:11px}.shortcut-list input{width:16px;height:16px;min-height:0}.shortcut-list small{color:var(--muted);line-height:1.6}
+  kbd{font:inherit;font-size:11px;border:1px solid var(--border-strong);border-radius:3px;padding:1px 5px;color:var(--muted)}
   .decision-message .reply-heading{margin:0;padding:0 0 6px;font-size:15px}
   .decision-message .reply-hint{font-size:12px;margin-bottom:8px}
   .decision-message .reply-choice{display:flex;align-items:flex-start;gap:12px;padding:14px 16px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:transparent;color:var(--fg)}
