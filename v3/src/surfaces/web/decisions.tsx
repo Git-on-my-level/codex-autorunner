@@ -7,7 +7,7 @@ import { recordAnswer, reconcileReply, type ReplyRow } from "../../attention/rep
 import { AttentionError } from "../../attention/errors.ts";
 import { RequestCard, NativeCard, PageHeader, decisionLabels as label, type NativeDecision } from "./decision_views.tsx";
 import { Mailbox, type MailboxItem } from "./mailbox.tsx";
-import { hasWebWriteSession } from "./auth.ts";
+import { hasWebWriteSession, webAuthOptional } from "./auth.ts";
 import { Layout } from "./layout.tsx";
 
 import { decisionCounts, REQUEST_CONDITION, NATIVE_CONDITION, NATIVE_JOIN, type DecisionTab as Tab } from "./decision_queries.ts";
@@ -41,10 +41,12 @@ function selectionFromQuery(raw: string | undefined): Selection | null {
 }
 function selectionKey(selection: Selection): string { return `${selection.kind}:${selection.id}`; }
 // A form may continue triage only within the inbox. Never follow a supplied URL.
-function triageDestination(raw: unknown, outcome: string): string | null {
+function triageDestination(raw: unknown, outcome: string, completedId: string, completedKind: "request" | "native" = "request"): string | null {
   if (typeof raw !== "string") return null;
   const params = new URLSearchParams(raw);
   const next = new URLSearchParams({ triage: "1", completed: outcome });
+  if (/^[a-zA-Z0-9_-]+$/.test(completedId)) next.set("completed_id", completedId);
+  if (completedKind === "native") next.set("completed_kind", completedKind);
   const selected = params.get("selected");
   if (selected && /^(?:native:)?[a-zA-Z0-9_-]+$/.test(selected)) next.set("selected", selected);
   const page = Number(params.get("page"));
@@ -180,7 +182,11 @@ export function installDecisionRoutes(app: Hono, service: AttentionService): voi
     });
     if (tab === "needs_you" && c.req.query("triage")) {
       if (!entries.length && page > 0) {
-        const query = new URLSearchParams({ triage: "1", completed: c.req.query("completed") ?? "" });
+        const query = new URLSearchParams({ triage: "1" });
+        for (const key of ["completed", "completed_id", "completed_kind"]) {
+          const value = c.req.query(key);
+          if (value) query.set(key, value);
+        }
         return c.redirect(`/ui?${query}`, 303);
       }
       if (!selection || !entries.some((entry) => entry.key === selectionKey(selection!))) {
@@ -216,7 +222,10 @@ export function installDecisionRoutes(app: Hono, service: AttentionService): voi
     const explicitKey = selection ? selectionKey(selection) : null;
     const mailboxItems = entries.map((entry, index) => ({ ...entry.item, selected: explicitKey === entry.key || (!selection && index === 0) }));
     const recordedRow = selection?.kind === "request" && readerValue && "state" in readerValue ? readerValue as RequestRow : undefined;
-    const recordedNotice = c.req.query("recorded") ? <p class="notice" role="status">
+    const hasRecordedReply = recordedRow ? Boolean(store.db.query("SELECT id FROM human_replies WHERE request_id=?").get(recordedRow.id))
+      : selection?.kind === "native" ? Boolean(store.db.query("SELECT id FROM human_replies WHERE escalation_id=?").get(selection.id))
+      : selection?.kind === "delivery" && Boolean(readerValue);
+    const recordedNotice = c.req.query("recorded") && hasRecordedReply ? <p class="notice" role="status" data-transient-notice="recorded">
       {recordedRow
         ? (recordedRow.state === "resolved" ? "Source confirmed this request is unblocked." : recordedRow.state === "received" ? "Source received the answer. Waiting for work to resume." : recordedRow.state === "answered" ? "Answer recorded. Waiting for the source to receive it." : "Answer recorded. CAR is still tracking this request.")
         : selection?.kind === "native" ? "Answer recorded. Delivery and source outcome remain separate and are shown below."
@@ -225,9 +234,36 @@ export function installDecisionRoutes(app: Hono, service: AttentionService): voi
     </p> : null;
     const waiting = tab === "needs_you" ? waitingWithoutContact() : 0;
     const completed = c.req.query("completed");
-    const triageNotice = c.req.query("triage") && completed ? <p class="notice" role="status">
-      {completed === "withdrawn" ? "Request withdrawn." : completed === "reviewed" ? "Missed decision reviewed." : "Reply recorded."} {completed === "answered" && <a href="/ui/watching">Track in Watching</a>}
-    </p> : null;
+    const completedId = c.req.query("completed_id");
+    const completedKind = c.req.query("completed_kind") === "native" ? "native" : "request";
+    let completedTitle: string | null = null;
+    let completedHref: string | null = null;
+    if (completedId) {
+      if (completedKind === "native") {
+        const completedNative = store.db.query(`SELECT s.id, e.title, s.question, e.obligation_state,
+          (SELECT id FROM human_replies WHERE escalation_id=s.id LIMIT 1) AS reply_id
+          FROM escalations s JOIN incidents i ON i.id=s.incident_id
+          JOIN events e ON e.id=COALESCE(s.origin_event_id,i.opened_by_event) WHERE s.id=?`).get(completedId) as { id: string; title: string | null; question: string | null; obligation_state: string; reply_id: string | null } | null;
+        if (completedNative && completed === "answered" && completedNative.reply_id) {
+          completedTitle = completedNative.question || completedNative.title || "Native decision";
+          const destination = ["resolved", "cancelled", "expired"].includes(completedNative.obligation_state) ? "handled" : "watching";
+          completedHref = `/ui/${destination}?selected=${encodeURIComponent(`native:${completedId}`)}`;
+        }
+      } else {
+        const completedRequest = service.get(completedId);
+        const matchesOutcome = completedRequest && (
+          (completed === "answered" && Boolean(store.db.query("SELECT id FROM human_replies WHERE request_id=?").get(completedId))) ||
+          (completed === "withdrawn" && completedRequest.state === "cancelled") ||
+          (completed === "reviewed" && completedRequest.state === "expired" && Boolean(completedRequest.reviewed_at)));
+        if (completedRequest && matchesOutcome) {
+          completedTitle = packetSummary(completedRequest).question;
+          completedHref = `/ui/decisions/${encodeURIComponent(completedId)}`;
+        }
+      }
+    }
+    const triageNotice = c.req.query("triage") && completedTitle ? <div class="notice triage-confirmation" role="status" data-transient-notice="triage">
+      <strong>{completed === "withdrawn" ? "Request withdrawn." : completed === "reviewed" ? "Missed decision reviewed." : "Reply recorded."}</strong><a href={completedHref ?? tabHref(tab)} aria-label={`View ${completedTitle}`}>View</a>
+    </div> : null;
     return c.html(<Layout mailbox title={tabNames[tab]} active={tabHref(tab)} refreshSeconds={15} navCounts={navCounts}>
       <Mailbox title={tabNames[tab]} refreshHref={page > 0 ? `?page=${page}` : ""} items={mailboxItems} explicitSelection={Boolean(selection)}
         backHref={`${tabHref(tab)}${page > 0 ? `?page=${page}` : ""}`} backLabel={`Back to ${tabNames[tab]}`} reader={(reader || recovery) && <>{triageNotice}{recordedNotice}{reader ?? recovery}</>}
@@ -249,21 +285,21 @@ export function installDecisionRoutes(app: Hono, service: AttentionService): voi
     const input = HumanAnswer.parse({ expected_revision: Number(body.expected_revision),
       ...(typeof body.option_id === "string" && body.option_id ? { option_id: body.option_id } : { text: body.text }) });
     service.answer(c.req.param("id"), input.expected_revision, "human:web", input);
-    const continuation = triageDestination(body.continue_to, "answered");
+    const continuation = triageDestination(body.continue_to, "answered", c.req.param("id"));
     if (continuation) return c.redirect(continuation, 303);
     return c.redirect(`/ui/decisions/${encodeURIComponent(c.req.param("id"))}?recorded=1`, 303);
   });
   app.post("/decisions/:id/withdraw", async (c) => {
     const body = await c.req.parseBody();
     service.withdraw(c.req.param("id"), Number(body.expected_revision), String(body.reason ?? ""), "human:web");
-    const continuation = triageDestination(body.continue_to, "withdrawn");
+    const continuation = triageDestination(body.continue_to, "withdrawn", c.req.param("id"));
     if (continuation) return c.redirect(continuation, 303);
     return c.redirect(`/ui/decisions/${encodeURIComponent(c.req.param("id"))}`, 303);
   });
   app.post("/decisions/:id/review-expiry", async (c) => {
     const body = await c.req.parseBody();
     service.reviewExpiry(c.req.param("id"), Number(body.expected_revision), "human:web", String(body.note ?? ""));
-    const continuation = triageDestination(body.continue_to, "reviewed");
+    const continuation = triageDestination(body.continue_to, "reviewed", c.req.param("id"));
     if (continuation) return c.redirect(continuation, 303);
     return c.redirect(`/ui/decisions/${encodeURIComponent(c.req.param("id"))}`, 303);
   });
@@ -279,7 +315,7 @@ export function installDecisionRoutes(app: Hono, service: AttentionService): voi
       if (event?.type !== "attention.permission") throw new AttentionError("answer_type", "This question requires a text answer", 400);
     }
     recordAnswer(store, { escalationId: c.req.param("id"), actor: "human:web", payload: approval === undefined ? { text } : { approval } });
-    const continuation = triageDestination(body.continue_to, "answered");
+    const continuation = triageDestination(body.continue_to, "answered", c.req.param("id"), "native");
     if (continuation) return c.redirect(continuation, 303);
     return c.redirect(`/ui/watching?selected=${encodeURIComponent(`native:${c.req.param("id")}`)}&recorded=1`, 303);
   });
@@ -297,15 +333,19 @@ export function installDecisionRoutes(app: Hono, service: AttentionService): voi
   app.get("/settings", (c) => {
     const grants = store.db.query("SELECT id,effect_type,scope_json,expires_at,uses_remaining FROM grants WHERE status='active' ORDER BY created_at DESC LIMIT 100").all() as { id: string; effect_type: string; scope_json: string; expires_at: string | null; uses_remaining: number | null }[];
     const clients = Object.entries(service.config.attention.clients);
-    return c.html(<Layout title="Settings" active="/ui/settings"><PageHeader title="Settings" description="Your workspace, connected sources and explicit permissions."/>
-      <section class="decision-card"><h2>Workspace: {workspace}</h2><p>{service.config.attention.triage_enabled ? "An optional CAR reviewer helps prepare incomplete decisions. It cannot answer or approve them." : "Deterministic routing. No additional model is required."}</p>
-        <p>Telegram: {service.config.telegram.enabled ? "configured; delivery receipts tracked separately" : "not enabled; decisions remain available here"}.</p>
-        <h3>Allowed clients</h3>{clients.length ? clients.map(([id, config]) => <p>{id} · {config.host}</p>) : <p>No request clients configured. An operator agent can use <code>card init</code> for a new installation.</p>}
-        <p class="muted">Configured access is not proof a client is online. One server owns this workspace. Keep human credentials out of agent environments.</p>
+    return c.html(<Layout title="Settings" active="/ui/settings" navCounts={counts()}><div class="settings-content"><PageHeader title="Settings" description="Workspace connections and permissions."/>
+      <section class="settings-section"><h2>Workspace</h2><dl class="settings-facts">
+        <div><dt>Name</dt><dd>{workspace}</dd></div>
+        <div><dt>Decision preparation</dt><dd>{service.config.attention.triage_enabled ? "CAR reviewer enabled" : "No additional model"}</dd></div>
+        <div><dt>Telegram</dt><dd>{service.config.telegram.enabled ? "Configured · delivery tracked separately" : "Not connected · use this inbox"}</dd></div>
+        <div><dt>Web access</dt><dd>{webAuthOptional(service.config) ? "Trusted access · no sign-in required" : "Sign-in required"}</dd></div>
+      </dl>{service.config.attention.triage_enabled && <p class="muted">The reviewer can prepare incomplete requests, but cannot answer or approve them.</p>}</section>
+      <section class="settings-section"><h2>Allowed clients <span class="muted">{clients.length}</span></h2>{clients.length ? <ul class="settings-clients">{clients.map(([id, config]) => <li><strong>{id}</strong><span>{config.host}</span></li>)}</ul> : <p class="muted">No clients configured yet. Use <code>card client add --help</code> to set one up.</p>}
+        <p class="muted">Access does not indicate whether a client is online. Keep human sign-in credentials separate from agent credentials.</p>
       </section>
-      <section class="decision-card"><h2>Explicit standing permissions</h2><p>Past answers and remembered preferences do not create permission.</p>{grants.length ? grants.map((grant) => <details><summary>{grant.effect_type} · {grant.expires_at ? `expires ${grant.expires_at}` : "no expiry"}</summary><div class="details-body"><pre>{grant.scope_json}</pre><p>Uses remaining: {grant.uses_remaining ?? "not count-limited"}</p>{hasWebWriteSession(c, service.config) && <form method="post" action={`/ui/grants/${grant.id}/revoke`}><button class="button danger" type="submit">Revoke permission</button></form>}</div></details>) : <p>No active grants.</p>}</section>
+      <section class="settings-section"><h2>Standing permissions</h2><p class="muted">Past replies do not grant permission for future work.</p>{grants.length ? grants.map((grant) => <details><summary>{grant.effect_type} · {grant.expires_at ? `expires ${grant.expires_at}` : "no expiry"}</summary><div class="details-body"><pre>{grant.scope_json}</pre><p>Uses remaining: {grant.uses_remaining ?? "not count-limited"}</p>{hasWebWriteSession(c, service.config) && <form method="post" action={`/ui/grants/${grant.id}/revoke`}><button class="button danger" type="submit">Revoke permission</button></form>}</div></details>) : <p>No active permissions.</p>}</section>
       <details><summary>Advanced inspection</summary><div class="details-body actions"><a href="/ui/events">Events</a><a href="/ui/incidents">Incidents</a><a href="/ui/runs">Runs</a><a href="/ui/digests">Digests</a><a href="/ui/policy">Safety and policy</a><a href="/ui/memory">Context notes</a></div></details>
-      <form method="post" action="/ui/logout"><button class="button" type="submit">Sign out</button></form>
+      {!webAuthOptional(service.config) && <form class="settings-footer" method="post" action="/ui/logout"><button class="button" type="submit">Sign out</button></form>}</div>
     </Layout>);
   });
   app.post("/grants/:id/revoke", (c) => { service.store.revokeGrant(c.req.param("id"), "human:web"); return c.redirect("/ui/settings", 303); });

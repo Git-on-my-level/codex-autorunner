@@ -35,6 +35,9 @@ more “resolved” rows: missed blockers and false success make those metrics m
 | Browsers use standards mode; drafts survive blur, scroll, and protected in-app navigation | `test/web/document.test.ts`; `test/web/live-refresh.test.ts` |
 | Triage advances within Needs you; stale next targets and empty pages recover without changing outcome | `test/web/mailbox.test.ts`: continuation, concurrent answer, exhausted page, empty inbox, withdrawal and redirect confinement |
 | Shortcuts use ordinary links and validated forms; typing and drafts remain protected | `test/web/live-refresh.test.ts`: key routing and draft guard; in-app browser: preset/custom Ctrl+Enter and empty custom validation |
+| Shortcut preferences survive navigation without storing drafts; customizing an option never submits or overwrites a draft | `test/web/live-refresh.test.ts`; live mailbox dogfood |
+| A triage confirmation identifies the previous request; recorded answers precede historical source recommendations | `test/web/mailbox.test.ts`; real browser after send/withdraw and Watching |
+| Agent CLI works from another project directory; client preflight raises no request; receipt snapshots are explicitly historical | CLI child-process tests and portable client tests; native Cursor/OMP dogfood |
 | Blur and automatic refresh preserve typed drafts | `scripts/check-ui-browser.py`: close all disclosures, run refresh callback, cancel manual refresh |
 
 ## Required commands

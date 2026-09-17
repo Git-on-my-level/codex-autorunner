@@ -50,6 +50,35 @@ function nativeEvent() {
 }
 
 describe("decision mailbox routing", () => {
+  test("missed decisions offer review choices without reviving expired approvals", async () => {
+    const f = fixture();
+    const row = f.service.raise(owner, "missed-options", packet({ deadline_at: new Date(f.clock.now().getTime()+1000).toISOString(), options: [{ id: "keep", label: "Keep bridge", answer: "Keep the bridge for this release", consequences: "Carry compatibility code" }] }));
+    f.clock.advance(1000);
+    const html = await (await f.app.request(`/ui/decisions/${row.id}`, { headers: WEB_AUTH_HEADERS })).text();
+    expect(html).toContain("What next?");
+    expect(html).toContain("Original options · no longer available");
+    expect(html).toContain("Keep the bridge for this release");
+    expect(html).not.toContain(`action="/ui/decisions/${row.id}/answer"`);
+    expect(html).toContain('name="note" value="This decision is no longer needed."');
+    const response = await f.app.request(`/ui/decisions/${row.id}/review-expiry`, { method: "POST", headers: { ...WEB_AUTH_HEADERS, "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ expected_revision: String(row.revision), note: "This decision is no longer needed.", continue_to: "/ui" }) });
+    expect(response.status).toBe(303);
+    expect(f.service.get(row.id)).toMatchObject({ state: "expired", review_note: "This decision is no longer needed." });
+    expect(f.service.get(row.id)!.reviewed_at).not.toBeNull();
+    expect(f.store.db.query("SELECT id FROM human_replies WHERE request_id=?").get(row.id)).toBeNull();
+    const inbox = await (await f.app.request("/ui")).text();
+    expect(inbox).not.toContain(`aria-labelledby="question-${row.id}"`);
+  });
+  test("confirmation query markers cannot invent a saved outcome", async () => {
+    const f = fixture();
+    const active = f.service.raise(owner, "not-completed", packet());
+    for (const outcome of ["answered", "withdrawn", "reviewed", "unknown"]) {
+      const html = await (await f.app.request(`/ui?triage=1&completed=${outcome}&completed_id=${active.id}`)).text();
+      expect(html).not.toContain('data-transient-notice="triage"');
+    }
+    const recorded = await (await f.app.request(`/ui/decisions/${active.id}?recorded=1`)).text();
+    expect(recorded).not.toContain('data-transient-notice="recorded"');
+    expect(f.service.get(active.id)!.state).toBe("needs_you");
+  });
   test("sending from the inbox selects the next pending decision, including on mobile", async () => {
     const f = fixture();
     const first = f.service.raise(owner, "triage-first", packet({ question: "First decision?" }));
@@ -70,6 +99,9 @@ describe("decision mailbox routing", () => {
     expect(page).toContain(`aria-labelledby="question-${next.id}"`);
     expect(page).not.toContain(`aria-labelledby="question-${first.id}"`);
     expect(page).toContain("Reply recorded.");
+    expect(page).toContain('aria-label="View First decision?"');
+    expect(page).toContain('class="notice triage-confirmation"');
+    expect(page).not.toContain("The next inbox item is ready below.");
     expect(f.service.get(first.id)!.state).toBe("answered");
   });
 
@@ -84,8 +116,10 @@ describe("decision mailbox routing", () => {
     const emptyPage = await f.app.request("/ui?triage=1&page=9&completed=answered");
     expect(emptyPage.status).toBe(303);
     expect(emptyPage.headers.get("location")).toBe("/ui?triage=1&completed=answered");
+    const attributedEmptyPage = await f.app.request(`/ui?triage=1&page=9&completed=answered&completed_id=${gone.id}`);
+    expect(attributedEmptyPage.headers.get("location")).toBe(`/ui?triage=1&completed=answered&completed_id=${gone.id}`);
     f.service.answer(remaining.id, 1, "human:web", { text: "Done" });
-    const empty = await (await f.app.request("/ui?triage=1&completed=answered")).text();
+    const empty = await (await f.app.request(`/ui?triage=1&completed=answered&completed_id=${remaining.id}`)).text();
     expect(empty).toContain("No decisions waiting here.");
     expect(empty).toContain("Reply recorded.");
   });
@@ -97,8 +131,12 @@ describe("decision mailbox routing", () => {
       method: "POST", headers: { ...WEB_AUTH_HEADERS, "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ expected_revision: "1", reason: "No longer needed", continue_to: "https://example.com/steal?selected=//evil" }),
     });
-    expect(response.headers.get("location")).toBe("/ui?triage=1&completed=withdrawn");
+    expect(response.headers.get("location")).toBe(`/ui?triage=1&completed=withdrawn&completed_id=${row.id}`);
     expect(f.service.get(row.id)!.state).toBe("cancelled");
+    const page = await (await f.app.request(response.headers.get("location")!)).text();
+    expect(page).toContain("Request withdrawn.");
+    expect(page).toContain('data-transient-notice="triage"');
+    expect(page).toContain(`aria-label="View ${packet().question}"`);
   });
   test("reconciling a native reply returns to its exact handled message", async () => {
     const f = fixture();
@@ -120,6 +158,8 @@ describe("decision mailbox routing", () => {
     expect(page).toContain("Denied");
     expect(page).toContain("Source confirmed unblocked");
     expect(page).not.toContain("This item is no longer in this mailbox.");
+    const notice = await (await f.app.request(`/ui?triage=1&completed=answered&completed_kind=native&completed_id=${escalation}`)).text();
+    expect(notice).toContain(`/ui/handled?selected=${encodeURIComponent(`native:${escalation}`)}`);
   });
 
   test("guided pagination preserves context and keeps the sentinel selection highlighted", async () => {

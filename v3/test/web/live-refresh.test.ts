@@ -12,6 +12,8 @@ type MockElementOptions = { form?: boolean; href?: string; manualRefresh?: boole
 
 class MockElement {
   tagName = "DIV";
+  checked = true;
+  value = "";
   target: string;
   href: string;
   hidden = false;
@@ -36,10 +38,12 @@ class MockElement {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
   }
   click(): void { for (const listener of this.listeners.get("click") ?? []) listener(); }
+  dispatch(type: string): void { for (const listener of this.listeners.get(type) ?? []) listener(); }
   focus(): void { this.focused = true; }
+  getClientRects(): unknown[] { return this.hidden ? [] : [{}]; }
 }
 
-function harness() {
+function harness(storage: Map<string, string> | null = new Map()) {
   const queries = new Map<string, MockElement>();
   const listeners = new Map<string, Listener[]>();
   const timers: (() => void)[] = [];
@@ -47,6 +51,7 @@ function harness() {
   const draftGuard = new MockElement([], { }); draftGuard.hidden = true;
   const discardLink = new MockElement([], { href: "" });
   const keepButton = new MockElement();
+  const shortcutToggle = new MockElement();
   const times = [
     { dataset: {}, dateTime: "2026-08-26T12:00:00.000Z", textContent: "raw-full" },
     { dataset: { format: "compact" }, dateTime: "2026-08-26T12:00:00.000Z", textContent: "raw-compact" },
@@ -56,7 +61,7 @@ function harness() {
     visibilityState: "visible",
     activeElement: { tagName: "BODY" },
     getElementById(id: string) {
-      return id === "refresh-paused" ? notice : id === "draft-navigation" ? draftGuard : id === "discard-draft" ? discardLink : id === "keep-draft" ? keepButton : null;
+      return id === "refresh-paused" ? notice : id === "draft-navigation" ? draftGuard : id === "discard-draft" ? discardLink : id === "keep-draft" ? keepButton : id === "letter-shortcuts" ? shortcutToggle : null;
     },
     addEventListener(type: string, listener: Listener) {
       listeners.set(type, [...(listeners.get(type) ?? []), listener]);
@@ -71,6 +76,7 @@ function harness() {
     confirm: () => { confirms++; return confirmResult; },
     location: { reload: () => { reloads++; } },
     setTimeout: (callback: () => void) => { timers.push(callback); return timers.length; },
+    ...(storage === null ? {} : { localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => { storage.set(key, value); } } }),
   };
   const globals = globalThis as unknown as { Element?: unknown; location?: unknown };
   const previousElement = globals.Element;
@@ -98,6 +104,8 @@ function harness() {
     draftGuard,
     discardLink,
     keepButton,
+    shortcutToggle,
+    storage,
     dispatch,
     runTimer,
     setConfirm(result: boolean) { confirmResult = result; },
@@ -118,6 +126,23 @@ function harness() {
 }
 
 describe("live refresh progressive enhancement", () => {
+  test("list-only mobile readers ignore shortcuts without creating hidden drafts", () => {
+    const page = harness();
+    try {
+      const reader = new MockElement(); reader.hidden = true;
+      page.queries.set('.mailbox-reader', reader);
+      const next = new MockElement([], { href: "/ui/decisions/next" });
+      let navigations = 0;
+      next.addEventListener("click", () => { navigations++; });
+      page.queries.set('.reader-navigation a[aria-label="Next decision"]', next);
+      for (const key of ["j", "k", "r", "1", "Escape"]) {
+        page.dispatch("keydown", { target: new MockElement(), key, preventDefault() {} });
+      }
+      expect(navigations).toBe(0);
+      expect(page.notice.hidden).toBe(true);
+      expect(page.draftGuard.hidden).toBe(true);
+    } finally { page.restore(); }
+  });
   test("keyboard navigation uses the draft guard and ignores typing, repeat, and modifier keys", () => {
     const page = harness();
     try {
@@ -222,6 +247,38 @@ describe("live refresh progressive enhancement", () => {
       page.dispatch("input", { target: new MockElement([], true) });
       expect(page.click(new MockElement())).toBe(false);
       expect(page.click(new MockElement([], { href: "/ui/watching" }))).toBe(true);
+    } finally { page.restore(); }
+  });
+
+  test("shortcut preference survives navigation and storage failure keeps enhancement usable", () => {
+    const storage = new Map([["car.v3.keyboard-shortcuts.enabled", "0"]]);
+    const disabled = harness(storage);
+    try {
+      expect(disabled.shortcutToggle.checked).toBe(false);
+      disabled.shortcutToggle.checked = true;
+      disabled.shortcutToggle.dispatch("change");
+      expect(storage.get("car.v3.keyboard-shortcuts.enabled")).toBe("1");
+    } finally { disabled.restore(); }
+
+    const unavailable = harness(null);
+    try {
+      expect(unavailable.shortcutToggle.checked).toBe(true);
+      unavailable.shortcutToggle.checked = false;
+      unavailable.shortcutToggle.dispatch("change");
+      expect(unavailable.shortcutToggle.checked).toBe(false);
+    } finally { unavailable.restore(); }
+  });
+
+  test("Escape returns to the list even when letter and number shortcuts are disabled", () => {
+    const page = harness();
+    try {
+      page.shortcutToggle.checked = false;
+      const back = new MockElement([".reader-back"], { href: "/ui" });
+      let navigations = 0;
+      back.addEventListener("click", () => { navigations++; });
+      page.queries.set(".reader-back", back);
+      page.dispatch("keydown", { target: new MockElement(), key: "Escape", preventDefault() {} });
+      expect(navigations).toBe(1);
     } finally { page.restore(); }
   });
 

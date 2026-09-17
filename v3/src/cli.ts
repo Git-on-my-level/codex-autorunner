@@ -1,13 +1,6 @@
 #!/usr/bin/env bun
 import { ATTENTION_COMMANDS, ATTENTION_HELP, runAttentionCli } from "./attention/cli.ts";
 /** `card` — CAR v3 daemon, authenticated event emitter, status, and diagnostics. */
-import { startDaemon } from "./daemon.ts";
-import { loadConfig, dbPath } from "./config/config.ts";
-import { validateProviderTopology } from "./config/provider_topology.ts";
-import { openStore } from "./store/db.ts";
-import { CONTRACT_VERSION, computedIdempotencyKey, parseEvent } from "./contract/events.ts";
-import { hostname } from "node:os";
-import { mkdirSync } from "node:fs";
 
 function argValue(args: string[], flag: string): string | undefined {
   const i = args.indexOf(flag);
@@ -26,6 +19,7 @@ if (cmd && ATTENTION_COMMANDS.has(cmd)) {
   }
 } else switch (cmd) {
   case "serve": {
+    const { startDaemon } = await import("./daemon.ts");
     const daemon = await startDaemon(argValue(rest, "--config"));
     const shutdown = async () => {
       await daemon.stop();
@@ -38,6 +32,9 @@ if (cmd && ATTENTION_COMMANDS.has(cmd)) {
   }
 
   case "emit": {
+    const { loadConfig } = await import("./config/config.ts");
+    const { CONTRACT_VERSION, computedIdempotencyKey, parseEvent } = await import("./contract/events.ts");
+    const { hostname } = await import("node:os");
     // card emit --type attention.error --title "..." [--body ...] [--severity ...] [--port 7171]
     const type = argValue(rest, "--type") ?? "note";
     const now = new Date();
@@ -79,6 +76,8 @@ if (cmd && ATTENTION_COMMANDS.has(cmd)) {
   }
 
   case "status": {
+    const { loadConfig, dbPath } = await import("./config/config.ts");
+    const { openStore } = await import("./store/db.ts");
     const cfg = loadConfig(argValue(rest, "--config"));
     const store = openStore(dbPath(cfg));
     const q = (sql: string) => (store.db.query(sql).get() as { n: number }).n;
@@ -104,6 +103,9 @@ if (cmd && ATTENTION_COMMANDS.has(cmd)) {
   }
 
   case "doctor": {
+    const { loadConfig, dbPath } = await import("./config/config.ts");
+    const { validateProviderTopology } = await import("./config/provider_topology.ts");
+    const { openStore } = await import("./store/db.ts");
     const cfg = loadConfig(argValue(rest, "--config"));
     const checks: [string, boolean, string][] = [];
     checks.push(["state_dir", true, cfg.state_dir]);

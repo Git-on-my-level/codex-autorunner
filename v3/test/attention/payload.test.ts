@@ -74,4 +74,15 @@ describe("strict reply payload boundary", () => {
       globalThis.fetch = previousFetch;
     }
   });
+
+  test("flush explains pending work bound to another origin audience", async () => {
+    const spoolDir = mkdtempSync(join(tmpdir(), "car-audience-client-")); cleanup.push(() => rmSync(spoolDir, { recursive: true, force: true }));
+    const offline = new AttentionClient({ url: "http://127.0.0.1:1", token: "a".repeat(40), spoolDir, timeoutMs: 100 });
+    const saved = await offline.raise("offline-audience", DecisionPacket.parse({ goal: "Ship", blocker: "Need judgment", question: "Proceed?" }));
+    expect(saved).toMatchObject({ delivery: "accepted_locally" });
+    const restored = new AttentionClient({ url: "http://127.0.0.1:2", token: "a".repeat(40), spoolDir, timeoutMs: 100 });
+    const result = await restored.flush();
+    expect(result).toMatchObject({ accepted: [], remaining: 0, other_audiences: 1 });
+    expect(result.next_action).toContain("restore the CAR_URL and credential");
+  });
 });

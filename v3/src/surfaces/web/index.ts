@@ -92,18 +92,48 @@ export function createWebUi(deps: DaemonDeps, attention = new AttentionService(d
       ? "Invalid input. Check the required fields and current revision."
       : "The operation was not confirmed. Check whether your answer was recorded before retrying.";
     if (status === 500) deps.store.audit("web", "web.request_failed", "path", c.req.path, { error: String(error) });
-    // Never echo credentials or arbitrary forms. Retain bounded decision drafts only.
-    const match = c.req.path.match(/^\/ui\/decisions\/([a-zA-Z0-9_-]{1,100})\/(?:answer|withdraw|review-expiry)$/);
+    // Never echo credentials or arbitrary forms. Retain only bounded text from
+    // the decision/reply fields whose forms explicitly label it as a draft.
+    // Native cards and delivery reconciliation need the same recovery affordance
+    // as guided decisions when a stale submit loses the race.
+    const match = c.req.path.match(/^\/ui\/(decisions|escalations|replies)\/([a-zA-Z0-9_-]{1,100})\/(answer|withdraw|review-expiry|reconcile)$/);
+    const target = match ? { kind: match[1]!, id: match[2]!, action: match[3]! } : null;
     let draft: string | undefined;
-    if (match && c.req.method === "POST") {
-      try { const body = await c.req.parseBody(); const text = body.text ?? body.note ?? body.reason;
+    if (target && c.req.method === "POST") {
+      try { const body = await c.req.parseBody(); const field = target.action === "answer" ? "text" : target.action === "withdraw" ? "reason" : "note";
+        const text = body[field];
         if (typeof text === "string") draft = text.slice(0, 8_000);
       } catch { /* A malformed body is never reflected. */ }
     }
+    let href = "/ui";
+    if (target?.kind === "decisions") href = `/ui/decisions/${encodeURIComponent(target.id)}`;
+    else if (target?.kind === "escalations") {
+      const native = deps.store.db.query(`SELECT e.obligation_state, h.id AS reply_id
+        FROM escalations s JOIN incidents i ON i.id=s.incident_id
+        JOIN events e ON e.id=COALESCE(s.origin_event_id,i.opened_by_event)
+        LEFT JOIN human_replies h ON h.escalation_id=s.id WHERE s.id=?`).get(target.id) as {
+        obligation_state: string; reply_id: string | null;
+      } | null;
+      const destination = native && ["resolved", "cancelled", "expired"].includes(native.obligation_state)
+        ? "/handled" : native?.reply_id ? "/watching" : "";
+      href = `/ui${destination}?selected=${encodeURIComponent(`native:${target.id}`)}`;
+    }
+    else if (target?.kind === "replies") {
+      const reply = deps.store.db.query(`SELECT r.escalation_id, e.obligation_state
+        FROM human_replies r LEFT JOIN escalations s ON s.id=r.escalation_id
+        LEFT JOIN incidents i ON i.id=s.incident_id
+        LEFT JOIN events e ON e.id=COALESCE(s.origin_event_id,i.opened_by_event) WHERE r.id=?`).get(target.id) as {
+        escalation_id: string | null; obligation_state: string | null;
+      } | null;
+      const destination = reply?.escalation_id && reply.obligation_state && ["resolved", "cancelled", "expired"].includes(reply.obligation_state)
+        ? "/handled" : "/watching";
+      href = reply?.escalation_id
+        ? `/ui${destination}?selected=${encodeURIComponent(`native:${reply.escalation_id}`)}`
+        : `/ui/watching?selected=${encodeURIComponent(`delivery:${target.id}`)}`;
+    }
     // Build an Hono JSX node so the FC's nullable result is normalized before
     // handing its serialized, escaped output to Hono's string-only helper.
-    const page = jsx(Layout, { title: "Action not confirmed", children: jsx(DecisionError, { message, draft,
-      href: match ? `/ui/decisions/${encodeURIComponent(match[1]!)}` : "/ui" }) });
+    const page = jsx(Layout, { title: "Action not confirmed", children: jsx(DecisionError, { message, draft, href }) });
     return c.html(await page.toString(), status);
   });
   app.use("*", async (c, next) => {

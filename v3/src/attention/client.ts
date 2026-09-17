@@ -1,12 +1,12 @@
 /** Outbound-only client. No model, callback listener or host-management daemon required. */
-import { createHash } from "node:crypto";
-import { readdirSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { readdirSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { REQUEST_STATES } from "./guidance.ts";
 import { stableJson } from "../contract/ids.ts";
 import type { DecisionPacket } from "./contract.ts";
-import { privateDirectory, readPrivateJson, removeDurably, writePrivateJson } from "./files.ts";
+import { privateDirectory, readPrivateJson, removeDurably, syncDirectory, writePrivateJson } from "./files.ts";
 
 export interface ClientOptions { url: string; token: string; spoolDir?: string; allowHttp?: boolean; timeoutMs?: number }
 export interface RequestView {
@@ -16,6 +16,7 @@ export interface RequestView {
 }
 export interface PendingReceipt { contract: "car.request.v1"; delivery: "accepted_locally"; idempotency_key: string; spool_file: string; next_action: string }
 interface SpoolRecord { contract: "car.client-spool.v1"; audience: string; request: { contract: "car.request.v1"; idempotency_key: string; packet: DecisionPacket }; created_at: string }
+interface ReceiptSnapshot { contract: "car.client-receipt.v1"; kind: "historical_answer_snapshot"; request_id: string; answer_id: string; captured_at: string; server_view: RequestView }
 const digest = (value: unknown) => createHash("sha256").update(stableJson(value)).digest("hex");
 export class ClientError extends Error {
   constructor(readonly code: string, message: string, readonly retryable = false, readonly status?: number) { super(message); }
@@ -64,7 +65,7 @@ const encoded = (id: string) => {
 };
 export class AttentionClient {
   readonly url: string; readonly audience: string; readonly spoolDir: string;
-  private readonly pendingDir: string; private readonly receiptDir: string; private readonly rejectedDir: string;
+  private readonly pendingDir: string; private readonly receiptDir: string; private readonly rejectedDir: string; private readonly probeDir: string;
   constructor(private readonly options: ClientOptions) {
     if (!options.token || /[\r\n]/.test(options.token)) throw new ClientError("missing_token", "Configure CAR_AGENT_TOKEN or CAR_CONNECTION_FILE; never use the human sign-in credential");
     this.url = checkedServerUrl(options.url, options.allowHttp);
@@ -75,7 +76,8 @@ export class AttentionClient {
     this.pendingDir = join(this.spoolDir, this.audience, "pending");
     this.receiptDir = join(this.spoolDir, this.audience, "answers");
     this.rejectedDir = join(this.spoolDir, this.audience, "rejected");
-    privateDirectory(this.pendingDir); privateDirectory(this.receiptDir); privateDirectory(this.rejectedDir);
+    this.probeDir = join(this.spoolDir, this.audience, "probes");
+    privateDirectory(this.pendingDir); privateDirectory(this.receiptDir); privateDirectory(this.rejectedDir); privateDirectory(this.probeDir);
   }
   private async call(path: string, method = "GET", body?: unknown): Promise<unknown> {
     let response: Response;
@@ -132,12 +134,84 @@ export class AttentionClient {
   }
   private spool(path: string): SpoolRecord {
     const record = readPrivateJson(path) as SpoolRecord;
-    if (record.contract !== "car.client-spool.v1" || record.audience !== this.audience || !record.request?.idempotency_key)
+    if (!record || typeof record !== "object" || record.contract !== "car.client-spool.v1" || record.audience !== this.audience || !record.request?.idempotency_key)
       throw new ClientError("invalid_spool", "Pending request does not belong to this server and credential identity");
     return record;
   }
   private definitivelyRejected(error: unknown): boolean {
     return error instanceof ClientError && [400, 404, 409, 413, 415, 422].includes(error.status ?? 0);
+  }
+  private isMalformedSpoolError(error: unknown): boolean {
+    if (error instanceof ClientError) return error.code === "invalid_spool";
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code) return false;
+    return error instanceof SyntaxError || error instanceof Error && (
+      error.message.startsWith("Invalid private JSON file:") ||
+      error.message.startsWith("Private file must be owned by this user and chmod 600:")
+    );
+  }
+  /**
+   * Preserve a malformed pending file without ever treating its path as
+   * trusted content. The original is renamed atomically, so regular files,
+   * unreadable files and symlinks are retained as-is; symlink targets are
+   * never read. Metadata is written only after the evidence is durable.
+   */
+  private quarantineMalformed(file: string, name: string, error: unknown): string | null {
+    const rejection = error instanceof ClientError ? { code: error.code, status: error.status, message: error.message } :
+      { code: "invalid_spool", message: error instanceof Error ? error.message : String(error) };
+    const preserved = `${randomUUID()}.spool`;
+    try {
+      renameSync(file, join(this.rejectedDir, preserved));
+      syncDirectory(this.pendingDir);
+      syncDirectory(this.rejectedDir);
+    } catch (moveError) {
+      if ((moveError as NodeJS.ErrnoException).code === "ENOENT") return null; // Another relay preserved or removed it.
+      throw moveError;
+    }
+    const metadata = join(this.rejectedDir, `${randomUUID()}.json`);
+    writePrivateJson(metadata, { contract: "car.client-rejected.v1", audience: this.audience,
+      source_file: name, preserved_file: preserved, rejection });
+    return preserved;
+  }
+  /**
+   * Check the client path and authenticated read path without creating a
+   * request. The probe is deliberately scoped to this credential's spool
+   * audience and is removed before returning.
+   */
+  async doctor(): Promise<{
+    contract: "car.client-doctor.v1"; ready: boolean;
+    spool: { ok: boolean; detail: string };
+    server: { ok: boolean; detail: string };
+  }> {
+    let spoolOk = false;
+    let spoolDetail = "not checked";
+    const probe = join(this.probeDir, `${randomUUID()}.json`);
+    let probeCreated = false;
+    try {
+      probeCreated = writePrivateJson(probe, { contract: "car.client-probe.v1", audience: this.audience });
+      spoolOk = probeCreated;
+      spoolDetail = probeCreated ? "scoped spool is writable" : "probe path already existed";
+    } catch {
+      spoolDetail = "scoped spool probe failed";
+    } finally {
+      try { if (probeCreated) removeDurably(probe); } catch {
+        spoolOk = false;
+        spoolDetail = "scoped spool probe cleanup failed";
+      }
+    }
+    let serverOk = false;
+    let serverDetail = "not checked";
+    try {
+      const capabilities = await this.call("/capabilities") as { contract?: unknown };
+      if (capabilities?.contract !== "car.guide.v1") throw new ClientError("invalid_response", "CAR returned an unexpected capabilities document", true);
+      serverOk = true;
+      serverDetail = "authenticated capability read succeeded";
+    } catch (error) {
+      const failure = error instanceof ClientError ? `${error.code}${error.status ? ` (HTTP ${error.status})` : ""}` : "unknown_error";
+      serverDetail = `authenticated capability read failed: ${failure}`;
+    }
+    return { contract: "car.client-doctor.v1", ready: spoolOk && serverOk,
+      spool: { ok: spoolOk, detail: spoolDetail }, server: { ok: serverOk, detail: serverDetail } };
   }
   private quarantine(file: string, record: SpoolRecord, error: ClientError): void {
     // Preserve evidence, but never let a poison request starve the retry queue.
@@ -145,7 +219,7 @@ export class AttentionClient {
     writePrivateJson(rejected, { ...record, rejection: { code: error.code, status: error.status, message: error.message } });
     removeDurably(file);
   }
-  async flush(): Promise<{ accepted: RequestView[]; rejected: { file: string; error: string }[]; pending: { file: string; error: string; retryable: boolean }[]; remaining: number; other_audiences: number }> {
+  async flush(): Promise<{ accepted: RequestView[]; rejected: { file: string; error: string }[]; pending: { file: string; error: string; retryable: boolean }[]; remaining: number; other_audiences: number; next_action: string }> {
     const accepted: RequestView[] = []; const rejected: { file: string; error: string }[] = [];
     const pending: { file: string; error: string; retryable: boolean }[] = [];
     for (const name of readdirSync(this.pendingDir).filter((n) => /^[a-f0-9]{64}\.json$/.test(n)).slice(0, 100)) {
@@ -157,7 +231,10 @@ export class AttentionClient {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; // Another relay completed this same intent.
         const message = error instanceof Error ? error.message : String(error);
-        if (record && this.definitivelyRejected(error)) {
+        if (!record && this.isMalformedSpoolError(error)) {
+          if (this.quarantineMalformed(file, name, error)) rejected.push({ file, error: message });
+          else continue;
+        } else if (record && this.definitivelyRejected(error)) {
           this.quarantine(file, record, error as ClientError);
           rejected.push({ file, error: message });
         } else pending.push({ file, error: message, retryable: error instanceof ClientError && error.retryable });
@@ -165,9 +242,14 @@ export class AttentionClient {
         if (error instanceof ClientError && (error.retryable || [401,403].includes(error.status ?? 0))) break;
       }
     }
-    return { accepted, rejected, pending,
-      remaining: readdirSync(this.pendingDir).filter((n) => /^[a-f0-9]{64}\.json$/.test(n)).length,
-      other_audiences: readdirSync(this.spoolDir).filter((n) => /^[a-f0-9]{64}$/.test(n) && n !== this.audience).length };
+    const remaining = readdirSync(this.pendingDir).filter((n) => /^[a-f0-9]{64}\.json$/.test(n)).length;
+    const other_audiences = readdirSync(this.spoolDir).filter((n) => /^[a-f0-9]{64}$/.test(n) && n !== this.audience).length;
+    const next_action = other_audiences > 0
+      ? `Other origin/credential spool director${other_audiences === 1 ? "y exists" : "ies exist"} (${other_audiences}); inspect their pending entries and restore the CAR_URL and credential that created them before running card flush. A different origin is a different audience.`
+      : remaining > 0
+        ? "Retry card flush after repairing the pending request or its connection. Server acceptance is not confirmed for pending work."
+        : "No pending work remains for this origin and credential.";
+    return { accepted, rejected, pending, remaining, other_audiences, next_action };
   }
   async get(id: string): Promise<RequestView> { return asView(await this.call(`/requests/${encoded(id)}`), id); }
   list(before?: string): Promise<unknown> { return this.call(`/requests${before ? `?before=${encodeURIComponent(before)}` : ""}`); }
@@ -185,8 +267,20 @@ export class AttentionClient {
     const view = await this.get(id);
     if (!view.answer || !view.answer.eligible_for_receipt || !["answered", "received"].includes(view.state)) return view;
     const receipt = join(this.receiptDir, `${digest({ request: id, answer: view.answer.id })}.json`);
-    if (!writePrivateJson(receipt, view)) {
-      const previous = asView(readPrivateJson(receipt), id);
+    const snapshot: ReceiptSnapshot = { contract: "car.client-receipt.v1", kind: "historical_answer_snapshot",
+      request_id: id, answer_id: view.answer.id, captured_at: new Date().toISOString(), server_view: view };
+    if (!writePrivateJson(receipt, snapshot)) {
+      const raw = readPrivateJson(receipt) as Partial<ReceiptSnapshot> | RequestView;
+      // Legacy receipt files were bare request views. Keep reading them, but
+      // all newly persisted snapshots are explicitly historical so they cannot
+      // be mistaken for current server state.
+      let previous: RequestView;
+      if (raw && typeof raw === "object" && raw.contract === "car.client-receipt.v1") {
+        if (raw.kind !== "historical_answer_snapshot" || raw.request_id !== id || raw.answer_id !== view.answer.id ||
+            typeof raw.captured_at !== "string" || !Number.isFinite(Date.parse(raw.captured_at)) || !raw.server_view)
+          throw new ClientError("invalid_receipt", "The local receipt snapshot is malformed or belongs to another answer; do not acknowledge it.");
+        previous = asView(raw.server_view, id);
+      } else previous = asView(raw, id);
       if (previous.answer?.id !== view.answer.id || stableJson(previous.answer.payload) !== stableJson(view.answer.payload))
         throw new ClientError("receipt_conflict", "The durable local receipt differs from the server answer. Check the source; do not acknowledge or apply it.");
     }

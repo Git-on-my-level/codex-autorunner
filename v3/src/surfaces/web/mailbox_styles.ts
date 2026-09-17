@@ -24,7 +24,7 @@ export const MAILBOX_CSS = `
   .mailbox-toolbar .button{min-height:30px;font-size:12px;padding:4px 7px}
   .mail-row{display:grid;gap:5px;padding:18px 22px;border-bottom:1px solid var(--border);color:var(--fg);text-decoration:none;position:relative;min-width:0}
   .mail-row:hover{background:var(--raised);text-decoration:none}
-  .mail-row-selected,.mail-row[aria-current="true"]{background:var(--accent-soft)}
+  .mail-row-selected,.mail-row[aria-current="true"],.mail-row[aria-current="page"]{background:var(--sunken);box-shadow:inset 3px 0 0 var(--accent)}
   .mail-row:focus-visible{outline-offset:-3px}
   .mail-row-source{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .mail-row-top{display:flex;align-items:baseline;justify-content:space-between;gap:12px;min-width:0}
@@ -39,18 +39,22 @@ export const MAILBOX_CSS = `
   .reader-toolbar a:hover{text-decoration:underline}
   .reader-toolbar .button{min-height:30px;font-size:12px}
   .reader-back{display:none}.reader-navigation{display:flex;align-items:center;gap:20px}.reader-navigation a{padding:4px 0}.reader-position{font-variant-numeric:tabular-nums}
-  .mailbox-reader .decision-message{max-width:860px;margin:0 auto;padding:28px 36px 48px;border:0;border-radius:0;box-shadow:none;gap:20px}
-  .message-sender{display:flex;justify-content:space-between;align-items:start;gap:18px;padding-bottom:24px;border-bottom:1px solid var(--border);font-size:12px}
+  .mailbox-reader .decision-message{max-width:860px;margin:0 auto;padding:24px 36px 48px;border:0;border-radius:0;box-shadow:none;gap:16px}
+  .message-sender{display:flex;justify-content:space-between;align-items:start;gap:18px;padding-bottom:16px;border-bottom:1px solid var(--border);font-size:12px}
   .message-sender>div{display:grid;gap:3px;min-width:0}
   .message-sender strong{color:var(--strong);font-size:13px;font-weight:600;overflow-wrap:anywhere}
   .message-sender span{color:var(--muted);overflow-wrap:anywhere}
+  .message-sender .message-sender-side{display:grid;justify-items:end;gap:4px;min-width:0}
   .message-sender time{color:var(--faint);font-size:11px;text-align:right;max-width:155px}
-  .decision-message .decision-meta{gap:10px;font-size:11px}
+  .decision-message .decision-meta{justify-content:flex-end;gap:8px;font-size:11px}
   .decision-message .badge{min-height:0;padding:0;border:0;border-radius:0;background:none;font-size:11px;font-weight:500;color:var(--muted);white-space:normal}
   .decision-message .badge.urgent,.decision-message .badge.failed,.decision-message .badge.uncertain,.decision-message .badge.expired{color:var(--critical)}
-  .decision-message h2{font-size:24px;font-weight:600;line-height:1.35;letter-spacing:-.035em;max-width:36ch}
-  .decision-message p{line-height:1.7;font-size:14px}
-  .decision-message .message-intro{font-size:15px;line-height:1.75}
+  .decision-message h2{font-size:24px;font-weight:600;line-height:1.3;letter-spacing:-.02em;max-width:36ch}
+  .decision-message p{line-height:1.6;font-size:14px}
+  .decision-message .message-intro{font-size:15px;line-height:1.6}
+  .decision-message .decision-context{color:var(--fg)}
+  .decision-message .decision-impact{color:var(--muted);font-size:13px}
+  .decision-message .original-context{margin-top:0}
   .decision-message .recommendation{border:0;border-left:2px solid var(--border-strong);border-radius:0;background:none;padding:0 0 0 17px}
   .decision-message .recommendation p{margin-top:6px}
   .decision-message .eyebrow{font-size:11px;font-weight:500;letter-spacing:0}
@@ -59,15 +63,15 @@ export const MAILBOX_CSS = `
   .decision-message .decision-uncertainty strong{font-size:12px;font-weight:600;color:var(--strong)}
   .decision-message .decision-uncertainty p{margin-top:5px;color:var(--muted);font-size:13px}
   .decision-message .context-warning{font-size:12px;border-radius:4px;padding:10px 12px}
-  .decision-message .answer-record{padding:20px 0;border:0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);border-radius:0;background:none}
+  .decision-message .answer-record{display:grid;gap:6px;padding:12px 14px;border:1px solid var(--border);border-left:2px solid var(--accent);border-radius:6px;background:var(--raised)}
   .decision-message .answer-record .muted{font-size:12px}
   .decision-message details{border:0;border-top:1px solid var(--border);border-radius:0;background:none;margin:0}
-  .decision-message summary{padding:12px 0;font-size:12px;font-weight:500;color:var(--muted)}
+  .decision-message summary{padding:10px 0;font-size:12px;font-weight:500;color:var(--muted)}
   .decision-message details[open] summary{border-bottom:0}
-  .decision-message .details-body{padding:4px 0 16px}
+  .decision-message .details-body{padding:2px 0 12px}
   .decision-message .details-body p{font-size:13px}
-  .decision-message .decision-composer{border-top:1px solid var(--border);padding-top:22px}
-  .decision-message .reply-heading{font-size:14px;font-weight:600;margin-bottom:18px}
+  .decision-message .decision-composer{border-top:1px solid var(--border);padding-top:16px}
+  .decision-message .reply-heading{font-size:14px;font-weight:600;margin-bottom:12px}
   .decision-message .answer-form{gap:10px}
   .decision-message .answer-form label{font-size:12px}
   .decision-message .answer-form textarea{border-color:var(--border-strong);font-size:14px;line-height:1.6;min-height:108px;border-radius:6px}
@@ -80,6 +84,8 @@ export const MAILBOX_CSS = `
   .mailbox-list .pager .button{min-height:32px;font-size:12px}
   .mailbox-reader>.notice{margin:16px 36px 0;font-size:12px;background:var(--raised);border:1px solid var(--border);border-radius:4px}
   .mailbox-main>.refresh-paused{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+  .mailbox-reader>.triage-confirmation{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 16px;font-size:14px}
+  .triage-confirmation strong{font-size:14px}
   .reply-choices{border:0;padding:0;margin:0;min-width:0;display:grid;gap:8px}
   .shortcut-help{border:0;border-radius:0;background:none;font-size:12px}
   .shortcut-help[hidden]{display:none}.shortcut-help summary{padding:10px;color:var(--muted);font-size:11px;white-space:nowrap}
@@ -87,7 +93,13 @@ export const MAILBOX_CSS = `
   kbd{font:inherit;font-size:11px;border:1px solid var(--border-strong);border-radius:3px;padding:1px 5px;color:var(--muted)}
   .decision-message .reply-heading{margin:0;padding:0 0 6px;font-size:15px}
   .decision-message .reply-hint{font-size:12px;margin-bottom:8px}
-  .decision-message .reply-choice{display:flex;align-items:flex-start;gap:12px;padding:14px 16px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:transparent;color:var(--fg)}
+  .decision-message .reply-choice{display:flex;align-items:flex-start;gap:12px;min-width:0;padding:13px 14px;border:0;border-radius:0;cursor:pointer;background:transparent;color:var(--fg)}
+  .reply-choice-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--surface)}
+  .reply-choice-row:has(input:checked){border-color:var(--accent);background:var(--sunken);box-shadow:inset 0 0 0 1px var(--accent)}
+  .reply-choice-row .reply-choice:has(input:checked){background:transparent}
+  .customize-answer{display:none}
+  .js .customize-answer{display:inline-flex}
+  .reply-choice-row .customize-answer{align-self:start;min-height:30px;margin:9px 9px 0 0;padding:3px 6px;font-size:11px;font-weight:500}
   .reply-choice:hover{background:var(--raised)}
   .reply-choice:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
   .reply-choice:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
@@ -100,7 +112,42 @@ export const MAILBOX_CSS = `
   .reply-send .button{min-height:40px;gap:18px;flex-shrink:0}
   .decision-message .reply-send p{font-size:12px;max-width:34ch;line-height:1.5}
   .decision-message .reply-scope{margin-top:0}
-  @media(max-width:480px){.reply-send{align-items:flex-start;flex-direction:column;gap:10px}.reply-send .button{width:100%;justify-content:center;min-height:44px}.decision-message .reply-choice{padding:12px}}
+  /* A reading surface, not a dashboard: keep secondary provenance in details. */
+  .mail-row-preview{display:none}
+  .mail-row-subject{font-size:15px;line-height:1.45}
+  .mail-row-source,.mail-row-state,.mail-row-time{font-size:13px}
+  .message-sender{align-items:center;border:0;padding:0 0 4px}
+  .message-sender strong,.decision-message .badge{font-size:14px}
+  .decision-message p,.decision-message .message-intro{font-size:16px}
+  .decision-message .eyebrow,.decision-message .decision-uncertainty strong{font-size:14px}
+  .decision-message .decision-impact,.decision-message .decision-uncertainty p{font-size:15px}
+  .decision-message summary{font-size:14px;padding:14px 0}
+  .decision-message .reply-heading{font-size:18px;margin-bottom:10px}
+  .decision-message .answer-form label,.reply-choice-copy strong{font-size:15px}
+  .reply-choice-copy,.reply-tradeoff{font-size:14px;font-weight:400}
+  .expiry-review{margin:8px 0 12px}
+  .decision-message .expiry-explanation{font-size:15px;color:var(--muted);margin-bottom:12px}
+  .decision-message .review-choice{border:1px solid var(--border);border-radius:6px;padding:16px}
+  .custom-review{margin-top:16px!important}
+  @media(max-width:480px){.reply-send{align-items:flex-start;flex-direction:column;gap:10px}.reply-send .button{width:100%;justify-content:center;min-height:44px}.decision-message .reply-choice{padding:12px}.reply-choice-row{grid-template-columns:minmax(0,1fr)}.reply-choice-row .customize-answer{width:100%;min-height:44px;margin:0;padding:8px 12px 8px 40px;font-size:12px;justify-content:flex-start;border-top:1px solid var(--border);border-radius:0}}
+
+  .settings-content{width:min(100%,780px)}
+  .settings-section{padding:18px 0;border-top:1px solid var(--border)}
+  .settings-section:first-child{padding-top:0;border-top:0}
+  .settings-section h2{margin:0 0 8px;font-size:17px;line-height:1.35;letter-spacing:-.015em}
+  .settings-section>p{max-width:70ch;color:var(--muted);font-size:13px;line-height:1.55}
+  .settings-section>p+p{margin-top:8px}
+  .settings-facts{display:grid;gap:9px;margin:14px 0 0}
+  .settings-facts>div{display:grid;grid-template-columns:minmax(120px,max-content) minmax(0,1fr);gap:12px;align-items:baseline}
+  .settings-facts dt{color:var(--muted);font-size:12px}
+  .settings-facts dd{margin:0;color:var(--strong);font-size:13px;overflow-wrap:anywhere}
+  .settings-clients{display:grid;gap:0;margin:12px 0 0;padding:0;list-style:none;border:1px solid var(--border);border-radius:6px;overflow:hidden}
+  .settings-clients>li,.settings-client{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;padding:10px 12px;border-bottom:1px solid var(--border)}
+  .settings-clients>li:last-child,.settings-client:last-child{border-bottom:0}
+  .settings-clients>li strong,.settings-clients>li span,.settings-client strong,.settings-client span{min-width:0;overflow-wrap:anywhere}
+  .settings-clients>li strong,.settings-client strong{font-size:13px;color:var(--strong)}
+  .settings-clients>li span,.settings-client span{font-size:12px;color:var(--muted)}
+  .settings-footer{display:flex;align-items:center;gap:12px;padding-top:18px}
   .draft-navigation{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:40;width:380px;max-width:calc(100vw - 32px);padding:20px;border:1px solid var(--border-strong);border-radius:8px;background:var(--surface);box-shadow:0 8px 32px #0002;font-size:13px}.draft-navigation p{margin:5px 0 16px;color:var(--muted)}.draft-navigation[hidden]{display:none}
   @media(min-width:1500px){.app-shell{grid-template-columns:208px minmax(0,1fr)}.mailbox{grid-template-columns:380px minmax(0,1fr)}}
   @media(max-width:1100px) and (min-width:761px){.app-shell{grid-template-columns:150px minmax(0,1fr)}.mailbox{grid-template-columns:280px minmax(0,1fr)}.app-shell .brand{padding:0 8px}.app-shell nav.primary>a{padding:9px 8px}.mailbox-reader .decision-message{padding:24px}.reader-toolbar{padding:16px 24px}.mail-row{padding:16px 18px}.decision-message h2{font-size:21px}}
@@ -117,9 +164,11 @@ export const MAILBOX_CSS = `
     .mailbox-toolbar{position:static;min-height:64px;padding:14px 20px}.mail-row{padding:18px 20px}.mail-row-subject{font-size:14px}.mail-row-preview{font-size:13px}
     .reader-toolbar{position:static;min-height:50px;padding:4px 20px;flex-wrap:wrap;gap:4px 12px}
     .reader-back{display:inline-flex;align-items:center;min-height:44px}.reader-position{display:none}.reader-navigation{gap:16px}.reader-navigation a{padding:10px 0;min-height:44px;display:inline-flex;align-items:center}.mailbox:not(.mailbox-selected) .reader-skip-link{display:none}
-    .mailbox-reader .decision-message{padding:24px 20px 48px;gap:20px}.decision-message h2{font-size:22px}
-    .message-sender{padding-bottom:20px}.message-sender time{max-width:110px}.decision-message .answer-form textarea{font-size:16px}
+    .mailbox-reader .decision-message{padding:20px 20px 40px;gap:16px}.decision-message h2{font-size:22px}
+    .message-sender{padding-bottom:12px;gap:12px}.message-sender time{max-width:110px}.message-sender .message-sender-side{justify-items:end}.decision-message .answer-form textarea{font-size:16px}
     .decision-message summary{min-height:44px;display:list-item}
     .mailbox-reader>.notice{margin:12px 20px 0}.mailbox-main>.refresh-paused{bottom:12px}
+    .mailbox:not(.mailbox-selected) .mail-row-selected,.mailbox:not(.mailbox-selected) .mail-row[aria-current="page"]{background:transparent;box-shadow:none}
+    .settings-section{padding:16px 0}.settings-facts>div{grid-template-columns:1fr;gap:2px}.settings-clients>li,.settings-client{grid-template-columns:1fr;gap:2px}.settings-footer{align-items:flex-start;flex-direction:column}
   }
 `;

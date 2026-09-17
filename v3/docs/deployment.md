@@ -69,6 +69,10 @@ against configured origin, not client-supplied forwarded-header claims.
 Run `card relay` on the client host for retry, or leave the stdio MCP process alive
 (it includes a relay). A powered-off host cannot flush its own queue.
 
+Use `card request doctor` to preflight a client profile without raising work. The
+doctor checks only a temporary write/remove probe in the profile's scoped spool and
+an authenticated capabilities read; it does not acknowledge or create a request.
+
 `flush` reports `accepted`, `rejected`, `pending`, and remaining work. Known invalid
 requests are preserved in the private `rejected/` directory, not retried forever.
 Auth failures pause a batch; repair the connection. A different endpoint or token
@@ -80,6 +84,11 @@ not an automatic claim that pending work moved safely.
 It does not execute the answer. Report `resolved` only when the blocker is gone.
 Cancellation/expiry may invalidate a cached answer. Poll current state before use;
 CAR cannot undo work already executed outside it.
+
+Receipt files are explicitly labeled historical snapshots. They are durable local
+evidence of the answer fetched before acknowledgement, not a claim about current
+server state. A changed server answer conflicts rather than overwriting the local
+snapshot.
 
 ## Hosted boundary and operational scope
 

@@ -367,6 +367,17 @@ const finished = attention.raise(owner, "preview-complete", DecisionPacket.parse
 const received = attention.answer(finished.id, finished.revision, "human:preview", { option_id: "retain" });
 attention.acknowledge(owner, finished.id, received.id, "received");
 attention.acknowledge(owner, finished.id, received.id, "resolved", "Source confirmed the migration guard remains in place");
+attention.raise(owner, "preview-missed", DecisionPacket.parse({
+  project: "Release", goal: "Rehearse the migration before the release window",
+  blocker: "The rehearsal window ended without a confirmed decision",
+  question: "Run the migration rehearsal during maintenance or separately?",
+  why_human: "The timing changes who must be available to verify recovery.",
+  attempts: ["Checked the maintenance schedule"],
+  facts: [{ statement: "The maintenance window has ended", source: "Release calendar" }],
+  recommendation: { answer: "Run a separate rehearsal", rationale: "Keep recovery testing independent of maintenance." },
+  options: [{ id: "separate", label: "Separate rehearsal", answer: "Schedule a separate rehearsal", consequences: "Requires a new window" }],
+  impact: "Determines the recovery test schedule", deadline_at: new Date(previewNow - 60_000).toISOString(),
+}));
 const app = mountApp(deps);
 const port = Number(process.env.CAR_UI_PREVIEW_PORT ?? 7194);
 const previewTheme = process.env.CAR_UI_PREVIEW_THEME;

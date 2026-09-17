@@ -17,7 +17,23 @@ bun run src/cli.ts request ack req_RETURNED_ID --answer reply_RETURNED_ID \
   --outcome resolved --note 'Migration resumed under the compatibility decision'
 ```
 
+Before raising work, an agent can run `card request doctor`. It writes and
+removes one private probe in this credential's scoped spool, then reads the
+authenticated `/v1/attention/capabilities` endpoint. It never creates a
+request, sends an answer, or acknowledges receipt.
+
 Use actual IDs returned by CAR. The example packet's facts are illustrative, not evidence about your repository. `card schema` returns the current schema and instructions. JSON output includes `guidance.code`, `guidance.action` (tool, arguments and required input), `guidance.can_apply_answer`, and a human-readable `next_action`; errors include actionable messages. `wait` returns promptly for preparation requests so the source can add context instead of waiting on itself.
+
+For CLI `raise --file` and `request context --file`, the file contains the **packet
+body only** (`goal`, `blocker`, `question`, etc.), not the API request envelope.
+`card schema` labels this as `packet`; its `request` schema is the API/MCP envelope.
+Pass the CLI idempotency key with `--key`. `--file -` explicitly selects stdin;
+omitting `--file` is an error so an empty non-interactive stdin cannot be mistaken
+for a packet. Envelope-shaped files and malformed JSON fail before any network
+request. Shell wrappers must check exit status
+before parsing output or polling again; a failed command is not an unanswered
+request. When invoking a source entrypoint, use a literal command or an argv array,
+not a multiword scalar executable string.
 
 Minimum packet fields are `goal`, `blocker`, `question`. CAR returns concrete requests for `why_human`, facts with sources, attempted investigation, recommendation/rationale and impact. Supply what is true; use `cannot_investigate` to explain an access or knowledge limit rather than fabricating evidence. Optional alternatives contain a stable ID, label, exact answer and consequences. A deadline is the last time a fresh answer may be received, not the completion deadline for the entire task.
 
@@ -55,6 +71,11 @@ custom HTTP integrations may send `outcome: "received"` only after persisting th
 own inbox. An exact repeated receipt is idempotent. Report `resolved` only after the
 blocker is actually gone.
 
+The local receipt file is an immutable `car.client-receipt.v1` record containing a
+`historical_answer_snapshot`. Its embedded server view records what was fetched
+before acknowledgement; it is not current workflow state or execution permission.
+The client still re-fetches and rechecks the current request before every receipt.
+
 `answer.eligible_for_receipt` is not execution permission: it permits entering that
 receipt protocol. `guidance.can_apply_answer` is true only after receipt, for the
 current request. A received request may finish after its decision deadline. A
@@ -69,6 +90,11 @@ is a conflict. Published context is immutable. Listing uses a chronological opaq
 keyset cursor; always use the returned `next_cursor`, never construct one from an ID.
 
 New submissions are spooled locally before HTTP. A dropped connection, server 5xx, or malformed response leaves the original payload and key available for replay. `accepted_locally` means only that this host saved it; it does not mean the CAR server or human saw it. `card flush` reports `accepted` (server acceptance), `rejected`, `pending`, and remaining work. A known 400/409/etc. rejection is preserved privately in `rejected/` rather than replayed indefinitely; authentication failure pauses the batch. `card flush` retries pending work; `card relay` retries while running. The MCP process includes the lightweight relay. A one-shot CLI cannot guarantee future retries after it exits.
+
+Flush is scoped to the current origin and credential audience. If `other_audiences`
+is nonzero, `next_action` identifies stranded pending work and tells the operator to
+restore the origin/credential that created it before flushing; `remaining` counts only
+the current audience and is not a global pending total.
 
 Spools are scoped to server origin and credential fingerprint. Tokens are not embedded in request spool files. Rotating a token or switching servers intentionally does not deliver an old profile's requests to the new audience. Flush before planned rotation; after a lost credential, inspect old pending files and replay deliberately under the correct identity, checking for previously accepted duplicates. Local spool files contain potentially sensitive request content and must be backed up/protected accordingly.
 

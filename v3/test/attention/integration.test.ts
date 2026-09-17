@@ -45,6 +45,21 @@ const form = (values: Record<string, string>, headers: Record<string, string> = 
 const result = (args: Record<string, unknown>): LlmTurnResult => ({ toolCalls: [{ tool: "submit_preparation", args }], model: "test", tokensIn: 1, tokensOut: 1, costUsd: 0 });
 
 describe("attention HTTP and human boundary", () => {
+  test("settings retains inbox counts and reflects trusted versus signed-in access", async () => {
+    const f = fixture();
+    f.service.raise(owner, "settings-count", complete());
+    const signedIn = await (await f.app.request('/ui/settings', { headers: auth(HUMAN) })).text();
+    expect(signedIn).toContain('Sign-in required');
+    expect(signedIn).toContain('action="/ui/logout"');
+    expect(signedIn).toContain('class="nav-count">1</span>');
+    expect(signedIn).toContain('class="settings-facts"');
+    f.config.http.ingest_tokens = {};
+    f.config.http.ingest_token_envs = {};
+    f.config.http.web_auth = 'optional';
+    const trusted = await (await f.app.request('/ui/settings')).text();
+    expect(trusted).toContain('Trusted access · no sign-in required');
+    expect(trusted).not.toContain('action="/ui/logout"');
+  });
   test("structured agent request, stable replay, no agent-side approval endpoint", async () => {
     const f = fixture(); validateAttentionCredentials(f.config);
     expect((await f.app.request('/v1/attention/requests')).status).toBe(401);
@@ -146,7 +161,7 @@ describe("pre-release foundation boundaries", () => {
     const f = fixture(); const row = f.service.raise(owner, 'missed', { ...complete(), deadline_at: new Date(f.clock.now().getTime()+1_000).toISOString() });
     f.clock.advance(1_000);
     const home = await f.app.request('/ui', { headers: auth(HUMAN) });
-    expect(await home.text()).toContain('Acknowledge missed decision');
+    expect(await home.text()).toContain('Mark reviewed');
     expect((await f.app.request(`/ui/decisions/${row.id}/review-expiry`, form({expected_revision:'1',note:'Reviewed'},auth()))).status).toBe(401);
     expect((await f.app.request(`/ui/decisions/${row.id}/review-expiry`, form({expected_revision:'1',note:'Asked for a new request'}))).status).toBe(303);
     expect(f.service.get(row.id)?.state).toBe('expired'); expect(f.service.get(row.id)?.reviewed_at).not.toBeNull();

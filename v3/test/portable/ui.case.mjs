@@ -17,10 +17,11 @@ test('decision choices expose exact answer, consequences, uncertainty and eviden
  const s=fixture(t),r=s.raise(owner,'one',packet),html=render(s,r);
  for(const o of packet.options){assert.ok(html.includes(o.answer));assert.ok(html.includes(o.consequences));assert.ok(html.indexOf(o.answer)<html.indexOf('Send reply'))}
  assert.ok(html.indexOf('Before deciding')<html.indexOf('Send reply'));assert.match(html,/Source agent recommends/);assert.match(html,/not independent verification/);
- assert.match(html,/name="expected_revision" value="1"/);assert.match(html,/Applies to this request only/);
+ assert.match(html,/name="expected_revision" value="1"/);assert.match(html,/Replies apply to this request only/);
  assert.equal((html.match(/action="[^"]+\/answer"/g)||[]).length,1);
  assert.equal((html.match(/type="radio"/g)||[]).length,3);
- assert.match(html,/Write my own answer/);assert.match(html,/Moves to Watching/);
+ assert.match(html,/Write my own answer/);assert.match(html,/Customize this answer/);assert.match(html,/data-customize-answer=/);assert.match(html,/data-customize-status/);assert.match(html,/title="Send this reply for this request only"/);
+ for(const row of html.matchAll(/<div class="reply-choice-row">([\s\S]*?)<\/div>/g)){assert.ok(row[1].indexOf('</label>')<row[1].indexOf('<button'));}
 });
 test('source-provided HTML remains text in every decision field',t=>{
  const s=fixture(t),evil='<img src=x onerror="window.injected=true">',r=s.raise(owner,'one',{...packet,question:evil,facts:[{statement:evil,source:'javascript:alert(1)'}]});
@@ -33,7 +34,7 @@ test('expired cards show review instead of a disabled or stale approval',t=>{
 });
 test('recorded and received answers never claim the source is already unblocked',t=>{
  const s=fixture(t),r=s.raise(owner,'one',packet),a=s.answer(r.id,1,'human:web',{option_id:'keep'});
- const answered=render(s,s.get(r.id));assert.match(answered,/waiting for receipt/);assert.equal(answered.includes(`/decisions/${r.id}/answer`),false);
+ const answered=render(s,s.get(r.id));assert.match(answered,/waiting for receipt/);assert.match(answered,/Waiting for the agent to pick up your reply/);assert.equal(answered.includes(`/decisions/${r.id}/answer`),false);assert.ok(answered.indexOf('Your reply')<answered.indexOf('Original request context'));assert.match(answered,/<details class="original-context">/);
  s.acknowledge(owner,r.id,a.id,'received');assert.match(render(s,s.get(r.id)),/waiting for work to resume/);
 });
 test('native delivery controls are bound to the reply revision and require source evidence',()=>{
