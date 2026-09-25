@@ -1,0 +1,1 @@
+Foundation dependency boundaries: passed (deterministic core, pure decision views, thin agent adapters).

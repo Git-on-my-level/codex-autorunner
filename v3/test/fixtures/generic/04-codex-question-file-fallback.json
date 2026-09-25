@@ -1,0 +1,47 @@
+{
+  "name": "codex question routed through codex-exec-resume",
+  "note": "Verified reply path for the installed codex-cli: `codex exec resume <uuid> \"<text>\"` (there is no `codex queue`).",
+  "input": {
+    "contract": "car.event.v1",
+    "idempotency_key": "codex:0f2a-uuid:question:1",
+    "ts": "2026-08-26T11:45:00Z",
+    "source": {
+      "vendor": "codex",
+      "host": "mac-studio",
+      "adapter": "generic-webhook"
+    },
+    "session": {
+      "vendor": "codex",
+      "native_id": "0f2a1c44-6b7e-4b0e-9c9a-1f2d3e4f5a6b",
+      "host": "mac-studio",
+      "cwd": "/Users/dazheng/omi"
+    },
+    "type": "attention.question",
+    "severity": "attention",
+    "requires_response": true,
+    "response_channel": {
+      "kind": "codex-exec-resume",
+      "hint": {
+        "uuid": "0f2a1c44-6b7e-4b0e-9c9a-1f2d3e4f5a6b"
+      }
+    },
+    "title": "Which migration order?",
+    "body": "Run schema migration before or after the forgejo restart?"
+  },
+  "expect": [
+    {
+      "type": "attention.question",
+      "severity": "attention",
+      "requires_response": true,
+      "idempotency_key": "codex:0f2a-uuid:question:1",
+      "session_key": "codex\u0000mac-studio\u00000f2a1c44-6b7e-4b0e-9c9a-1f2d3e4f5a6b",
+      "response_channel": {
+        "kind": "codex-exec-resume",
+        "hint": {
+          "uuid": "0f2a1c44-6b7e-4b0e-9c9a-1f2d3e4f5a6b"
+        }
+      },
+      "title": "Which migration order?"
+    }
+  ]
+}

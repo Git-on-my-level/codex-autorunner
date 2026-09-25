@@ -1,0 +1,26 @@
+{
+  "name": "sessionless CI failure (card emit style)",
+  "note": "Exercises session:null for sessionless sources plus the severity/requires_response defaults.",
+  "input": {
+    "contract": "car.event.v1",
+    "idempotency_key": "ci:forgejo:build-4412:failed",
+    "ts": "2026-08-26T11:58:00Z",
+    "source": { "vendor": "ci", "host": "forgejo-runner-1", "adapter": "card-emit" },
+    "type": "attention.error",
+    "severity": "urgent",
+    "title": "build 4412 failed on main",
+    "body": "swift build: linker error in BLEManager.o"
+  },
+  "expect": [
+    {
+      "type": "attention.error",
+      "severity": "urgent",
+      "requires_response": false,
+      "idempotency_key": "ci:forgejo:build-4412:failed",
+      "session_key": null,
+      "response_channel": null,
+      "source": { "vendor": "ci", "host": "forgejo-runner-1", "adapter": "card-emit" },
+      "title": "build 4412 failed on main"
+    }
+  ]
+}

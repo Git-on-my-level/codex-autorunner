@@ -1,0 +1,33 @@
+{
+  "name": "Notification / permission_prompt",
+  "note": "A Notification hook cannot return a decision (only PreToolUse/PermissionRequest can), so the response channel is claude-resume, never claude-hook-http. Notifications carry no stable id, so the key is content-hash + minute bucket.",
+  "input": {
+    "session_id": "sess-abc123",
+    "transcript_path": "/Users/dazheng/.claude/projects/omi/sess-abc123.jsonl",
+    "cwd": "/Users/dazheng/omi",
+    "hook_event_name": "Notification",
+    "notification_type": "permission_prompt",
+    "notification_data": {
+      "message": "Claude needs your permission to use Bash",
+      "tool_name": "Bash"
+    }
+  },
+  "expect": [
+    {
+      "type": "attention.permission",
+      "severity": "attention",
+      "requires_response": true,
+      "idempotency_key": "claude-code:sess-abc123:Notification:permission_prompt:2ea7f5197aa55c86:2026-08-26T12:00",
+      "session_key": "claude-code\u0000test-host\u0000sess-abc123",
+      "response_channel": {
+        "kind": "claude-resume",
+        "hint": {
+          "session_id": "sess-abc123",
+          "cwd": "/Users/dazheng/omi",
+          "transcript_path": "/Users/dazheng/.claude/projects/omi/sess-abc123.jsonl"
+        }
+      },
+      "title": "Claude needs your permission to use Bash"
+    }
+  ]
+}

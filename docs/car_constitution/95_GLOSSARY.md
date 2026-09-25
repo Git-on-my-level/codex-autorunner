@@ -2,17 +2,41 @@
 
 ## Core Concepts
 
-- **Engine**: protocol-agnostic runtime semantics (runs, scheduling, state transitions).
-- **Control plane**: filesystem-backed intent + artifacts; canonical state under `.codex-autorunner/`.
-- **Adapter**: protocol translation layer into engine commands. See `10_CODEBASE_CONSTITUTION.md` Identity section for the canonical list of adapters (Telegram, Discord, GitHub, App Server, Docker, Chat, Templates, Agents).
-- **Surface**: user-facing UX (Discord, Telegram, Web UI, CLI). See `10_CODEBASE_CONSTITUTION.md` for the canonical list.
+- **Attention router**: CAR v3 core; durable cross-vendor event, incident, human
+  handoff, grant, effect, delivery, recovery, digest, watchdog, and audit semantics.
+- **Capability provider**: replaceable implementation of one or more of `operator`,
+  `policy`, and `memory`. A provider proposes or advises; it does not execute effects or
+  own core lifecycle.
+- **Operator provider**: proposes an incident disposition and typed effects.
+- **Policy provider**: supplies contextual policy advice for a proposed effect. Core
+  safety and grants remain authoritative.
+- **Memory provider**: supplies scoped context and observes human/decision outcomes in
+  provider-owned state.
+- **Effect**: typed externally visible work proposed to CAR and authorized, persisted,
+  executed, and audited by core.
+- **Grant**: core-owned human authorization for a constrained effect and scope. Grants
+  may be one-shot or reusable and may expire or be revoked.
+- **Receipt**: durable per-channel record of delivery state, including queued,
+  delivered, uncertain, failed, suppressed, no-target, abandoned, superseded, and
+  expired outcomes.
+- **Adapter**: translation between an external source/destination/provider transport and
+  a core contract; it does not own routing policy.
+- **Surface**: user-facing projection and input UX (Telegram, Web, later Discord); it
+  does not own lifecycle or provider state.
+- **Provider instance**: one resolved provider/profile/topology identity used for a
+  capability invocation, such as `hermes:work`.
+
+## Deprecated v2 concepts
+
+- **Engine**: v2 protocol-agnostic runtime semantics (runs, scheduling, state transitions).
+- **Control plane**: v2 filesystem-backed intent and artifacts under `.codex-autorunner/`.
 - **Run**: a single execution with a unique identity and durable artifacts.
 - **Run event**: structured record of a significant state transition/decision.
 - **Artifact**: any durable file that explains intent, action, or output.
 - **Ticket**: a numbered markdown work item under `.codex-autorunner/tickets/` (for example `TICKET-001.md`); the primary human–agent execution surface.
 - **Contextspace**: durable agent context docs under `.codex-autorunner/contextspace/` (`active_context.md`, `decisions.md`, `spec.md`). Not the same as a disposable process working directory.
 - **Workspace**: legacy term for isolated filesystem scope; the `.codex-autorunner/workspace/` directory was replaced by contextspace (see migration doc). Use "contextspace" for new work.
-- **YOLO mode**: default permissive execution posture; safety is opt-in.
+- **YOLO mode**: deprecated v2 permissive execution posture. It is not a v3 effect policy.
 
 ## Lifecycle Terms
 

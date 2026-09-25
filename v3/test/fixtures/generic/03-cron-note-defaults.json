@@ -1,0 +1,24 @@
+{
+  "name": "minimal event — every optional field defaults",
+  "note": "severity defaults to info, requires_response to false, session/response_channel to null, title/body to \"\", payload to {}.",
+  "input": {
+    "contract": "car.event.v1",
+    "idempotency_key": "cron:backup-nightly:2026-08-26",
+    "ts": "2026-08-26T09:00:00Z",
+    "source": { "vendor": "cron", "host": "mac-studio", "adapter": "curl" },
+    "type": "note"
+  },
+  "expect": [
+    {
+      "type": "note",
+      "severity": "info",
+      "requires_response": false,
+      "idempotency_key": "cron:backup-nightly:2026-08-26",
+      "session_key": null,
+      "response_channel": null,
+      "title": "",
+      "body": "",
+      "payload": {}
+    }
+  ]
+}

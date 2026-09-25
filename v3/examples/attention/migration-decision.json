@@ -1,0 +1,19 @@
+{
+  "goal": "Release the new API without breaking supported clients",
+  "blocker": "The migration plan does not specify whether API v1 remains supported",
+  "question": "Should we preserve API v1 for one more release?",
+  "project": "example-api",
+  "why_human": "This changes the external compatibility commitment; no existing mandate covers it",
+  "facts": [
+    {"statement": "The example external client still calls v1", "source": "examples/client.ts:12"}
+  ],
+  "attempts": ["Read the migration plan", "Searched API callers", "Checked the project's recorded compatibility decision"],
+  "recommendation": {"answer": "Preserve v1 for one release", "rationale": "Avoid breaking the known caller while completing the migration"},
+  "options": [
+    {"id": "preserve", "label": "Preserve for one release", "answer": "Preserve v1 for this release; remove it only after a separate migration decision", "consequences": "Maintain the compatibility layer for another release"},
+    {"id": "remove", "label": "Remove v1 now", "answer": "Remove v1 in this release and document the breaking change", "consequences": "The external caller must migrate before deploying"}
+  ],
+  "uncertainty": ["This example does not establish how many other external callers exist"],
+  "impact": "Unblocks API migration and SDK release planning",
+  "urgency": "normal"
+}
