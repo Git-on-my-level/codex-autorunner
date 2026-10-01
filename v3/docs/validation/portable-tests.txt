@@ -1,0 +1,627 @@
+TypeScript syntax: 154 files; 0 errors (transpile only, not type checking).
+TAP version 13
+# Subtest: architectural dependency boundaries hold in the actual source tree
+ok 1 - architectural dependency boundaries hold in the actual source tree
+  ---
+  duration_ms: 640.638403
+  type: 'test'
+  ...
+# Subtest: type-only imports do not couple the runtime
+ok 2 - type-only imports do not couple the runtime
+  ---
+  duration_ms: 0.28697
+  type: 'test'
+  ...
+# Subtest: boundary catches transitive model dependency: import {runner} from "./leak.ts";
+ok 3 - boundary catches transitive model dependency: import {runner} from "./leak.ts";
+  ---
+  duration_ms: 299.793756
+  type: 'test'
+  ...
+# Subtest: boundary catches transitive model dependency: const x=require("./leak.ts");
+ok 4 - boundary catches transitive model dependency: const x=require("./leak.ts");
+  ---
+  duration_ms: 180.381475
+  type: 'test'
+  ...
+# Subtest: boundary catches transitive model dependency: const x=import("./leak.ts");
+ok 5 - boundary catches transitive model dependency: const x=import("./leak.ts");
+  ---
+  duration_ms: 174.731518
+  type: 'test'
+  ...
+# Subtest: agent MCP cannot obtain setup/human credentials via an indirect import
+ok 6 - agent MCP cannot obtain setup/human credentials via an indirect import
+  ---
+  duration_ms: 181.010278
+  type: 'test'
+  ...
+# Subtest: decision presentation cannot pull in a state-mutating repository
+ok 7 - decision presentation cannot pull in a state-mutating repository
+  ---
+  duration_ms: 186.952886
+  type: 'test'
+  ...
+# Subtest: extensionless intermediaries cannot hide a model dependency
+ok 8 - extensionless intermediaries cannot hide a model dependency
+  ---
+  duration_ms: 188.60645
+  type: 'test'
+  ...
+# Subtest: empty named import still has runtime side effects
+ok 9 - empty named import still has runtime side effects
+  ---
+  duration_ms: 4.574102
+  type: 'test'
+  ...
+# Subtest: remote TLS is the default and URL credentials are rejected
+ok 10 - remote TLS is the default and URL credentials are rejected
+  ---
+  duration_ms: 2.283166
+  type: 'test'
+  ...
+# Subtest: request is on disk before transport sees it, then deleted after server acceptance
+ok 11 - request is on disk before transport sees it, then deleted after server acceptance
+  ---
+  duration_ms: 89.120267
+  type: 'test'
+  ...
+# Subtest: ambiguous first transport attempt retains the exact request for replay
+ok 12 - ambiguous first transport attempt retains the exact request for replay
+  ---
+  duration_ms: 54.506655
+  type: 'test'
+  ...
+# Subtest: an unrecognized successful response is not accepted as durable confirmation
+ok 13 - an unrecognized successful response is not accepted as durable confirmation
+  ---
+  duration_ms: 7.928799
+  type: 'test'
+  ...
+# Subtest: spool never persists raw authentication tokens
+ok 14 - spool never persists raw authentication tokens
+  ---
+  duration_ms: 12.312742
+  type: 'test'
+  ...
+# Subtest: pending key cannot be overwritten with different content
+ok 15 - pending key cannot be overwritten with different content
+  ---
+  duration_ms: 8.636274
+  type: 'test'
+  ...
+# Subtest: wrong endpoint or rotated credential cannot silently inherit pending requests
+ok 16 - wrong endpoint or rotated credential cannot silently inherit pending requests
+  ---
+  duration_ms: 8.188467
+  type: 'test'
+  ...
+# Subtest: client refuses redirect chains instead of forwarding a bearer credential
+ok 17 - client refuses redirect chains instead of forwarding a bearer credential
+  ---
+  duration_ms: 5.506569
+  type: 'test'
+  ...
+# Subtest: receiving an answer writes a local receipt before acknowledgement
+ok 18 - receiving an answer writes a local receipt before acknowledgement
+  ---
+  duration_ms: 16.389244
+  type: 'test'
+  ...
+# Subtest: get and wait do not claim an answer was received
+ok 19 - get and wait do not claim an answer was received
+  ---
+  duration_ms: 9.842262
+  type: 'test'
+  ...
+# Subtest: expired answers are not acknowledged or treated as fresh permission
+ok 20 - expired answers are not acknowledged or treated as fresh permission
+  ---
+  duration_ms: 4.631364
+  type: 'test'
+  ...
+# Subtest: prepare instructions return immediately rather than waiting silently
+ok 21 - prepare instructions return immediately rather than waiting silently
+  ---
+  duration_ms: 3.778782
+  type: 'test'
+  ...
+# Subtest: private JSON creation is no-clobber and rejects readable secret files
+ok 22 - private JSON creation is no-clobber and rejects readable secret files
+  ---
+  duration_ms: 0.882592
+  type: 'test'
+  ...
+# Subtest: MCP negotiates version and requires initialization notification
+ok 23 - MCP negotiates version and requires initialization notification
+  ---
+  duration_ms: 0.86106
+  type: 'test'
+  ...
+# Subtest: MCP delegates to the ordinary client, returning structured tool errors
+ok 24 - MCP delegates to the ordinary client, returning structured tool errors
+  ---
+  duration_ms: 0.316998
+  type: 'test'
+  ...
+# Subtest: MCP rejects malformed JSON-RPC and does not answer notifications
+ok 25 - MCP rejects malformed JSON-RPC and does not answer notifications
+  ---
+  duration_ms: 0.290293
+  type: 'test'
+  ...
+# Subtest: definite HTML validation failures are quarantined rather than reported as offline success
+ok 26 - definite HTML validation failures are quarantined rather than reported as offline success
+  ---
+  duration_ms: 11.025107
+  type: 'test'
+  ...
+# Subtest: auth failures preserve the request for credential repair without draining the queue
+ok 27 - auth failures preserve the request for credential repair without draining the queue
+  ---
+  duration_ms: 8.340681
+  type: 'test'
+  ...
+# Subtest: a rejected poison request does not prevent another request from reaching the server
+ok 28 - a rejected poison request does not prevent another request from reaching the server
+  ---
+  duration_ms: 11.455409
+  type: 'test'
+  ...
+# Subtest: response identities are checked before a receipt is written
+ok 29 - response identities are checked before a receipt is written
+  ---
+  duration_ms: 6.466606
+  type: 'test'
+  ...
+# Subtest: a corrupt local answer receipt is not overwritten or acknowledged
+ok 30 - a corrupt local answer receipt is not overwritten or acknowledged
+  ---
+  duration_ms: 6.951378
+  type: 'test'
+  ...
+# Subtest: MCP invokes the required validator before accepting offline work
+ok 31 - MCP invokes the required validator before accepting offline work
+  ---
+  duration_ms: 0.746856
+  type: 'test'
+  ...
+# Subtest: MCP cancellation suppresses a late response without pretending the remote write was undone
+ok 32 - MCP cancellation suppresses a late response without pretending the remote write was undone
+  ---
+  duration_ms: 0.366454
+  type: 'test'
+  ...
+# (node:3433) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: fresh workspace uses the canonical CAR3 bootstrap
+ok 33 - fresh workspace uses the canonical CAR3 bootstrap
+  ---
+  duration_ms: 20.008336
+  type: 'test'
+  ...
+# Subtest: unknown pre-release state is rejected without conversion or data loss
+ok 34 - unknown pre-release state is rejected without conversion or data loss
+  ---
+  duration_ms: 3.593115
+  type: 'test'
+  ...
+# Subtest: incomplete requests guide agents without creating premature human cards
+ok 35 - incomplete requests guide agents without creating premature human cards
+  ---
+  duration_ms: 8.013524
+  type: 'test'
+  ...
+# Subtest: complete request reaches the shared incident/escalation model without an LLM
+ok 36 - complete request reaches the shared incident/escalation model without an LLM
+  ---
+  duration_ms: 9.416899
+  type: 'test'
+  ...
+# Subtest: urgent incomplete requests bypass context preparation immediately
+ok 37 - urgent incomplete requests bypass context preparation immediately
+  ---
+  duration_ms: 4.577611
+  type: 'test'
+  ...
+# Subtest: lost callers cannot hide incomplete packets past preparation deadline
+ok 38 - lost callers cannot hide incomplete packets past preparation deadline
+  ---
+  duration_ms: 6.631771
+  type: 'test'
+  ...
+# Subtest: bounded context rounds prevent endless preparation
+ok 39 - bounded context rounds prevent endless preparation
+  ---
+  duration_ms: 6.004858
+  type: 'test'
+  ...
+# Subtest: useful enrichment freezes packet and stale revisions are rejected
+ok 40 - useful enrichment freezes packet and stale revisions are rejected
+  ---
+  duration_ms: 16.691787
+  type: 'test'
+  ...
+# Subtest: original offline replay remains valid after enrichment
+ok 41 - original offline replay remains valid after enrichment
+  ---
+  duration_ms: 9.13303
+  type: 'test'
+  ...
+# Subtest: different payload with same idempotency key conflicts
+ok 42 - different payload with same idempotency key conflicts
+  ---
+  duration_ms: 3.815833
+  type: 'test'
+  ...
+# Subtest: client/host/workspace isolation applies even for known request ids
+ok 43 - client/host/workspace isolation applies even for known request ids
+  ---
+  duration_ms: 3.685858
+  type: 'test'
+  ...
+# Subtest: same idempotency key is scoped per authenticated client
+ok 44 - same idempotency key is scoped per authenticated client
+  ---
+  duration_ms: 7.487325
+  type: 'test'
+  ...
+# Subtest: context cannot change the question, urgency or deadline underneath a request
+ok 45 - context cannot change the question, urgency or deadline underneath a request
+  ---
+  duration_ms: 4.095811
+  type: 'test'
+  ...
+# Subtest: past-deadline request is history, never an actionable card
+ok 46 - past-deadline request is history, never an actionable card
+  ---
+  duration_ms: 3.273379
+  type: 'test'
+  ...
+# Subtest: near deadline bypasses preparation
+ok 47 - near deadline bypasses preparation
+  ---
+  duration_ms: 7.681892
+  type: 'test'
+  ...
+# Subtest: answer and durable delivery intent are atomic, not resolution
+ok 48 - answer and durable delivery intent are atomic, not resolution
+  ---
+  duration_ms: 9.150872
+  type: 'test'
+  ...
+# Subtest: failure recording a human fact rolls back answer and reply together
+ok 49 - failure recording a human fact rolls back answer and reply together
+  ---
+  duration_ms: 4.228158
+  type: 'test'
+  ...
+# Subtest: same answer replay returns one intent; conflicting answer is rejected
+ok 50 - same answer replay returns one intent; conflicting answer is rejected
+  ---
+  duration_ms: 4.736834
+  type: 'test'
+  ...
+# Subtest: human options and packet revisions cannot be forged
+ok 51 - human options and packet revisions cannot be forged
+  ---
+  duration_ms: 5.813517
+  type: 'test'
+  ...
+# Subtest: fetching an answer does not acknowledge it; exact receipt precedes source resolution
+ok 52 - fetching an answer does not acknowledge it; exact receipt precedes source resolution
+  ---
+  duration_ms: 5.047201
+  type: 'test'
+  ...
+# Subtest: cancellation makes late answer and acknowledgement non-actionable
+ok 53 - cancellation makes late answer and acknowledgement non-actionable
+  ---
+  duration_ms: 5.825099
+  type: 'test'
+  ...
+# Subtest: expiry between answer and receipt rejects receipt even before sweeper runs
+ok 54 - expiry between answer and receipt rejects receipt even before sweeper runs
+  ---
+  duration_ms: 5.246838
+  type: 'test'
+  ...
+# Subtest: received work can finish after its decision deadline
+ok 55 - received work can finish after its decision deadline
+  ---
+  duration_ms: 5.542346
+  type: 'test'
+  ...
+# Subtest: stable native escalation identities survive event replay and sent_at awaits a receipt
+ok 56 - stable native escalation identities survive event replay and sent_at awaits a receipt
+  ---
+  duration_ms: 4.029135
+  type: 'test'
+  ...
+# Subtest: pending native human reply survives process-style recovery and sends once
+ok 57 - pending native human reply survives process-style recovery and sends once
+  ---
+  duration_ms: 6.05801
+  type: 'test'
+  ...
+# Subtest: queued reply is staged, never resolved
+ok 58 - queued reply is staged, never resolved
+  ---
+  duration_ms: 11.61985
+  type: 'test'
+  ...
+# Subtest: degraded reply is staged, never resolved
+ok 59 - degraded reply is staged, never resolved
+  ---
+  duration_ms: 4.517396
+  type: 'test'
+  ...
+# Subtest: crash during send becomes uncertain and is not automatically replayed
+ok 60 - crash during send becomes uncertain and is not automatically replayed
+  ---
+  duration_ms: 3.952785
+  type: 'test'
+  ...
+# Subtest: transport exception remains uncertain and visible
+ok 61 - transport exception remains uncertain and visible
+  ---
+  duration_ms: 5.545234
+  type: 'test'
+  ...
+# Subtest: sessionless legacy question cannot claim delivery
+ok 62 - sessionless legacy question cannot claim delivery
+  ---
+  duration_ms: 3.537489
+  type: 'test'
+  ...
+# Subtest: source clearance during native delivery wins the state race
+ok 63 - source clearance during native delivery wins the state race
+  ---
+  duration_ms: 3.669257
+  type: 'test'
+  ...
+# Subtest: general instructions also have durable idempotent delivery identities
+ok 64 - general instructions also have durable idempotent delivery identities
+  ---
+  duration_ms: 3.375306
+  type: 'test'
+  ...
+# Subtest: claim lanes prioritize urgency and fence stale workers
+ok 65 - claim lanes prioritize urgency and fence stale workers
+  ---
+  duration_ms: 4.088249
+  type: 'test'
+  ...
+# Subtest: source identity prevents unrelated sessionless incident correlation
+ok 66 - source identity prevents unrelated sessionless incident correlation
+  ---
+  duration_ms: 3.277577
+  type: 'test'
+  ...
+# Subtest: bounded context guidance permits honest inability instead of fabricated facts
+ok 67 - bounded context guidance permits honest inability instead of fabricated facts
+  ---
+  duration_ms: 0.169612
+  type: 'test'
+  ...
+# Subtest: response-required lifecycle events cannot be silently discarded as noise
+ok 68 - response-required lifecycle events cannot be silently discarded as noise
+  ---
+  duration_ms: 6.27272
+  type: 'test'
+  ...
+# Subtest: urgent lifecycle events bypass the noise filter
+ok 69 - urgent lifecycle events bypass the noise filter
+  ---
+  duration_ms: 6.384703
+  type: 'test'
+  ...
+# Subtest: active-request quota is checked only for fresh work, never idempotent replay
+ok 70 - active-request quota is checked only for fresh work, never idempotent replay
+  ---
+  duration_ms: 3.723096
+  type: 'test'
+  ...
+# Subtest: listing summaries omit large private evidence and answer bodies
+ok 71 - listing summaries omit large private evidence and answer bodies
+  ---
+  duration_ms: 3.517278
+  type: 'test'
+  ...
+# Subtest: uncertain delivery can be retried only after explicit human reconciliation
+ok 72 - uncertain delivery can be retried only after explicit human reconciliation
+  ---
+  duration_ms: 5.073746
+  type: 'test'
+  ...
+# Subtest: human reconciliation cannot bypass the guided source receipt protocol
+ok 73 - human reconciliation cannot bypass the guided source receipt protocol
+  ---
+  duration_ms: 4.237267
+  type: 'test'
+  ...
+# Subtest: failed delivery alerts are durable and emitted once per attempt
+ok 74 - failed delivery alerts are durable and emitted once per attempt
+  ---
+  duration_ms: 4.689634
+  type: 'test'
+  ...
+# Subtest: new wake-up receipt replaces the old Telegram card without replay regression
+ok 75 - new wake-up receipt replaces the old Telegram card without replay regression
+  ---
+  duration_ms: 5.801833
+  type: 'test'
+  ...
+# Subtest: answered cards are suppressed before an unsent Telegram notification is delivered
+ok 76 - answered cards are suppressed before an unsent Telegram notification is delivered
+  ---
+  duration_ms: 3.562549
+  type: 'test'
+  ...
+# Subtest: reconciling one reply cannot close another outstanding request in the incident
+ok 77 - reconciling one reply cannot close another outstanding request in the incident
+  ---
+  duration_ms: 4.045107
+  type: 'test'
+  ...
+# Subtest: answer cannot skip durable receipt to report a resolution
+ok 78 - answer cannot skip durable receipt to report a resolution
+  ---
+  duration_ms: 10.743336
+  type: 'test'
+  ...
+# Subtest: receipt retries are idempotent even with an unchanged clock
+ok 79 - receipt retries are idempotent even with an unchanged clock
+  ---
+  duration_ms: 5.369886
+  type: 'test'
+  ...
+# Subtest: expiry at the answer boundary needs no timer and implies no authorization
+ok 80 - expiry at the answer boundary needs no timer and implies no authorization
+  ---
+  duration_ms: 3.827229
+  type: 'test'
+  ...
+# Subtest: missed decision remains Needs you until reviewed, and remains expired afterwards
+ok 81 - missed decision remains Needs you until reviewed, and remains expired afterwards
+  ---
+  duration_ms: 5.126201
+  type: 'test'
+  ...
+# Subtest: expiry review is atomic with the human audit fact
+ok 82 - expiry review is atomic with the human audit fact
+  ---
+  duration_ms: 2.783442
+  type: 'test'
+  ...
+# Subtest: withdrawal invalidates a received answer but cannot relabel resolved work
+ok 83 - withdrawal invalidates a received answer but cannot relabel resolved work
+  ---
+  duration_ms: 7.413412
+  type: 'test'
+  ...
+# Subtest: guidance is executable and permission is not implied by answer availability
+ok 84 - guidance is executable and permission is not implied by answer availability
+  ---
+  duration_ms: 5.763709
+  type: 'test'
+  ...
+# Subtest: context retries never increment rounds twice or replace the surfaced evidence
+ok 85 - context retries never increment rounds twice or replace the surfaced evidence
+  ---
+  duration_ms: 3.679964
+  type: 'test'
+  ...
+# Subtest: chronological cursor does not skip requests when ids sort differently from creation time
+ok 86 - chronological cursor does not skip requests when ids sort differently from creation time
+  ---
+  duration_ms: 107.719345
+  type: 'test'
+  ...
+# Subtest: board totals include native work and do not depend on the first 50 cards
+ok 87 - board totals include native work and do not depend on the first 50 cards
+  ---
+  duration_ms: 127.908029
+  type: 'test'
+  ...
+# Subtest: reconciliation rejects a stale revision when timestamps are identical
+ok 88 - reconciliation rejects a stale revision when timestamps are identical
+  ---
+  duration_ms: 4.171744
+  type: 'test'
+  ...
+# Subtest: core rejects ambiguous or empty human answer shapes
+ok 89 - core rejects ambiguous or empty human answer shapes
+  ---
+  duration_ms: 3.249408
+  type: 'test'
+  ...
+# Subtest: database constraints allow only one answer per guided request and positive revisions
+ok 90 - database constraints allow only one answer per guided request and positive revisions
+  ---
+  duration_ms: 3.943197
+  type: 'test'
+  ...
+# Subtest: recognized clean-bootstrap database reopens without reinitializing evidence
+ok 91 - recognized clean-bootstrap database reopens without reinitializing evidence
+  ---
+  duration_ms: 6.023233
+  type: 'test'
+  ...
+# Subtest: unversioned nonempty database is not mistaken for a fresh installation
+ok 92 - unversioned nonempty database is not mistaken for a fresh installation
+  ---
+  duration_ms: 1.219537
+  type: 'test'
+  ...
+# Subtest: native effect outcomes use a closed vocabulary and reject contradictory success
+ok 93 - native effect outcomes use a closed vocabulary and reject contradictory success
+  ---
+  duration_ms: 0.369009
+  type: 'test'
+  ...
+# Subtest: invalid post-execution outcome is durably uncertain and cannot execute twice
+ok 94 - invalid post-execution outcome is durably uncertain and cannot execute twice
+  ---
+  duration_ms: 6.457644
+  type: 'test'
+  ...
+# (node:3464) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: decision choices expose exact answer, consequences, uncertainty and evidence before commitment
+ok 95 - decision choices expose exact answer, consequences, uncertainty and evidence before commitment
+  ---
+  duration_ms: 33.387997
+  type: 'test'
+  ...
+# Subtest: source-provided HTML remains text in every decision field
+ok 96 - source-provided HTML remains text in every decision field
+  ---
+  duration_ms: 4.650914
+  type: 'test'
+  ...
+# Subtest: read-only human views contain no actionable forms
+ok 97 - read-only human views contain no actionable forms
+  ---
+  duration_ms: 5.70363
+  type: 'test'
+  ...
+# Subtest: expired cards show review instead of a disabled or stale approval
+ok 98 - expired cards show review instead of a disabled or stale approval
+  ---
+  duration_ms: 5.289023
+  type: 'test'
+  ...
+# Subtest: recorded and received answers never claim the source is already unblocked
+ok 99 - recorded and received answers never claim the source is already unblocked
+  ---
+  duration_ms: 13.120114
+  type: 'test'
+  ...
+# Subtest: native delivery controls are bound to the reply revision and require source evidence
+ok 100 - native delivery controls are bound to the reply revision and require source evidence
+  ---
+  duration_ms: 1.233416
+  type: 'test'
+  ...
+# Subtest: layout keeps counters, accessible labels, local timestamps and protected refresh
+ok 101 - layout keeps counters, accessible labels, local timestamps and protected refresh
+  ---
+  duration_ms: 15.875304
+  type: 'test'
+  ...
+# Subtest: failed human submissions preserve bounded text as escaped data, not a success
+ok 102 - failed human submissions preserve bounded text as escaped data, not a success
+  ---
+  duration_ms: 0.39718
+  type: 'test'
+  ...
+1..102
+# tests 102
+# suites 0
+# pass 102
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2657.22837

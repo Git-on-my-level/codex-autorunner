@@ -1,0 +1,34 @@
+name: CAR v3
+on:
+  pull_request:
+    paths: ['v3/**', '.github/workflows/v3.yml']
+  push:
+    paths: ['v3/**', '.github/workflows/v3.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: v3
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.9'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: bun install --frozen-lockfile
+      - run: bun run check:foundation
+      - run: bun run check
+      - run: bun test
+      - run: bun run test:portable
+      - run: bun run test:smoke

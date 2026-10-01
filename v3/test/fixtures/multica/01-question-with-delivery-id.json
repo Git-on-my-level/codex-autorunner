@@ -1,0 +1,43 @@
+{
+  "name": "issue question with a webhook delivery id",
+  "note": "ASSUMED SHAPE \u2014 Multica publishes no webhook schema, so the adapter reads issue/card/ticket across common aliases. When the webhook supplies a delivery id, that alone is the idempotency key.",
+  "input": {
+    "delivery_id": "wh-7f31c2",
+    "action": "question",
+    "workspace": "davids-homelab",
+    "actor": {
+      "name": "autopilot"
+    },
+    "issue": {
+      "ref": "MUL-128",
+      "title": "Autopilot #12 blocked on migration order",
+      "body": "Should migrations run before or after the forgejo restart?",
+      "url": "https://multica.internal/issues/MUL-128",
+      "state": "open"
+    }
+  },
+  "expect": [
+    {
+      "type": "attention.question",
+      "severity": "attention",
+      "requires_response": true,
+      "idempotency_key": "multica:wh-7f31c2",
+      "session_key": "multica\u0000test-host\u0000MUL-128",
+      "response_channel": {
+        "kind": "multica-api",
+        "hint": {
+          "issue": "MUL-128",
+          "workspace": "davids-homelab",
+          "url": "https://multica.internal/issues/MUL-128",
+          "action": "question"
+        }
+      },
+      "source": {
+        "vendor": "multica",
+        "host": "test-host",
+        "adapter": "multica-webhook"
+      },
+      "title": "Autopilot #12 blocked on migration order (question)"
+    }
+  ]
+}

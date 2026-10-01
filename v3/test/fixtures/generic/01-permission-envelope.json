@@ -1,0 +1,61 @@
+{
+  "name": "the DESIGN \u00a72 canonical envelope, verbatim",
+  "note": "Raw car.event.v1 posted to /v1/events. No normalizer runs; only contract parsing and defaults.",
+  "input": {
+    "contract": "car.event.v1",
+    "idempotency_key": "claude-code:sess-abc:PermissionRequest:toolu_01X",
+    "ts": "2026-08-26T18:04:11Z",
+    "source": {
+      "vendor": "claude-code",
+      "host": "davids-mbp",
+      "adapter": "hook-http"
+    },
+    "session": {
+      "vendor": "claude-code",
+      "native_id": "sess-abc123",
+      "host": "davids-mbp",
+      "cwd": "/Users/dazheng/omi",
+      "repo": "github.com/x/y",
+      "title": "fix BLE reconnect"
+    },
+    "type": "attention.permission",
+    "severity": "attention",
+    "requires_response": true,
+    "response_channel": {
+      "kind": "claude-hook-http",
+      "hint": {
+        "tool_use_id": "toolu_01X",
+        "deadline_ms": 110000
+      }
+    },
+    "title": "Permission: gh pr merge 42",
+    "body": "Remote diverged; force-push required.",
+    "payload": {
+      "tool_name": "Bash"
+    },
+    "expires_at": "2026-08-26T18:06:00Z"
+  },
+  "expect": [
+    {
+      "type": "attention.permission",
+      "severity": "attention",
+      "requires_response": true,
+      "idempotency_key": "claude-code:sess-abc:PermissionRequest:toolu_01X",
+      "session_key": "claude-code\u0000davids-mbp\u0000sess-abc123",
+      "response_channel": {
+        "kind": "claude-hook-http",
+        "hint": {
+          "tool_use_id": "toolu_01X",
+          "deadline_ms": 110000
+        }
+      },
+      "source": {
+        "vendor": "claude-code",
+        "host": "davids-mbp",
+        "adapter": "hook-http"
+      },
+      "title": "Permission: gh pr merge 42",
+      "expires_at": "2026-08-26T18:06:00Z"
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "name": "SessionStart (startup)",
+  "note": "Field set per https://code.claude.com/docs/en/hooks: session_id, transcript_path, cwd, hook_event_name, permission_mode, reason, model?.",
+  "input": {
+    "session_id": "sess-abc123",
+    "transcript_path": "/Users/dazheng/.claude/projects/omi/sess-abc123.jsonl",
+    "cwd": "/Users/dazheng/omi",
+    "permission_mode": "default",
+    "hook_event_name": "SessionStart",
+    "reason": "startup",
+    "model": "claude-opus-4-6"
+  },
+  "expect": [
+    {
+      "type": "session.started",
+      "severity": "info",
+      "requires_response": false,
+      "idempotency_key": "claude-code:sess-abc123:SessionStart:startup",
+      "session_key": "claude-code\u0000test-host\u0000sess-abc123",
+      "response_channel": null,
+      "ts": "2026-08-26T12:00:00.000Z",
+      "source": {
+        "vendor": "claude-code",
+        "host": "test-host",
+        "adapter": "hook-http"
+      },
+      "title": "Claude Code session startup in omi"
+    }
+  ]
+}

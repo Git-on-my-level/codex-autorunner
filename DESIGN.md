@@ -1,4 +1,8 @@
-Codex Autorunner - Design
+Codex Autorunner v2 - Deprecated Design
+
+> **Deprecated:** This document describes the legacy runner/ticket product. CAR v3 is
+> the active attention-router architecture; see [`v3/DESIGN.md`](./v3/DESIGN.md) and
+> [`ADR 0001`](./v3/docs/architecture/0001-attention-router-capability-providers.md).
 
 Agent coordination hub that drives Codex app-server and OpenCode using markdown docs in .codex-autorunner/ as the control surface. Ships a CLI and local web UI/API; hub mode supervises multiple repos/worktrees and is the primary interface. Single-repo mode exists for CAR development but is not recommended for general use. The Codex CLI is primarily used for the interactive terminal surface (PTY).
 

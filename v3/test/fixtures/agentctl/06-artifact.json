@@ -1,0 +1,34 @@
+{
+  "name": "artifact event",
+  "note": "ASSUMED PAYLOAD. `agentctl subscribe` advertises the artifact kind but this host's journal has no sample; fields are read across path/name/uri aliases.",
+  "input": {
+    "schema_version": 1,
+    "id": "event-parcel-ribbon-clay-summit-vivid-lemon",
+    "origin_host_id": "host-foster-bitter-palace-talent-gown-glass",
+    "execution_id": "exec-roast-grid-avoid-luxury-report-master",
+    "sequence": 77,
+    "ordering": "source",
+    "kind": "artifact",
+    "state": "running",
+    "authority": "native",
+    "adapter": "omp",
+    "observed_at": "2026-08-23T18:02:00.000Z",
+    "payload": {
+      "path": "/Users/dazheng/Documents/report.md",
+      "description": "Generated review report",
+      "bytes": 8412
+    }
+  },
+  "expect": [
+    {
+      "type": "artifact",
+      "severity": "info",
+      "requires_response": false,
+      "idempotency_key": "agentctl:event-parcel-ribbon-clay-summit-vivid-lemon",
+      "session_key": "agentctl\u0000host-foster-bitter-palace-talent-gown-glass\u0000exec-roast-grid-avoid-luxury-report-master",
+      "response_channel": null,
+      "title": "/Users/dazheng/Documents/report.md",
+      "body": "Generated review report"
+    }
+  ]
+}

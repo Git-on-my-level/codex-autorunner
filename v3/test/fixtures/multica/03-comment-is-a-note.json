@@ -1,0 +1,37 @@
+{
+  "name": "a non-interrogative comment is an FYI note, not an escalation",
+  "input": {
+    "action": "comment_created",
+    "workspace": "davids-homelab",
+    "issue": {
+      "key": "MUL-77",
+      "title": "Forgejo upgrade",
+      "url": "https://multica.internal/issues/MUL-77",
+      "comment": {
+        "id": "cmt-9",
+        "body": "Looks good, shipping tomorrow."
+      }
+    }
+  },
+  "expect": [
+    {
+      "type": "note",
+      "severity": "notice",
+      "requires_response": false,
+      "idempotency_key": "multica:MUL-77:comment_created:ecf6f60dc923e5d6",
+      "session_key": "multica\u0000test-host\u0000MUL-77",
+      "response_channel": {
+        "kind": "multica-api",
+        "hint": {
+          "issue": "MUL-77",
+          "workspace": "davids-homelab",
+          "url": "https://multica.internal/issues/MUL-77",
+          "comment_id": "cmt-9",
+          "action": "comment_created"
+        }
+      },
+      "title": "Forgejo upgrade (comment_created)",
+      "body": "Looks good, shipping tomorrow.\n\nhttps://multica.internal/issues/MUL-77"
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+# CAR v3 (`card serve`) systemd user-unit template — Linux.
+#
+# This is a TEMPLATE. Replace every <<PLACEHOLDER>> before installing, then see
+# ops/README.md for the systemctl enable/start steps.
+#
+# Placeholders:
+#   <<BUN_PATH>>            absolute path to the bun binary, e.g. /home/you/.bun/bin/bun
+#                            (find yours with `which bun`)
+#   <<CAR_V3_DIR>>           absolute path to this v3/ checkout, e.g. /home/you/car-workspace/v3
+#   <<HOME_DIR>>             your home directory, e.g. /home/you
+#   <<CAR_TELEGRAM_TOKEN>>   your Telegram bot token from @BotFather (see v3/README.md)
+#   <<ANTHROPIC_API_KEY>>    your Anthropic API key (used by the triage/consolidation providers)
+#
+# Install as a user unit (recommended, no root needed):
+#   ~/.config/systemd/user/card.service
+# See ops/README.md for the full bootstrap.
+
+[Unit]
+Description=CAR v3 — attention control plane (card serve)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=<<CAR_V3_DIR>>
+ExecStart=<<BUN_PATH>> run <<CAR_V3_DIR>>/src/cli.ts serve
+Environment=HOME=<<HOME_DIR>>
+Environment=CAR_TELEGRAM_TOKEN=<<CAR_TELEGRAM_TOKEN>>
+Environment=ANTHROPIC_API_KEY=<<ANTHROPIC_API_KEY>>
+
+# Daemon is crash-only by design (DESIGN.md non-negotiable #1): SQLite is the
+# sole source of truth, so restarting after any exit is always safe.
+Restart=always
+RestartSec=5
+
+# journald captures stdout/stderr by default (see ops/README.md for how to
+# read it); uncomment to also mirror to plain files under ~/.car/log/.
+# StandardOutput=append:<<HOME_DIR>>/.car/log/card.out.log
+# StandardError=append:<<HOME_DIR>>/.car/log/card.err.log
+
+[Install]
+WantedBy=default.target
