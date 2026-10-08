@@ -1,0 +1,42 @@
+{
+  "name": "PermissionRequest \u2014 the parked in-band decision path",
+  "note": "This is the only hook whose HTTP response CAR holds open. response_channel.kind is claude-hook-http and deadline_ms is the hook timeout minus the 5s margin (60s default -> 55000).",
+  "input": {
+    "session_id": "sess-abc123",
+    "prompt_id": "550e8400-e29b-41d4-a716-446655440000",
+    "transcript_path": "/Users/dazheng/.claude/projects/omi/sess-abc123.jsonl",
+    "cwd": "/Users/dazheng/omi",
+    "permission_mode": "default",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "gh pr merge 42 --squash",
+      "description": "Merge the telemetry PR"
+    },
+    "tool_use_id": "toolu_01X"
+  },
+  "expect": [
+    {
+      "type": "attention.permission",
+      "severity": "attention",
+      "requires_response": true,
+      "idempotency_key": "claude-code:sess-abc123:PermissionRequest:toolu_01X",
+      "session_key": "claude-code\u0000test-host\u0000sess-abc123",
+      "response_channel": {
+        "kind": "claude-hook-http",
+        "hint": {
+          "tool_use_id": "toolu_01X",
+          "session_id": "sess-abc123",
+          "tool_name": "Bash",
+          "deadline_ms": 55000
+        }
+      },
+      "title": "Permission: Bash: gh pr merge 42 --squash",
+      "body": "gh pr merge 42 --squash\n\nMerge the telemetry PR"
+    }
+  ],
+  "expect_park": true
+}

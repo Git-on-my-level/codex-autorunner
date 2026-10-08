@@ -1,0 +1,78 @@
+/**
+ * Dedupe identity: the two hashes CAR's safety rails run on.
+ *
+ * - `dedupe_class` groups *incidents* into a lineage ("this same problem again"),
+ *   which is what caps LLM runs per DESIGN §5(f).
+ * - `dedupeHash` groups *actions* ("CAR already tried exactly this"), which is
+ *   what the 30-minute runaway block in the policy gate runs on.
+ */
+import { HASH_SEP } from "../contract/events.ts";
+
+function sha(input: string, len: number): string {
+  return new Bun.CryptoHasher("sha256").update(input).digest("hex").slice(0, len);
+}
+
+export interface DedupeClassInput {
+  idempotency_key: string;
+  type: string;
+  title: string;
+}
+
+/**
+ * Source-scoped idempotency keys look like
+ * `claude-code:sess-abc:PermissionRequest:toolu_01X` — everything but the final
+ * per-occurrence segment identifies the recurring *class* of event. Sources
+ * without that structure fall back to a hash of type + title.
+ */
+export function dedupeClassFor(ev: DedupeClassInput): string {
+  const key = ev.idempotency_key ?? "";
+  if (key.startsWith("computed:")) {
+    // Server-computed keys already carry a payload hash; the stable part is the
+    // vendor + type prefix (`computed:<vendor>:<type>:<hash>`).
+    const parts = key.split(":");
+    if (parts.length >= 3) return parts.slice(0, 3).join(":");
+  }
+  const segments = key.split(":").filter((s) => s.length > 0);
+  if (segments.length >= 2) {
+    const prefix = segments.slice(0, segments.length - 1).join(":");
+    return ev.type === "attention.permission" ? `${prefix}:${permissionSignature(ev.title)}` : prefix;
+  }
+  return `${ev.type}:${sha([ev.type, ev.title].join(HASH_SEP), 12)}`;
+}
+
+/**
+ * Permissions are the one event type whose identity is the *request*, not the
+ * session. Claude's key is `claude-code:<session>:PermissionRequest:<tool_use_id>`,
+ * so stripping only the last segment would put every prompt in a session into a
+ * single lineage. Two consequences, both bad: the lineage's LLM budget is spent
+ * by the first two prompts, after which every later prompt in that session
+ * escalates unconditionally for the rest of the 24h lineage window; and a grant
+ * scoped to that lineage covers far more than the tap that created it appeared
+ * to mean — `git push --force` would inherit what `rg -n TODO` earned.
+ *
+ * Hashing the request itself keeps recurrences of the *same* prompt together
+ * (the real dedupe case: Claude re-asking after a hook timeout) while giving
+ * each distinct command its own lineage and its own budget.
+ */
+export function permissionSignature(title: string): string {
+  const normalized = title
+    .replace(/^permission:\s*/i, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  return sha(normalized, 12);
+}
+
+/** Stable hash over (class, args) — argument key order must not matter. */
+export function actionDedupeHash(actionClass: string, args: unknown): string {
+  return sha([actionClass, stableStringify(args)].join(HASH_SEP), 32);
+}
+
+export function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(",")}}`;
+}
