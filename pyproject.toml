@@ -34,7 +34,7 @@ Issues = "https://github.com/Git-on-my-level/codex-autorunner/issues"
 
 [project.optional-dependencies]
 dev = [
-  "black==26.5.1",
+  "black==26.10.0",
   "hypothesis>=6.92",
   "httpx2>=2.0",
   "mypy>=1.10",
