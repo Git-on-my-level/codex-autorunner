@@ -12,7 +12,7 @@
     "web:test": "vitest run"
   },
   "devDependencies": {
-    "@sveltejs/adapter-static": "^3.0.9",
+    "@sveltejs/adapter-static": "^4.0.0",
     "@sveltejs/kit": "^2.70.3",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@types/dompurify": "^3.2.0",
