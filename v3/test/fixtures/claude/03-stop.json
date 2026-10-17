@@ -1,0 +1,33 @@
+{
+  "name": "Stop \u2014 turn finished, agent now waiting on a human",
+  "note": "Mapped to attention.idle (the contract's waiting-on-input type) at notice severity, with a claude-resume channel so a reply can still reach the session.",
+  "input": {
+    "session_id": "sess-abc123",
+    "prompt_id": "550e8400-e29b-41d4-a716-446655440000",
+    "transcript_path": "/Users/dazheng/.claude/projects/omi/sess-abc123.jsonl",
+    "cwd": "/Users/dazheng/omi",
+    "permission_mode": "default",
+    "hook_event_name": "Stop",
+    "last_assistant_message": "Done \u2014 the BLE reconnect fix is on branch fix/ble-reconnect.",
+    "stop_reason": "end_turn"
+  },
+  "expect": [
+    {
+      "type": "attention.idle",
+      "severity": "notice",
+      "requires_response": false,
+      "idempotency_key": "claude-code:sess-abc123:Stop:550e8400-e29b-41d4-a716-446655440000",
+      "session_key": "claude-code\u0000test-host\u0000sess-abc123",
+      "response_channel": {
+        "kind": "claude-resume",
+        "hint": {
+          "session_id": "sess-abc123",
+          "cwd": "/Users/dazheng/omi",
+          "transcript_path": "/Users/dazheng/.claude/projects/omi/sess-abc123.jsonl"
+        }
+      },
+      "title": "Claude Code turn finished (end_turn)",
+      "body": "Done \u2014 the BLE reconnect fix is on branch fix/ble-reconnect."
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "name": "terminal failed escalates severity",
+  "note": "Verbatim from `agentctl events exec-govern-script-... --kind terminal` (a real failed cursor run).",
+  "input": {
+    "schema_version": 1,
+    "id": "event-tattoo-odor-slush-photo-apology-present",
+    "origin_host_id": "host-foster-bitter-palace-talent-gown-glass",
+    "execution_id": "exec-govern-script-twice-mother-wish-awake",
+    "sequence": 3,
+    "ordering": "observation",
+    "kind": "terminal",
+    "state": "failed",
+    "authority": "native",
+    "adapter": "cursor",
+    "occurred_at": null,
+    "observed_at": "2026-08-22T16:05:41.063484Z",
+    "dedupe_key": "sha256:a225f7845bba1484b752799ce40654e3fcf523d0230639dcff7cab8f262a2d37",
+    "dedupe_version": 1,
+    "payload": {
+      "availability": "stored",
+      "failure_code": "native_execution_failed",
+      "outcome_execution_id": "exec-govern-script-twice-mother-wish-awake",
+      "result_available": true
+    }
+  },
+  "expect": [
+    {
+      "type": "session.ended",
+      "severity": "attention",
+      "requires_response": false,
+      "idempotency_key": "agentctl:event-tattoo-odor-slush-photo-apology-present",
+      "session_key": "agentctl\u0000host-foster-bitter-palace-talent-gown-glass\u0000exec-govern-script-twice-mother-wish-awake",
+      "response_channel": {
+        "kind": "agentctl-run",
+        "hint": {
+          "execution_id": "exec-govern-script-twice-mother-wish-awake",
+          "adapter": "cursor"
+        }
+      },
+      "title": "agentctl cursor failed: exec-govern-script-twice-mother-wish-awake",
+      "body": "failure_code: native_execution_failed"
+    }
+  ]
+}

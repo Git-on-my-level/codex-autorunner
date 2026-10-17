@@ -1,0 +1,35 @@
+{
+  "name": "autopilot failure becomes attention.error",
+  "input": {
+    "delivery_id": "wh-aa01",
+    "action": "autopilot_failed",
+    "workspace": "davids-homelab",
+    "issue": {
+      "ref": "MUL-300",
+      "title": "Autopilot: rebuild search index",
+      "body": "exit status 1: index lock held by pid 4412",
+      "url": "https://multica.internal/issues/MUL-300",
+      "state": "failed",
+      "repo": "github.com/dazheng/homelab"
+    }
+  },
+  "expect": [
+    {
+      "type": "attention.error",
+      "severity": "attention",
+      "requires_response": true,
+      "idempotency_key": "multica:wh-aa01",
+      "session_key": "multica\u0000test-host\u0000MUL-300",
+      "response_channel": {
+        "kind": "multica-api",
+        "hint": {
+          "issue": "MUL-300",
+          "workspace": "davids-homelab",
+          "url": "https://multica.internal/issues/MUL-300",
+          "action": "autopilot_failed"
+        }
+      },
+      "title": "Autopilot: rebuild search index (autopilot_failed)"
+    }
+  ]
+}

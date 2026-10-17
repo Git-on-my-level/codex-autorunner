@@ -1,0 +1,38 @@
+{
+  "name": "PermissionRequest with an explicit timeout hint",
+  "note": "ASSUMPTION: Claude Code's hook payload does not publish the configured timeout, so CAR reads a hint from ?timeout_ms=/?timeout=, an X-Car-Hook-Timeout-Ms / X-Hook-Timeout header, or a payload timeout field. Here 30s -> 25000ms park.",
+  "input": {
+    "session_id": "sess-def456",
+    "transcript_path": "/Users/dazheng/.claude/projects/car/sess-def456.jsonl",
+    "cwd": "/Users/dazheng/car-workspace",
+    "permission_mode": "default",
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Write",
+    "tool_input": {
+      "file_path": "/etc/hosts",
+      "content": "127.0.0.1 evil"
+    },
+    "tool_use_id": "toolu_03Z",
+    "timeout": 30
+  },
+  "expect": [
+    {
+      "type": "attention.permission",
+      "severity": "attention",
+      "requires_response": true,
+      "idempotency_key": "claude-code:sess-def456:PermissionRequest:toolu_03Z",
+      "session_key": "claude-code\u0000test-host\u0000sess-def456",
+      "response_channel": {
+        "kind": "claude-hook-http",
+        "hint": {
+          "tool_use_id": "toolu_03Z",
+          "session_id": "sess-def456",
+          "tool_name": "Write",
+          "deadline_ms": 25000
+        }
+      },
+      "title": "Permission: Write: /etc/hosts"
+    }
+  ],
+  "expect_park": true
+}

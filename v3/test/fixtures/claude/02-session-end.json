@@ -1,0 +1,21 @@
+{
+  "name": "SessionEnd (logout)",
+  "input": {
+    "session_id": "sess-abc123",
+    "transcript_path": "/Users/dazheng/.claude/projects/omi/sess-abc123.jsonl",
+    "cwd": "/Users/dazheng/omi",
+    "hook_event_name": "SessionEnd",
+    "reason": "logout"
+  },
+  "expect": [
+    {
+      "type": "session.ended",
+      "severity": "info",
+      "requires_response": false,
+      "idempotency_key": "claude-code:sess-abc123:SessionEnd:logout",
+      "session_key": "claude-code\u0000test-host\u0000sess-abc123",
+      "response_channel": null,
+      "title": "Claude Code session ended (logout)"
+    }
+  ]
+}
