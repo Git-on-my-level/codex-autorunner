@@ -1,7 +1,12 @@
+import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vitest/config';
 import type { ProxyOptions } from 'vite';
 import type { ServerResponse } from 'node:http';
+
+function webVersion() {
+  return process.env.CODEX_WEB_STATIC_VERSION || 'source';
+}
 
 function isServerResponse(response: unknown): response is ServerResponse {
   return (
@@ -49,7 +54,26 @@ export default defineConfig(() => {
   const hubBasePath = (process.env.CAR_HUB_PROXY_BASE_PATH?.trim() || '/car').replace(/\/+$/, '');
 
   return {
-    plugins: [sveltekit()],
+    plugins: [
+      sveltekit({
+        adapter: adapter({
+          fallback: 'index.html',
+          pages: '../web_static',
+          assets: '../web_static'
+        }),
+        version: {
+          name: webVersion()
+        },
+        prerender: {
+          handleUnseenRoutes: 'ignore'
+        },
+        paths: {},
+        alias: {
+          // Kit 3 removed the built-in `$lib` alias; 160+ files still import via it.
+          '$lib': 'src/lib'
+        }
+      })
+    ],
     server: {
       // Keep the browser Host (Vite dev URL) on proxied hub requests — do not rewrite
       // Host to the hub target. HostOriginMiddleware compares Origin to scheme+Host;
