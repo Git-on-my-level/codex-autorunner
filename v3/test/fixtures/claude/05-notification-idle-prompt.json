@@ -1,0 +1,31 @@
+{
+  "name": "Notification / idle_prompt",
+  "input": {
+    "session_id": "sess-abc123",
+    "transcript_path": "/Users/dazheng/.claude/projects/omi/sess-abc123.jsonl",
+    "cwd": "/Users/dazheng/omi",
+    "hook_event_name": "Notification",
+    "notification_type": "idle_prompt",
+    "notification_data": {
+      "message": "Claude is waiting for your input"
+    }
+  },
+  "expect": [
+    {
+      "type": "attention.idle",
+      "severity": "attention",
+      "requires_response": true,
+      "idempotency_key": "claude-code:sess-abc123:Notification:idle_prompt:9c3a9d0b9b046e8d:2026-08-26T12:00",
+      "session_key": "claude-code\u0000test-host\u0000sess-abc123",
+      "response_channel": {
+        "kind": "claude-resume",
+        "hint": {
+          "session_id": "sess-abc123",
+          "cwd": "/Users/dazheng/omi",
+          "transcript_path": "/Users/dazheng/.claude/projects/omi/sess-abc123.jsonl"
+        }
+      },
+      "title": "Claude is waiting for your input"
+    }
+  ]
+}
