@@ -507,6 +507,7 @@ async def test_send_message_chunks_long_text() -> None:
         response = await client.send_message(
             123,
             text,
+            reply_to_message_id=456,
             reply_markup={"inline_keyboard": [[{"text": "OK", "callback_data": "ok"}]]},
             parse_mode="Markdown",
         )
@@ -517,6 +518,8 @@ async def test_send_message_chunks_long_text() -> None:
     assert len(calls) == 2
     first_payload = calls[0]["payload"]
     second_payload = calls[1]["payload"]
+    assert "reply_to_message_id" not in first_payload
+    assert "reply_to_message_id" not in second_payload
     assert "reply_markup" in first_payload
     assert "reply_markup" not in second_payload
     assert isinstance(first_payload.get("text"), str)

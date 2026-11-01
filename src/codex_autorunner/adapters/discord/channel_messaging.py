@@ -18,6 +18,9 @@ async def send_channel_message(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     payload = dict(payload)
+    # CAR responses are standalone messages. Inbound message references are
+    # still parsed for routing/context, but never carry into outbound sends.
+    payload.pop("message_reference", None)
     content = payload.get("content")
     if isinstance(content, str):
         payload["content"] = sanitize_discord_outbound_text(content)

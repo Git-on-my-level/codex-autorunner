@@ -457,9 +457,12 @@ async def test_normal_message_runs_turn(tmp_path: Path) -> None:
     bind_message = build_message("/bind", message_id=10)
     try:
         await service._handle_bind(bind_message, str(repo))
-        new_message = build_message("/new", message_id=11)
-        with pytest.raises(RuntimeError, match="orchestration service unavailable"):
-            await service._handle_new(new_message)
+        key = await service._router.resolve_key(
+            bind_message.chat_id, bind_message.thread_id
+        )
+        runtime = service._router.runtime_for(key)
+        message = build_message("hello", message_id=11)
+        await service._handle_normal_message(message, runtime)
         await _drain_spawned_tasks(service)
         await _wait_for_bot_text(fake_bot, "fixture reply")
     finally:
@@ -986,6 +989,7 @@ async def test_photo_batch_inbox_save_failure_still_processes_image(
         transcript_message_id: Optional[int] = None,
         transcript_text: Optional[str] = None,
         placeholder_id: Optional[int] = None,
+        transcript_attachments: Optional[list[dict[str, object]]] = None,
     ) -> None:
         captured["text_override"] = text_override
         captured["input_items"] = input_items

@@ -1269,8 +1269,6 @@ class TelegramBotClient:
         }
         if message_thread_id is not None:
             payload["message_thread_id"] = message_thread_id
-        if reply_to_message_id is not None:
-            payload["reply_to_message_id"] = reply_to_message_id
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup
         if parse_mode is not None:
@@ -1304,8 +1302,6 @@ class TelegramBotClient:
         data: dict[str, Any] = {"chat_id": chat_id}
         if message_thread_id is not None:
             data["message_thread_id"] = message_thread_id
-        if reply_to_message_id is not None:
-            data["reply_to_message_id"] = reply_to_message_id
         if caption is not None:
             data["caption"] = caption
         if parse_mode is not None:
