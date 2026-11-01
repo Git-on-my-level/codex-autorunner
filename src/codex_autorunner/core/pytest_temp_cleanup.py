@@ -9,9 +9,10 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Hashable, Iterable, TypeVar
+from typing import Callable, Hashable, Iterable, Mapping, TypeVar
 
 _PYTEST_RUNTIME_TEMP_SUBDIR = "t"
+PYTEST_TEMP_BASE_ENV = "CAR_PYTEST_TEMP_BASE"
 _DEFAULT_LSOF_TIMEOUT_SECONDS = 10.0
 _TEMP_ENV_KEYS = ("TMPDIR", "TMP", "TEMP")
 _CAR_TEMP_DIR_PREFIXES = (
@@ -60,15 +61,63 @@ class TempCleanupSummary:
     active_processes: tuple[TempRootProcess, ...] = ()
 
 
+def configured_temp_base(
+    environ: Mapping[str, str] | None = None,
+) -> Path | None:
+    """Return the operator-configured base for repo pytest temp roots.
+
+    ``system_temp_root()`` deliberately ignores ``TMPDIR``/``TMP``/``TEMP`` so
+    that an ambient, per-process temp dir cannot fragment the roots this module
+    has to find again later. That leaves no way to place the roots elsewhere,
+    which matters when the OS temp dir is the wrong volume for them -- a
+    sandbox that forbids it, a small system disk, or a host policy that only
+    permits scratch under a dedicated mount.
+
+    ``CAR_PYTEST_TEMP_BASE`` is the deliberate opt-in counterpart: explicit,
+    named, and set once for a whole machine or CI runner, so it does not
+    reintroduce the ambient-inheritance problem. Unset (the default) keeps the
+    historical system-temp behaviour.
+    """
+
+    env = os.environ if environ is None else environ
+    raw = (env.get(PYTEST_TEMP_BASE_ENV) or "").strip()
+    if not raw:
+        return None
+    base = Path(raw).expanduser()
+    if not base.is_absolute():
+        raise ValueError(
+            f"{PYTEST_TEMP_BASE_ENV} must be an absolute path, got {raw!r}. "
+            "A relative value would resolve against the current working "
+            "directory, so each caller would get a different temp root."
+        )
+    return base.resolve(strict=False)
+
+
+def candidate_repo_temp_bases() -> tuple[Path, ...]:
+    """Every base that may hold this repo's temp roots, newest policy first.
+
+    When a base is configured we still scan the system temp dir: roots created
+    before the switchover are otherwise orphaned, and nothing would ever clean
+    them up again.
+    """
+
+    roots: dict[Path, Path] = {}
+    configured = configured_temp_base()
+    if configured is not None:
+        roots.setdefault(configured, configured)
+    for candidate in candidate_system_temp_roots():
+        roots.setdefault(candidate, candidate)
+    return tuple(roots.values())
+
+
 def repo_pytest_runtime_root(repo_root: Path, *, temp_base: Path | None = None) -> Path:
     key = hashlib.sha1(
         str(Path(repo_root).expanduser().resolve(strict=False)).encode("utf-8")
     ).hexdigest()[:10]
-    base_root = (
-        Path(temp_base).expanduser().resolve(strict=False)
-        if temp_base is not None
-        else system_temp_root()
-    )
+    if temp_base is not None:
+        base_root = Path(temp_base).expanduser().resolve(strict=False)
+    else:
+        base_root = configured_temp_base() or system_temp_root()
     return base_root / f"cp-{key}"
 
 
@@ -100,7 +149,7 @@ def existing_repo_pytest_runtime_roots(
         return (runtime_root,) if runtime_root.exists() else ()
 
     roots: dict[Path, Path] = {}
-    for base_root in candidate_system_temp_roots():
+    for base_root in candidate_repo_temp_bases():
         candidate = repo_pytest_runtime_root(repo_root, temp_base=base_root)
         if not candidate.exists():
             continue
@@ -164,7 +213,7 @@ def discover_repo_temp_paths(
     if temp_base is not None:
         candidate_roots = (Path(temp_base),)
     else:
-        candidate_roots = candidate_system_temp_roots()
+        candidate_roots = candidate_repo_temp_bases()
     discovered: dict[Path, Path] = {}
     for base_root in candidate_roots:
         root = Path(base_root).expanduser().resolve(strict=False)

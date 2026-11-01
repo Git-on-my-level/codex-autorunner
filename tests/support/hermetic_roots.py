@@ -42,6 +42,11 @@ def _system_temp_root(repo_root: Path) -> Path:
     return cleanup_module.system_temp_root()
 
 
+def _configured_temp_base(repo_root: Path, environ: dict[str, str]) -> Path | None:
+    cleanup_module = _load_pytest_temp_cleanup_module(repo_root)
+    return cleanup_module.configured_temp_base(environ)
+
+
 @dataclass(frozen=True)
 class HermeticTestRoots:
     repo_root: Path
@@ -58,6 +63,7 @@ class HermeticTestRoots:
     pytest_home_root: Path
     pytest_opencode_state_root: Path
     pytest_global_state_root: Path
+    temp_base: Path | None = None
 
     @classmethod
     def from_repo_root(
@@ -75,9 +81,13 @@ class HermeticTestRoots:
             )
         )
 
-        pytest_runtime_root = (
-            _system_temp_root(resolved_repo_root) / f"cp-{runtime_key}"
+        temp_base = _configured_temp_base(resolved_repo_root, env)
+        base_root = (
+            temp_base
+            if temp_base is not None
+            else _system_temp_root(resolved_repo_root)
         )
+        pytest_runtime_root = base_root / f"cp-{runtime_key}"
         pytest_temp_root = pytest_runtime_root / "t"
         pytest_temp_run_root = pytest_temp_root / run_token
         pytest_basetemp_root = pytest_temp_run_root / "basetemp"
@@ -106,6 +116,7 @@ class HermeticTestRoots:
             pytest_home_root=pytest_home_root,
             pytest_opencode_state_root=pytest_opencode_state_root,
             pytest_global_state_root=pytest_global_state_root,
+            temp_base=temp_base,
         )
 
     def load_pytest_temp_cleanup_module(self) -> ModuleType:
@@ -140,6 +151,10 @@ class HermeticTestRoots:
         self, *, min_age_seconds: float = 300.0
     ) -> None:
         cleanup_module = self.load_pytest_temp_cleanup_module()
+        # Deliberately no temp_base: the default resolution already honours
+        # CAR_PYTEST_TEMP_BASE *and* still sweeps the system temp dir, so roots
+        # created before a base switchover keep getting cleaned up. Pinning the
+        # configured base here would narrow the sweep and orphan them.
         cleanup_module.cleanup_repo_pytest_temp_runs(
             self.repo_root,
             keep_run_tokens={self.run_token},
@@ -148,6 +163,7 @@ class HermeticTestRoots:
 
     def prune_inactive_repo_temp_roots(self, *, min_age_seconds: float = 300.0) -> None:
         cleanup_module = self.load_pytest_temp_cleanup_module()
+        # See prune_inactive_pytest_temp_runs for why temp_base is left unset.
         cleanup_module.cleanup_repo_managed_temp_paths(
             self.repo_root,
             keep_run_tokens={self.run_token},
