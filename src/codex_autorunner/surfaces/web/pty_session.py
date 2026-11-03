@@ -1,15 +1,25 @@
 import asyncio
 import collections
-import fcntl
 import logging
 import os
 import select
 import struct
-import termios
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback
+    fcntl = None  # type: ignore[assignment]
+try:
+    import termios
+except ImportError:  # pragma: no cover - Windows fallback
+    termios = None  # type: ignore[assignment]
 import time
 from typing import Dict, Optional
 
-from ptyprocess import PtyProcess
+try:
+    from ptyprocess import PtyProcess
+except ImportError:  # pragma: no cover - Windows fallback
+    PtyProcess = None  # type: ignore[assignment, misc]
 
 logger = logging.getLogger("codex_autorunner.web.pty_session")
 

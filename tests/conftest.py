@@ -783,6 +783,17 @@ def _cleanup_pytest_temp_runs_session(
     _init_hermetic_environment, hermetic_roots: HermeticTestRoots
 ) -> None:
     yield
+    import logging
+
+    for logger_obj in list(logging.Logger.manager.loggerDict.values()):
+        if hasattr(logger_obj, "handlers"):
+            for h in list(logger_obj.handlers):
+                try:
+                    h.close()
+                except Exception:
+                    pass
+                logger_obj.removeHandler(h)
+    logging.shutdown()
     cleanup_module = hermetic_roots.load_pytest_temp_cleanup_module()
     env_root = hermetic_roots.pytest_process_root
     summary = cleanup_module.cleanup_temp_paths((env_root,))
@@ -877,7 +888,8 @@ def _cleanup_opencode_processes_per_test(
 ) -> None:
     yield
     roots = {hermetic_roots.pytest_global_state_root}
-    tmp_path = request.node.funcargs.get("tmp_path")
+    funcargs = getattr(request.node, "funcargs", None) or {}
+    tmp_path = funcargs.get("tmp_path")
     if tmp_path is not None:
         roots.update(_iter_opencode_registry_roots(tmp_path))
     failures = _reap_opencode_processes(roots, force=True)

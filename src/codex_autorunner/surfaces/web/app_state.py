@@ -56,6 +56,7 @@ from ...core.state import load_state
 from ...tickets.replies import resolve_reply_paths
 from .hub_jobs import HubJobManager
 from .runner_manager import RunnerManager
+from .services.preview_capabilities import PreviewCapabilityStore
 from .static_assets import (
     asset_version,
     resolve_web_static_dir,
@@ -130,6 +131,7 @@ class HubAppContext:
     shared_state_service: HubSharedStateService
     asset_version: str
     logger: logging.Logger
+    preview_capability_store: Optional[PreviewCapabilityStore] = None
 
 
 @dataclass(frozen=True)
@@ -524,9 +526,7 @@ def build_app_context(
     else:
         try:
             voice_service = VoiceService(voice_config, logger=logger)
-        except (
-            Exception
-        ) as exc:  # intentional: optional voice feature, any init failure disables gracefully
+        except Exception as exc:  # intentional: optional voice feature, any init failure disables gracefully
             voice_service = None
             safe_log(
                 logger,
@@ -725,10 +725,15 @@ def build_hub_context(
         app_server_supervisor=app_server_supervisor,
         opencode_supervisor=opencode_supervisor,
     )
+    preview_capability_store = PreviewCapabilityStore(
+        config.root,
+        durable=durable_writes,
+    )
     preview_service_manager = _build_preview_service_manager(
         config.root,
         raw_config=config.raw,
         durable_writes=durable_writes,
+        capability_store=preview_capability_store,
     )
     runtime_services.preview_service_manager = preview_service_manager
     projection_store = HubProjectionStore(
@@ -762,6 +767,7 @@ def build_hub_context(
         shared_state_service=shared_state_service,
         asset_version=resolved_asset_version,
         logger=logger,
+        preview_capability_store=preview_capability_store,
     )
 
 
@@ -782,6 +788,7 @@ def apply_hub_context(app, context: HubAppContext) -> None:
     app.state.hub_control_plane_service = context.shared_state_service
     app.state.asset_version = context.asset_version
     app.state.hub_supervisor = context.supervisor
+    app.state.preview_capability_store = context.preview_capability_store
 
 
 def _build_preview_service_manager(
@@ -789,6 +796,7 @@ def _build_preview_service_manager(
     *,
     raw_config: Mapping[str, Any],
     durable_writes: bool,
+    capability_store: Optional[PreviewCapabilityStore] = None,
 ) -> PreviewServiceSupervisor:
     preview_config = raw_config.get("preview_services")
     preview_config = preview_config if isinstance(preview_config, Mapping) else {}
@@ -811,6 +819,20 @@ def _build_preview_service_manager(
         preview_config.get("startup_health_timeout_seconds"),
         default=DEFAULT_STARTUP_HEALTH_TIMEOUT_SECONDS,
     )
+    auth_config = raw_config.get("auth")
+    hosted_mode = (
+        isinstance(auth_config, Mapping) and auth_config.get("mode") == "hosted_bearer"
+    )
+    launch_resolver = None
+    on_stop = None
+    if hosted_mode and capability_store is not None:
+
+        def launch_resolver(sid: str) -> str:
+            return capability_store.get_or_issue(sid).url
+
+        def on_stop(sid: str) -> None:
+            capability_store.revoke_service(sid)
+
     return PreviewServiceSupervisor(
         hub_root,
         durable=durable_writes,
@@ -818,6 +840,8 @@ def _build_preview_service_manager(
         port_range=(start, end),
         log_max_bytes=log_max_bytes,
         startup_health_timeout_seconds=startup_health_timeout_seconds,
+        launch_preview_url_resolver=launch_resolver,
+        on_service_stopped=on_stop,
     )
 
 

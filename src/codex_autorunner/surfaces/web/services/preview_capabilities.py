@@ -47,7 +47,8 @@ class PreviewCapabilityStore:
         self._path = self._hub_root / _CAPABILITIES_RELATIVE_PATH
         self._durable = durable
         self._now = now
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._active_tokens: dict[str, PreviewCapability] = {}
 
     def issue(
         self,
@@ -69,17 +70,50 @@ class PreviewCapabilityStore:
             "expires_at": expires_at,
             "revoked": False,
         }
+        capability = PreviewCapability(
+            token=token,
+            service_id=clean_service_id,
+            path_prefix=clean_path,
+            expires_at=expires_at,
+        )
         with self._lock:
             data = self._read_store()
             entries = _active_entries(data, now=self._now())
             entries.append(entry)
             data["tokens"] = entries
             self._write_store(data)
-        return PreviewCapability(
-            token=token,
-            service_id=clean_service_id,
+            self._active_tokens[clean_service_id] = capability
+        return capability
+
+    def get_active(self, service_id: str) -> PreviewCapability | None:
+        clean_service_id = validate_service_id(service_id)
+        with self._lock:
+            candidate = self._active_tokens.get(clean_service_id)
+            if candidate is None:
+                return None
+            if candidate.expires_at <= self._now():
+                self._active_tokens.pop(clean_service_id, None)
+                return None
+            if self.validate(candidate.token) is None:
+                self._active_tokens.pop(clean_service_id, None)
+                return None
+            return candidate
+
+    def get_or_issue(
+        self,
+        service_id: str,
+        *,
+        path_prefix: str = "",
+        ttl_seconds: int = DEFAULT_PREVIEW_CAPABILITY_TTL_SECONDS,
+    ) -> PreviewCapability:
+        clean_path = _clean_path_prefix(path_prefix)
+        active = self.get_active(service_id)
+        if active is not None and active.path_prefix == clean_path:
+            return active
+        return self.issue(
+            service_id,
             path_prefix=clean_path,
-            expires_at=expires_at,
+            ttl_seconds=ttl_seconds,
         )
 
     def validate(self, token: str) -> PreviewCapability | None:
@@ -114,6 +148,7 @@ class PreviewCapabilityStore:
     def revoke_service(self, service_id: str) -> int:
         clean_service_id = validate_service_id(service_id)
         with self._lock:
+            self._active_tokens.pop(clean_service_id, None)
             data = self._read_store()
             entries = data.get("tokens")
             if not isinstance(entries, list):
