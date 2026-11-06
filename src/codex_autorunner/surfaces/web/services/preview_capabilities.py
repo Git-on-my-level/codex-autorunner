@@ -104,16 +104,30 @@ class PreviewCapabilityStore:
         service_id: str,
         *,
         path_prefix: str = "",
-        ttl_seconds: int = DEFAULT_PREVIEW_CAPABILITY_TTL_SECONDS,
+        ttl_seconds: int | None = None,
     ) -> PreviewCapability:
+        """Return the active capability for ``service_id``, or issue a new one.
+
+        An active capability is reused when the caller did not request a
+        specific ``ttl_seconds``. When a TTL is requested explicitly, the
+        active capability is only reused if it lives at least that long;
+        otherwise a fresh capability with the requested TTL is issued.
+        """
         clean_path = _clean_path_prefix(path_prefix)
         active = self.get_active(service_id)
         if active is not None and active.path_prefix == clean_path:
-            return active
+            if ttl_seconds is None:
+                return active
+            if ttl_seconds <= active.expires_at - self._now():
+                return active
         return self.issue(
             service_id,
             path_prefix=clean_path,
-            ttl_seconds=ttl_seconds,
+            ttl_seconds=(
+                DEFAULT_PREVIEW_CAPABILITY_TTL_SECONDS
+                if ttl_seconds is None
+                else ttl_seconds
+            ),
         )
 
     def validate(self, token: str) -> PreviewCapability | None:

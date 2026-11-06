@@ -783,17 +783,6 @@ def _cleanup_pytest_temp_runs_session(
     _init_hermetic_environment, hermetic_roots: HermeticTestRoots
 ) -> None:
     yield
-    import logging
-
-    for logger_obj in list(logging.Logger.manager.loggerDict.values()):
-        if hasattr(logger_obj, "handlers"):
-            for h in list(logger_obj.handlers):
-                try:
-                    h.close()
-                except Exception:
-                    pass
-                logger_obj.removeHandler(h)
-    logging.shutdown()
     cleanup_module = hermetic_roots.load_pytest_temp_cleanup_module()
     env_root = hermetic_roots.pytest_process_root
     summary = cleanup_module.cleanup_temp_paths((env_root,))

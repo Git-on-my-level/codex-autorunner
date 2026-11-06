@@ -44,10 +44,7 @@ from ....core.preview_services.ids import (
 )
 from ....core.state_roots import resolve_hub_state_root
 from ..app_state import HubAppContext
-from ..services.preview_capabilities import (
-    DEFAULT_PREVIEW_CAPABILITY_TTL_SECONDS,
-    PreviewCapabilityStore,
-)
+from ..services.preview_capabilities import PreviewCapabilityStore
 
 logger = logging.getLogger("codex_autorunner.preview_services.routes")
 
@@ -540,8 +537,8 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
     @router.post("/hub/services/{service_id}/preview-token")
     async def issue_preview_token(
         service_id: str,
-        ttl_seconds: int = Query(
-            default=DEFAULT_PREVIEW_CAPABILITY_TTL_SECONDS,
+        ttl_seconds: Optional[int] = Query(
+            default=None,
             ge=1,
             le=60 * 60 * 24 * 30,
             alias="ttl",

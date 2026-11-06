@@ -329,9 +329,16 @@ PORT=<allocated_port>
 HOST=127.0.0.1
 ```
 
-In hosted/no-subdomain mode these env values are still the authenticated
-diagnostic base path. They are not automatically rewritten to the latest
-capability URL issued by the UI or CLI.
+In hosted/no-subdomain mode (`auth.mode: hosted_bearer`), managed services are
+launched with a scoped launch capability: `CAR_PREVIEW_BASE_PATH` and
+`CAR_PREVIEW_PUBLIC_URL` point at `/preview/p/<token>/` so framework-emitted
+asset, HMR, and router URLs match the unauthenticated capability URL opened by
+the browser instead of receiving `401` from authenticated control-plane routes.
+Launch capabilities use the default TTL (1 hour) and are revoked when the
+service stops. Because hot-reload frameworks bake the base path into served
+assets at boot, a hosted managed preview that runs longer than the TTL must be
+restarted to serve fresh capability-prefixed URLs; issuing a new link does not
+change the base path already baked into the running process.
 
 The full CAR process environment is inherited only when `env_policy=inherit_all`
 is explicitly requested. Read models redact configured env values, and service
