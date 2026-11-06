@@ -1,0 +1,33 @@
+{
+  "name": "assignment without a delivery id falls back to a content hash",
+  "note": "No delivery_id, so the key is multica:<ref>:<action>:<sha16(comment_id, issue_body, comment_body, minute)>.",
+  "input": {
+    "event": "assigned",
+    "card": {
+      "id": "MUL-201",
+      "name": "Nightly autopilot decision",
+      "description": "The nightly autopilot needs a decision on the migration order.",
+      "web_url": "https://multica.internal/issues/MUL-201"
+    },
+    "project": "davids-homelab"
+  },
+  "expect": [
+    {
+      "type": "attention.question",
+      "severity": "attention",
+      "requires_response": true,
+      "idempotency_key": "multica:MUL-201:assigned:6a5361bd1c094cb2",
+      "session_key": "multica\u0000test-host\u0000MUL-201",
+      "response_channel": {
+        "kind": "multica-api",
+        "hint": {
+          "issue": "MUL-201",
+          "workspace": "davids-homelab",
+          "url": "https://multica.internal/issues/MUL-201",
+          "action": "assigned"
+        }
+      },
+      "title": "Nightly autopilot decision (assigned)"
+    }
+  ]
+}

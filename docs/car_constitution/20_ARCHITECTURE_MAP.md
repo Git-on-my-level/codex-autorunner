@@ -1,6 +1,60 @@
 # Architecture Map
 
-Goal: allow a new agent to locate the correct seam for a change without relying on fragile file-level details.
+Goal: allow a new agent to locate the correct seam for a change without relying on
+fragile file-level details.
+
+## CAR v3: active architecture
+
+CAR v3 is the active product direction. Its accepted architecture is defined by
+[`v3/docs/architecture/0001-attention-router-capability-providers.md`](../../v3/docs/architecture/0001-attention-router-capability-providers.md)
+and the binding [`v3/DESIGN.md`](../../v3/DESIGN.md).
+
+### Layer definitions and dependency rules
+
+| Layer | Owns | Must not own |
+| --- | --- | --- |
+| Router core | Event/session/incident lifecycle, deterministic routing, human facts, grants, safety, effects, outbox, audit, recovery, digest, watchdog | Provider intelligence or vendor-specific policy |
+| Capability providers | Operator proposals, policy advice, memory context/learning through separate versioned contracts | Raw execution, core grants, incident authority, delivery claims |
+| Adapters | Vendor/source normalization, response delivery, provider transports | Routing policy or surface lifecycle state |
+| Surfaces | Core projections and generic human inputs | Provider internals, grants outside the core API, independent incident state |
+
+Dependencies point toward core contracts. Providers propose typed effects; the safety
+kernel authorizes them; core effect adapters execute them. Surfaces and providers never
+write alternative lifecycle truth.
+
+### Component map
+
+- **Contract:** `v3/src/contract/` for `car.event.v1` and versioned core wire types.
+- **Core store:** `v3/src/store/`, with canonical state under `~/.car/car.db`.
+- **Ingest adapters:** `v3/src/ingest/`.
+- **Router:** `v3/src/router/`; it owns deterministic event routing and delegates
+  operator, policy, and memory judgment through provider contracts.
+- **Providers:** `v3/src/providers/`, including the no-dependency native provider and
+  the Hermes public-ACP adapter.
+- **Safety:** `v3/src/safety/`; grants, panic, budgets, circuit breaking, deadlines,
+  and non-bypassable rails remain core-owned.
+- **Effects and reply delivery:** `v3/src/effects/`; adapters execute only effects
+  authorized by the core safety kernel. `v3/src/actions/` is a compatibility delivery
+  seam behind that boundary, not an alternative authority.
+- **Surfaces:** `v3/src/surfaces/telegram/` and `v3/src/surfaces/web/`.
+- **Scheduling:** `v3/src/digest/` for digest/watchdog/retention orchestration.
+- **Composition:** `v3/src/daemon.ts` and `v3/src/cli.ts`.
+
+### State ownership
+
+- Core runtime state: `~/.car/car.db`.
+- Core configuration and provider selection: beneath `~/.car/`, explicitly
+  relocatable.
+- Provider-owned state:
+  `~/.car/providers/<provider-id>/instances/<instance-id>/<continuity-key>/state/`.
+- Human grants and outcomes remain core facts even when a provider learns from them.
+- Hermes native sessions remain Hermes-owned; CAR stores invocation provenance and the
+  structured responses it accepted, not Hermes private state.
+
+## Deprecated CAR v2 architecture
+
+The remainder of this document maps the deprecated Python runner/ticket product. It is
+retained for maintenance and migration work and does not override the v3 sections above.
 
 ## Layer Definitions & Dependency Rules
 
