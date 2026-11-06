@@ -293,6 +293,32 @@ def test_preview_capability_store_expiry_and_service_revocation(
     assert store.validate(second.token) is None
 
 
+def test_preview_capability_get_or_issue_ttl_semantics(tmp_path: Path) -> None:
+    now = 1_000.0
+    store = PreviewCapabilityStore(tmp_path, now=lambda: now)
+    active = store.issue("svc_ttl123", ttl_seconds=3_600)
+
+    # No explicit TTL (UI redirect / open path): reuse the active capability.
+    reused = store.get_or_issue("svc_ttl123")
+    assert reused.token == active.token
+    assert reused.expires_at == active.expires_at
+
+    # Explicit TTL within the remaining lifetime: still reuse.
+    now += 60
+    assert store.get_or_issue("svc_ttl123", ttl_seconds=3_500).token == active.token
+
+    # Explicit TTL longer than the remaining lifetime: mint a fresh capability
+    # honoring the requested TTL instead of silently returning a shorter one.
+    long_lived = store.get_or_issue("svc_ttl123", ttl_seconds=86_400)
+    assert long_lived.token != active.token
+    assert long_lived.expires_at == now + 86_400
+
+    # A mismatched path prefix never reuses a different capability.
+    other_path = store.get_or_issue("svc_ttl123", path_prefix="assets")
+    assert other_path.path_prefix == "assets"
+    assert other_path.token not in {active.token, long_lived.token}
+
+
 def test_preview_static_dir_opens_index_and_nested_files(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     seed_hub_files(hub_root, force=True)
@@ -1672,12 +1698,73 @@ def _wait_for_route_health(
     client: TestClient,
     service_id: str,
     *,
+    headers: dict[str, str] | None = None,
     timeout: float = 5.0,
 ) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        health = client.post(f"/hub/services/{service_id}/health")
+        health = client.post(f"/hub/services/{service_id}/health", headers=headers)
         if health.status_code == 200 and health.json()["health"]["ok"] is True:
             return True
         time.sleep(0.05)
     return False
+
+
+def test_hosted_managed_preview_asset_path_matches_opened_capability_link(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    _update_hub_config(
+        hub_root,
+        {
+            "auth": {"mode": "hosted_bearer"},
+            "server": {
+                "auth_token_env": "CAR_TEST_TOKEN",
+                "allowed_hosts": ["testserver"],
+            },
+        },
+    )
+    monkeypatch.setenv("CAR_TEST_TOKEN", "hub-secret")
+    headers = {"Authorization": "Bearer hub-secret"}
+    client = TestClient(create_hub_app(hub_root))
+    port = _find_available_port()
+    created = client.post(
+        "/hub/services/managed",
+        headers=headers,
+        json={
+            "name": "Managed preview env hosted",
+            "argv": _env_server_command(),
+            "cwd": str(tmp_path),
+            "port_policy": {"mode": "exact", "port": port},
+            "health_check": {"type": "tcp", "path": None},
+            "start": True,
+        },
+    )
+    assert created.status_code == 200
+    service = created.json()["service"]
+    service_id = service["service_id"]
+    pid = service["process"]["pid"]
+    try:
+        assert _wait_for_route_health(client, service_id, headers=headers)
+        status_resp = client.get(f"/hub/services/{service_id}", headers=headers)
+        assert status_resp.status_code == 200
+        service_data = status_resp.json()["read_model"]
+        preview_url = service_data["preview_url"]
+        assert preview_url is not None
+        assert preview_url.startswith("/preview/p/")
+        token = preview_url.split("/preview/p/")[1].rstrip("/")
+
+        opened = client.get(preview_url)
+        assert opened.status_code == 200
+        env_vars = opened.json()
+        assert env_vars["CAR_PREVIEW_BASE_PATH"] == f"/preview/p/{token}"
+        assert env_vars["CAR_PREVIEW_PUBLIC_URL"] == f"/preview/p/{token}/"
+        assert env_vars["CAR_PREVIEW_SERVICE_ID"] == service_id
+
+        rejected = client.get(f"/preview/services/{service_id}/")
+        assert rejected.status_code == 401
+    finally:
+        if process_is_active(pid):
+            client.post(f"/hub/services/{service_id}/teardown", headers=headers)

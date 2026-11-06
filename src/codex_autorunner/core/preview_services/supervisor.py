@@ -11,8 +11,8 @@ import time
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, Literal, cast
-from urllib.parse import urlparse
+from typing import Any, Callable, Iterator, Literal, cast
+from urllib.parse import urlparse, urlsplit
 
 from ..force_attestation import enforce_force_attestation
 from ..locks import file_lock, process_command_matches, process_is_active
@@ -82,6 +82,8 @@ class PreviewServiceSupervisor:
         log_max_bytes: int = DEFAULT_LOG_MAX_BYTES,
         startup_health_timeout_seconds: float = DEFAULT_STARTUP_HEALTH_TIMEOUT_SECONDS,
         event_history_limit: int = DEFAULT_EVENT_HISTORY_LIMIT,
+        launch_preview_url_resolver: Callable[[str], str] | None = None,
+        on_service_stopped: Callable[[str], None] | None = None,
     ) -> None:
         self._hub_root = hub_root.resolve()
         self._durable = durable
@@ -89,6 +91,8 @@ class PreviewServiceSupervisor:
         self._log_max_bytes = log_max_bytes
         self._startup_health_timeout_seconds = startup_health_timeout_seconds
         self._event_history_limit = event_history_limit
+        self._launch_preview_url_resolver = launch_preview_url_resolver
+        self._on_service_stopped = on_service_stopped
         self._processes: dict[str, subprocess.Popen[bytes]] = {}
         self._registry = PreviewServiceRegistry(self._hub_root, durable=durable)
         self._allocator = PreviewPortAllocator(
@@ -350,19 +354,25 @@ class PreviewServiceSupervisor:
                 service_id,
                 max_bytes=self._log_max_bytes,
             )
+            launch_url = (
+                self._launch_preview_url_resolver(service_id)
+                if self._launch_preview_url_resolver is not None
+                else None
+            )
             env = _subprocess_env(
                 command,
                 port=allocation.port,
                 host=allocation.host,
                 service_id=service_id,
                 car_url=current.exposure.car_url,
+                preview_url=launch_url,
             )
             argv = _substitute_tokens(
                 command.argv,
                 port=allocation.port,
                 host=allocation.host,
                 service_id=service_id,
-                car_url=current.exposure.car_url,
+                car_url=launch_url or current.exposure.car_url,
             )
             process = subprocess.Popen(
                 argv,
@@ -422,6 +432,11 @@ class PreviewServiceSupervisor:
             )
             return self._verify_startup_health(updated)
         except Exception as exc:
+            if self._on_service_stopped is not None:
+                try:
+                    self._on_service_stopped(service_id)
+                except Exception:
+                    pass
             if process is not None:
                 terminate_record(
                     process.pid,
@@ -482,6 +497,11 @@ class PreviewServiceSupervisor:
                 self._verify_process_identity_or_orphan(record, action="stop")
         delete_process_record(self._hub_root, PROCESS_KIND, service_id)
         self._processes.pop(service_id, None)
+        if self._on_service_stopped is not None:
+            try:
+                self._on_service_stopped(service_id)
+            except Exception:
+                pass
         stopped = self._registry.update(
             service_id,
             lambda latest: _record_stopped(latest, PreviewServiceStatus.STOPPED),
@@ -552,6 +572,11 @@ class PreviewServiceSupervisor:
             )
         delete_process_record(self._hub_root, PROCESS_KIND, service_id)
         self._processes.pop(service_id, None)
+        if self._on_service_stopped is not None:
+            try:
+                self._on_service_stopped(service_id)
+            except Exception:
+                pass
         killed = self._registry.update(
             service_id,
             lambda latest: _record_stopped(latest, PreviewServiceStatus.STOPPED),
@@ -716,6 +741,11 @@ class PreviewServiceSupervisor:
             return orphaned
         if identity == "exited":
             process_handle = self._processes.pop(service_id, None)
+            if self._on_service_stopped is not None:
+                try:
+                    self._on_service_stopped(service_id)
+                except Exception:
+                    pass
             exit_code = _collect_exit_code(record.process.pid, process_handle)
             delete_process_record(self._hub_root, PROCESS_KIND, service_id)
             exited = self._registry.update(
@@ -963,9 +993,11 @@ def _subprocess_env(
     host: str,
     service_id: str,
     car_url: str,
+    preview_url: str | None = None,
 ) -> dict[str, str]:
-    public_url = car_url
-    base_path = car_url.rstrip("/") or "/"
+    effective_url = preview_url or car_url
+    public_url = effective_url
+    base_path = urlsplit(effective_url).path.rstrip("/") or "/"
     env = _base_subprocess_env(command.env_policy)
     env.update(
         _substitute_env(
@@ -973,7 +1005,7 @@ def _subprocess_env(
             port=port,
             host=host,
             service_id=service_id,
-            car_url=car_url,
+            car_url=effective_url,
         )
     )
     env.update(
@@ -983,7 +1015,7 @@ def _subprocess_env(
             "CAR_PREVIEW_SERVICE_ID": service_id,
             "CAR_PREVIEW_BASE_PATH": base_path,
             "CAR_PREVIEW_PUBLIC_URL": public_url,
-            "CAR_PREVIEW_URL": car_url,
+            "CAR_PREVIEW_URL": effective_url,
         }
     )
     return env
@@ -1056,10 +1088,13 @@ def _substitute_token_text(
     service_id: str,
     car_url: str,
 ) -> str:
+    base_path = urlsplit(car_url).path.rstrip("/") or "/"
     return (
         value.replace("$PORT", str(port))
         .replace("$HOST", host)
         .replace("$CAR_PREVIEW_SERVICE_ID", service_id)
+        .replace("$CAR_PREVIEW_BASE_PATH", base_path)
+        .replace("$CAR_PREVIEW_PUBLIC_URL", car_url)
         .replace("$CAR_PREVIEW_URL", car_url)
     )
 

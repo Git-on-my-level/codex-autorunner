@@ -44,10 +44,7 @@ from ....core.preview_services.ids import (
 )
 from ....core.state_roots import resolve_hub_state_root
 from ..app_state import HubAppContext
-from ..services.preview_capabilities import (
-    DEFAULT_PREVIEW_CAPABILITY_TTL_SECONDS,
-    PreviewCapabilityStore,
-)
+from ..services.preview_capabilities import PreviewCapabilityStore
 
 logger = logging.getLogger("codex_autorunner.preview_services.routes")
 
@@ -280,7 +277,9 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
         dependencies=[Depends(_require_preview_services_enabled)],
     )
     manager = context.preview_service_manager
-    capability_store = PreviewCapabilityStore(
+    capability_store = getattr(
+        context, "preview_capability_store", None
+    ) or PreviewCapabilityStore(
         context.config.root,
         durable=bool(getattr(context.config, "durable_writes", False)),
     )
@@ -289,7 +288,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
     async def get_services_read_model(scope: Optional[str] = None) -> dict[str, Any]:
         records = await asyncio.to_thread(manager.registry.list)
         filtered = _filter_records(records, scope=scope)
-        return _services_read_model(filtered)
+        return _services_read_model(filtered, capability_store=capability_store)
 
     @router.get("/hub/services")
     async def list_services(scope: Optional[str] = None) -> dict[str, Any]:
@@ -297,7 +296,9 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
         filtered = _filter_records(records, scope=scope)
         return {
             "services": [record.to_dict() for record in filtered],
-            "read_model": _services_read_model(filtered),
+            "read_model": _services_read_model(
+                filtered, capability_store=capability_store
+            ),
         }
 
     @router.get("/hub/services/{service_id}")
@@ -306,6 +307,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
         return _service_response(
             record,
             events=await asyncio.to_thread(manager.events, service_id),
+            capability_store=capability_store,
         )
 
     @router.post("/hub/services/workspaces")
@@ -352,7 +354,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             )
         except (OSError, ValueError) as exc:
             raise _bad_request(exc) from exc
-        return _service_response(record)
+        return _service_response(record, capability_store=capability_store)
 
     @router.post("/hub/services/loopback-url")
     async def register_loopback_url(
@@ -373,7 +375,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             )
         except ValueError as exc:
             raise _bad_request(exc) from exc
-        return _service_response(record)
+        return _service_response(record, capability_store=capability_store)
 
     @router.post("/hub/services/managed")
     async def register_managed(
@@ -408,7 +410,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             raise _supervisor_error(exc) from exc
         except (OSError, ValueError) as exc:
             raise _bad_request(exc) from exc
-        return _service_response(record)
+        return _service_response(record, capability_store=capability_store)
 
     @router.patch("/hub/services/{service_id}")
     async def update_service(
@@ -448,7 +450,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             raise _supervisor_error(exc) from exc
         except ValueError as exc:
             raise _bad_request(exc) from exc
-        return _service_response(record)
+        return _service_response(record, capability_store=capability_store)
 
     @router.post("/hub/services/{service_id}/health")
     async def check_health(service_id: str) -> dict[str, Any]:
@@ -460,21 +462,29 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
         except ValueError as exc:
             raise _bad_request(exc) from exc
         return {
-            **_service_response(record),
+            **_service_response(record, capability_store=capability_store),
             "health": result.to_dict(),
         }
 
     @router.post("/hub/services/{service_id}/start")
     async def start_service(service_id: str) -> dict[str, Any]:
-        return _service_response(await _lifecycle(manager, service_id, "start"))
+        return _service_response(
+            await _lifecycle(manager, service_id, "start"),
+            capability_store=capability_store,
+        )
 
     @router.post("/hub/services/{service_id}/stop")
     async def stop_service(service_id: str) -> dict[str, Any]:
-        return _service_response(await _lifecycle(manager, service_id, "stop"))
+        stopped = await _lifecycle(manager, service_id, "stop")
+        await asyncio.to_thread(capability_store.revoke_service, service_id)
+        return _service_response(stopped, capability_store=capability_store)
 
     @router.post("/hub/services/{service_id}/restart")
     async def restart_service(service_id: str) -> dict[str, Any]:
-        return _service_response(await _lifecycle(manager, service_id, "restart"))
+        return _service_response(
+            await _lifecycle(manager, service_id, "restart"),
+            capability_store=capability_store,
+        )
 
     @router.post("/hub/services/{service_id}/kill")
     async def kill_service(
@@ -495,7 +505,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
             raise _not_found(exc) from exc
         except ValueError as exc:
             raise _bad_request(exc) from exc
-        return _service_response(record)
+        return _service_response(record, capability_store=capability_store)
 
     @router.post("/hub/services/{service_id}/teardown")
     async def teardown_service(
@@ -527,8 +537,8 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
     @router.post("/hub/services/{service_id}/preview-token")
     async def issue_preview_token(
         service_id: str,
-        ttl_seconds: int = Query(
-            default=DEFAULT_PREVIEW_CAPABILITY_TTL_SECONDS,
+        ttl_seconds: Optional[int] = Query(
+            default=None,
             ge=1,
             le=60 * 60 * 24 * 30,
             alias="ttl",
@@ -536,7 +546,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
     ) -> dict[str, Any]:
         record = await _require_record(manager, service_id)
         capability = await asyncio.to_thread(
-            capability_store.issue,
+            capability_store.get_or_issue,
             service_id,
             ttl_seconds=ttl_seconds,
         )
@@ -603,7 +613,7 @@ def build_services_routes(context: HubAppContext) -> APIRouter:
         record = await _require_record(manager, service_id)
         if _prefer_capability_urls(context):
             capability = await asyncio.to_thread(
-                capability_store.issue,
+                capability_store.get_or_issue,
                 service_id,
             )
             return RedirectResponse(
@@ -761,10 +771,11 @@ def _service_response(
     record: PreviewServiceRecord,
     *,
     events: list[dict[str, Any]] | None = None,
+    capability_store: PreviewCapabilityStore | None = None,
 ) -> dict[str, Any]:
     response: dict[str, Any] = {
         "service": record.to_dict(),
-        "read_model": _service_read_model(record),
+        "read_model": _service_read_model(record, capability_store=capability_store),
     }
     if events is not None:
         response["events"] = events[-20:]
@@ -773,26 +784,44 @@ def _service_response(
 
 def _services_read_model(
     records: list[PreviewServiceRecord],
+    capability_store: PreviewCapabilityStore | None = None,
 ) -> dict[str, Any]:
     read_model = build_services_read_model(records)
     read_model["services"] = [
-        _with_preview_capability_status(item)
+        _with_preview_capability_status(item, capability_store=capability_store)
         for item in read_model.get("services", [])
         if isinstance(item, dict)
     ]
     return read_model
 
 
-def _service_read_model(record: PreviewServiceRecord) -> dict[str, Any]:
-    return _with_preview_capability_status(service_read_model(record))
+def _service_read_model(
+    record: PreviewServiceRecord,
+    capability_store: PreviewCapabilityStore | None = None,
+) -> dict[str, Any]:
+    return _with_preview_capability_status(
+        service_read_model(record), capability_store=capability_store
+    )
 
 
-def _with_preview_capability_status(item: dict[str, Any]) -> dict[str, Any]:
+def _with_preview_capability_status(
+    item: dict[str, Any],
+    capability_store: PreviewCapabilityStore | None = None,
+) -> dict[str, Any]:
     if not item.get("proxy_enabled", True):
         return item
     service_id = str(item.get("service_id") or "")
     if not service_id:
         return item
+    if capability_store is not None:
+        active = capability_store.get_active(service_id)
+        if active is not None:
+            return {
+                **item,
+                "preview_url": active.url,
+                "preview_url_status": "issued",
+                "preview_url_expires_at": active.expires_at,
+            }
     return {
         **item,
         "preview_url": None,

@@ -810,3 +810,93 @@ def _event_types(
     service_id: str,
 ) -> list[str]:
     return [str(event.get("type")) for event in supervisor.events(service_id)]
+
+
+def test_managed_command_environment_construction_local_trusted_mode(
+    tmp_path: Path,
+) -> None:
+    supervisor = PreviewServiceSupervisor(tmp_path)
+    script = (
+        "import os, time\n"
+        "keys = ['PORT', 'HOST', 'CAR_PREVIEW_SERVICE_ID', 'CAR_PREVIEW_BASE_PATH', 'CAR_PREVIEW_PUBLIC_URL', 'CAR_PREVIEW_URL']\n"
+        "for k in keys:\n"
+        "    print(f'{k}={os.environ.get(k)}', flush=True)\n"
+        "time.sleep(30)\n"
+    )
+    record = supervisor.start_managed_command(
+        name="Local env preview",
+        argv=[sys.executable, "-u", "-c", script],
+        cwd=tmp_path,
+        health_check={"type": "none"},
+    )
+    try:
+        log_text = _wait_for_log(
+            supervisor,
+            record.service_id,
+            f"CAR_PREVIEW_BASE_PATH=/preview/services/{record.service_id}",
+        )
+        assert f"CAR_PREVIEW_SERVICE_ID={record.service_id}" in log_text
+        assert (
+            f"CAR_PREVIEW_BASE_PATH=/preview/services/{record.service_id}" in log_text
+        )
+        assert (
+            f"CAR_PREVIEW_PUBLIC_URL=/preview/services/{record.service_id}/" in log_text
+        )
+        assert f"CAR_PREVIEW_URL=/preview/services/{record.service_id}/" in log_text
+    finally:
+        supervisor.stop(record.service_id)
+
+
+def test_managed_command_environment_construction_hosted_mode_uses_launch_capability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HUB_BEARER_SECRET", "super-secret-hub-token")
+    launch_tokens: dict[str, str] = {}
+
+    def _resolver(service_id: str) -> str:
+        token = f"launch_cap_{service_id}"
+        launch_tokens[service_id] = token
+        return f"/preview/p/{token}/"
+
+    supervisor = PreviewServiceSupervisor(
+        tmp_path,
+        launch_preview_url_resolver=_resolver,
+    )
+    script = (
+        "import os, time\n"
+        "keys = ['CAR_PREVIEW_SERVICE_ID', 'CAR_PREVIEW_BASE_PATH', 'CAR_PREVIEW_PUBLIC_URL', 'CAR_PREVIEW_URL']\n"
+        "for k in keys:\n"
+        "    print(f'{k}={os.environ.get(k)}', flush=True)\n"
+        "print('SECRET_PRESENT=' + str('HUB_BEARER_SECRET' in os.environ), flush=True)\n"
+        "time.sleep(30)\n"
+    )
+    record = supervisor.start_managed_command(
+        name="Hosted env preview",
+        argv=[
+            sys.executable,
+            "-u",
+            "-c",
+            script,
+            "--base",
+            "$CAR_PREVIEW_BASE_PATH",
+            "--url",
+            "$CAR_PREVIEW_PUBLIC_URL",
+        ],
+        cwd=tmp_path,
+        health_check={"type": "none"},
+    )
+    try:
+        token = launch_tokens[record.service_id]
+        log_text = _wait_for_log(
+            supervisor,
+            record.service_id,
+            f"CAR_PREVIEW_BASE_PATH=/preview/p/{token}",
+        )
+        assert f"CAR_PREVIEW_SERVICE_ID={record.service_id}" in log_text
+        assert f"CAR_PREVIEW_BASE_PATH=/preview/p/{token}" in log_text
+        assert f"CAR_PREVIEW_PUBLIC_URL=/preview/p/{token}/" in log_text
+        assert f"CAR_PREVIEW_URL=/preview/p/{token}/" in log_text
+        assert "SECRET_PRESENT=False" in log_text
+    finally:
+        supervisor.stop(record.service_id)

@@ -877,7 +877,8 @@ def _cleanup_opencode_processes_per_test(
 ) -> None:
     yield
     roots = {hermetic_roots.pytest_global_state_root}
-    tmp_path = request.node.funcargs.get("tmp_path")
+    funcargs = getattr(request.node, "funcargs", None) or {}
+    tmp_path = funcargs.get("tmp_path")
     if tmp_path is not None:
         roots.update(_iter_opencode_registry_roots(tmp_path))
     failures = _reap_opencode_processes(roots, force=True)
