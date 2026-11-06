@@ -526,7 +526,9 @@ def build_app_context(
     else:
         try:
             voice_service = VoiceService(voice_config, logger=logger)
-        except Exception as exc:  # intentional: optional voice feature, any init failure disables gracefully
+        except (
+            Exception
+        ) as exc:  # intentional: optional voice feature, any init failure disables gracefully
             voice_service = None
             safe_log(
                 logger,
