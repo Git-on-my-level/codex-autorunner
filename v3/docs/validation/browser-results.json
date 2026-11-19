@@ -1,0 +1,13 @@
+{
+  "fixture_renderer": "test JSX seam (not Hono routes)",
+  "checks": [
+    "320px light: layout, labels, options, uncertainty, menu, draft after blur, refresh cancel",
+    "390px light: layout, labels, options, uncertainty, menu, draft after blur, refresh cancel",
+    "1440px light: layout, labels, options, uncertainty, menu, draft after blur, refresh cancel",
+    "320px dark: layout, labels, options, uncertainty, menu, draft after blur, refresh cancel",
+    "390px dark: layout, labels, options, uncertainty, menu, draft after blur, refresh cancel",
+    "1440px dark: layout, labels, options, uncertainty, menu, draft after blur, refresh cancel",
+    "Expired decision: review visible, no actionable stale answer"
+  ],
+  "passed": 7
+}

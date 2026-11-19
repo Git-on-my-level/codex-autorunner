@@ -1,0 +1,40 @@
+{
+  "name": "native adapter thread.started is progress, not a second session start",
+  "note": "The live journal emits kind=started with ordering=source many times per run (thread.started, turn.started). Only the observation row is a real launch.",
+  "input": {
+    "schema_version": 1,
+    "id": "event-choose-proof-left-puzzle-enable-dragon",
+    "origin_host_id": "host-foster-bitter-palace-talent-gown-glass",
+    "execution_id": "exec-area-cargo-tornado-symptom-comfort-parrot",
+    "sequence": 3,
+    "ordering": "source",
+    "source_position": {
+      "kind": "native_sequence",
+      "value": "2"
+    },
+    "kind": "started",
+    "state": "running",
+    "source_state": "thread.started",
+    "authority": "native",
+    "adapter": "codex",
+    "occurred_at": null,
+    "observed_at": "2026-08-24T15:36:55.615319Z",
+    "dedupe_key": "sha256:a48cbe4611faadde7e7f5dacfbbf14257ba40cf855e360e1ef680cffab9c4986",
+    "dedupe_version": 1,
+    "payload": {
+      "family": "codex",
+      "type": "thread.started"
+    }
+  },
+  "expect": [
+    {
+      "type": "progress",
+      "severity": "info",
+      "requires_response": false,
+      "idempotency_key": "agentctl:event-choose-proof-left-puzzle-enable-dragon",
+      "session_key": "agentctl\u0000host-foster-bitter-palace-talent-gown-glass\u0000exec-area-cargo-tornado-symptom-comfort-parrot",
+      "response_channel": null,
+      "title": "thread.started"
+    }
+  ]
+}

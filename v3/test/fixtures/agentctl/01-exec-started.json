@@ -1,0 +1,40 @@
+{
+  "name": "exec launch (observation-ordered started, sequence 1)",
+  "note": "Verbatim shape from `agentctl events exec-area-cargo-... --limit 5` on agentctl v0.3.9.",
+  "input": {
+    "schema_version": 1,
+    "id": "event-cabbage-push-visual-common-foot-endorse",
+    "origin_host_id": "host-foster-bitter-palace-talent-gown-glass",
+    "execution_id": "exec-area-cargo-tornado-symptom-comfort-parrot",
+    "sequence": 1,
+    "ordering": "observation",
+    "kind": "started",
+    "state": "running",
+    "authority": "native",
+    "adapter": "codex",
+    "occurred_at": null,
+    "observed_at": "2026-08-24T15:36:54.774843Z",
+    "dedupe_key": "sha256:63387f8cfa83074cdc457d011f833ea5c93140b1a9f98df4d0305c1ab174eda8",
+    "dedupe_version": 1,
+    "payload": {
+      "accepted": true
+    }
+  },
+  "expect": [
+    {
+      "type": "session.started",
+      "severity": "info",
+      "requires_response": false,
+      "idempotency_key": "agentctl:event-cabbage-push-visual-common-foot-endorse",
+      "session_key": "agentctl\u0000host-foster-bitter-palace-talent-gown-glass\u0000exec-area-cargo-tornado-symptom-comfort-parrot",
+      "response_channel": null,
+      "ts": "2026-08-24T15:36:54.774Z",
+      "source": {
+        "vendor": "agentctl",
+        "host": "host-foster-bitter-palace-talent-gown-glass",
+        "adapter": "agentctl-subscribe"
+      },
+      "title": "agentctl started codex exec-area-cargo-tornado-symptom-comfort-parrot"
+    }
+  ]
+}

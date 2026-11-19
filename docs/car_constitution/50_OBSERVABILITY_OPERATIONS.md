@@ -1,6 +1,36 @@
 # Observability & Operations
 
-Principle: observability replaces safety prompts. YOLO is acceptable if behavior is reconstructible from artifacts.
+## CAR v3: active contract
+
+Observability does not replace authorization. CAR v3 combines reconstructible behavior
+with core-enforced grants and safety. For every incident and effect, durable state must
+identify:
+
+- the source event and canonical session/incident lineage;
+- the deterministic route and provider instance selected for each capability;
+- bounded context references and provider request/response ids;
+- the human grant, provider policy advice, and core safety verdict;
+- each effect attempt, idempotency key, lease, timeout, and terminal result;
+- each channel attempt and whether the result was queued, delivered, uncertain, failed,
+  expired, superseded, abandoned, suppressed, or had no target, plus any degraded
+  fallback that was staged.
+
+Provider timeouts, crashes, protocol mismatches, invalid responses, observation lag,
+and scope-resolution failures are first-class operational events. They fall back to a
+deterministic route and never disappear into a generic model error.
+
+The daemon's own digest cannot prove the daemon is alive. Production qualification
+requires a once-per-minute heartbeat sent to an operator-configured dead-man webhook
+outside the CAR host and CAR delivery credentials. It carries daemon identity,
+monotonic sequence, last durable progress, and last digest receipt; three misses alert
+through an independently configured destination.
+
+## Deprecated CAR v2 operations
+
+The remainder of this document describes the deprecated runner/ticket product.
+
+Principle for v2: observability replaces safety prompts. Its permissive posture is not
+the v3 authorization model.
 
 ## Run identity
 Every run must have:
