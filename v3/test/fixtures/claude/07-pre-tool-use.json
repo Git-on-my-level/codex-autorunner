@@ -1,0 +1,30 @@
+{
+  "name": "PreToolUse is progress, not attention",
+  "note": "PreToolUse fires on every tool call; it is a firehose. It is recorded as progress so the rules pass keeps it informational at $0, and it never parks.",
+  "input": {
+    "session_id": "sess-abc123",
+    "prompt_id": "550e8400-e29b-41d4-a716-446655440000",
+    "transcript_path": "/Users/dazheng/.claude/projects/omi/sess-abc123.jsonl",
+    "cwd": "/Users/dazheng/omi",
+    "permission_mode": "default",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Edit",
+    "tool_input": {
+      "file_path": "/Users/dazheng/omi/src/ble.swift"
+    },
+    "tool_use_id": "toolu_02Y"
+  },
+  "expect": [
+    {
+      "type": "progress",
+      "severity": "info",
+      "requires_response": false,
+      "idempotency_key": "claude-code:sess-abc123:PreToolUse:toolu_02Y",
+      "session_key": "claude-code\u0000test-host\u0000sess-abc123",
+      "response_channel": null,
+      "title": "Edit",
+      "body": "/Users/dazheng/omi/src/ble.swift"
+    }
+  ],
+  "expect_park": false
+}

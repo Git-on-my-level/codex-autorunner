@@ -1,0 +1,46 @@
+{
+  "name": "terminal completed",
+  "note": "Verbatim from `agentctl events exec-area-cargo-... --kind terminal`.",
+  "input": {
+    "schema_version": 1,
+    "id": "event-jeans-polar-base-tomorrow-insane-olympic",
+    "origin_host_id": "host-foster-bitter-palace-talent-gown-glass",
+    "execution_id": "exec-area-cargo-tornado-symptom-comfort-parrot",
+    "sequence": 128,
+    "ordering": "observation",
+    "kind": "terminal",
+    "state": "completed",
+    "authority": "native",
+    "adapter": "codex",
+    "occurred_at": null,
+    "observed_at": "2026-08-24T15:48:14.493019Z",
+    "dedupe_key": "sha256:c6c0da8bc24d414d6bcf38c2afb0548b90145f67881fa06cefbd1cccf506bd70",
+    "dedupe_version": 1,
+    "payload": {
+      "availability": "stored",
+      "content_available": true,
+      "content_sha256": "",
+      "outcome_execution_id": "exec-area-cargo-tornado-symptom-comfort-parrot",
+      "result_available": true,
+      "result_content_source": "assistant",
+      "terminal_source_state": "turn.completed"
+    }
+  },
+  "expect": [
+    {
+      "type": "session.ended",
+      "severity": "info",
+      "requires_response": false,
+      "idempotency_key": "agentctl:event-jeans-polar-base-tomorrow-insane-olympic",
+      "session_key": "agentctl\u0000host-foster-bitter-palace-talent-gown-glass\u0000exec-area-cargo-tornado-symptom-comfort-parrot",
+      "response_channel": {
+        "kind": "agentctl-run",
+        "hint": {
+          "execution_id": "exec-area-cargo-tornado-symptom-comfort-parrot",
+          "adapter": "codex"
+        }
+      },
+      "title": "agentctl codex completed: exec-area-cargo-tornado-symptom-comfort-parrot"
+    }
+  ]
+}
